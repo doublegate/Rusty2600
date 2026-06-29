@@ -11,6 +11,7 @@ default = ["std"]
 std = []
 
 [dependencies]
+serde.workspace = true
 bitflags = "2"
 
 [lints]

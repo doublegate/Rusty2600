@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 ### Added
+- Phase 1-4 core components completed: CPU (6507), TIA (video/audio), RIOT, and Bankswitch boards.
+- Phase 5 Frontend completed: rendering, pacing, thread sync, UI shells, input mapping, and WASM/web build support (Trunk integration).
 - Phase and Sprint `.md` files populated under `to-dos/` tracing the roadmap from CPU Golden Log to full reach.
 - Commercial test ROMs extracted and copied to `tests/roms/external/` for robust mapper and coprocessor verification.
 - Klaus2m5 and Tom Harte ProcessorTests test suites downloaded to `tests/roms/Klaus2m5/` and `tests/golden/ProcessorTests/`.

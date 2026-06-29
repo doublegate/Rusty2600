@@ -11,7 +11,8 @@ default = ["std"]
 std = []
 
 [dependencies]
-bitflags = "2"
+serde.workspace = true
+bitflags = { version = "2", features = ["serde"] }
 
 [lints]
 workspace = true

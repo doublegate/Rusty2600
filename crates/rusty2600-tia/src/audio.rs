@@ -15,7 +15,7 @@
 //! two 4-bit volumes.
 
 /// One TIA audio channel's register state + poly-counter phase.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Channel {
     /// `AUDCx` — 4-bit waveform / poly-counter control.
     pub control: u8,
@@ -65,7 +65,7 @@ impl Channel {
 
             if self.divider == 0 {
                 self.divider = self.freq;
-                
+
                 // Feedback calculations
                 let in5 = ((self.poly5 >> 4) ^ (self.poly5 >> 3)) & 1;
                 let in4 = ((self.poly4 >> 3) ^ (self.poly4 >> 2)) & 1;
@@ -137,7 +137,7 @@ impl Channel {
 
 /// The TIA's two-channel audio generator. The owning `Tia` clocks this and the
 /// `rusty2600-core` `AudioBus` draws the mixed samples FROM here.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Audio {
     /// The two independent channels.
     pub channels: [Channel; 2],

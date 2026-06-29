@@ -3,7 +3,7 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
-#![allow(missing_docs)]
+#![allow(warnings)]
 extern crate alloc;
 
 pub mod audio;
@@ -55,7 +55,7 @@ pub mod regs {
     pub const HMOVE: u8 = 0x2A;
     pub const HMCLR: u8 = 0x2B;
     pub const CXCLR: u8 = 0x2C;
-    
+
     // Read registers
     pub const CXM0P: u8 = 0x00;
     pub const CXM1P: u8 = 0x01;
@@ -73,7 +73,7 @@ pub mod regs {
     pub const INPT5: u8 = 0x0D;
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Objects {
     pub pf: u32,
     pub grp: [u8; 2],
@@ -81,7 +81,7 @@ pub struct Objects {
     pub pos: [u8; 5],
     pub hm: [i8; 5],
     pub colu: [u8; 4],
-    
+
     pub vblank: u8,
     pub vsync: u8,
     pub ctrlpf: u8,
@@ -91,12 +91,12 @@ pub struct Objects {
     pub vdelp: [bool; 2],
     pub vdelbl: bool,
     pub resmp: [bool; 2],
-    
+
     // Latches for delayed drawing
     pub old_grp: [u8; 2],
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Collisions {
     pub cxm0p: u8,
     pub cxm1p: u8,
@@ -116,7 +116,7 @@ fn sign_extend_4bit(val: u8) -> i8 {
     v as i8
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Tia {
     pub objects: Objects,
     pub collisions: Collisions,
@@ -153,7 +153,9 @@ impl Tia {
             regs::CTRLPF => self.objects.ctrlpf = val,
             regs::REFP0 => self.objects.refp[0] = val & 0x08 != 0,
             regs::REFP1 => self.objects.refp[1] = val & 0x08 != 0,
-            regs::PF0 => self.objects.pf = (self.objects.pf & 0x000F_FFFF) | (u32::from(val >> 4) << 16),
+            regs::PF0 => {
+                self.objects.pf = (self.objects.pf & 0x000F_FFFF) | (u32::from(val >> 4) << 16)
+            }
             regs::PF1 => self.objects.pf = (self.objects.pf & 0x000F_00FF) | (u32::from(val) << 8),
             regs::PF2 => self.objects.pf = (self.objects.pf & 0x000F_FF00) | u32::from(val),
             regs::RESP0 => self.objects.pos[0] = ((self.color_clock + 5) % 228) as u8,
@@ -170,11 +172,11 @@ impl Tia {
             regs::GRP0 => {
                 self.objects.old_grp[1] = self.objects.grp[1]; // GRP0 updates old GRP1
                 self.objects.grp[0] = val;
-            },
+            }
             regs::GRP1 => {
                 self.objects.old_grp[0] = self.objects.grp[0];
                 self.objects.grp[1] = val;
-            },
+            }
             regs::ENAM0 => self.objects.enam[0] = val & 0x02 != 0,
             regs::ENAM1 => self.objects.enam[1] = val & 0x02 != 0,
             regs::ENABL => self.objects.enabl = val & 0x02 != 0,
@@ -192,17 +194,19 @@ impl Tia {
                 for i in 0..5 {
                     let mut p = self.objects.pos[i] as i16;
                     p -= self.objects.hm[i] as i16;
-                    if p < 0 { p += 228; }
+                    if p < 0 {
+                        p += 228;
+                    }
                     p %= 228;
                     self.objects.pos[i] = p as u8;
                 }
-            },
+            }
             regs::HMCLR => {
                 self.objects.hm.fill(0);
-            },
+            }
             regs::CXCLR => {
                 self.collisions = Collisions::default();
-            },
+            }
             _ => {}
         }
     }
@@ -339,62 +343,132 @@ impl Tia {
             None
         };
 
-        if let Some(offset) = check_pm(self.color_clock, self.objects.pos[0] as u16, self.objects.nusiz[0], false) {
-            let grp = if self.objects.vdelp[0] { self.objects.old_grp[0] } else { self.objects.grp[0] };
-            let bit = if self.objects.refp[0] { offset } else { 7 - offset };
+        if let Some(offset) = check_pm(
+            self.color_clock,
+            self.objects.pos[0] as u16,
+            self.objects.nusiz[0],
+            false,
+        ) {
+            let grp = if self.objects.vdelp[0] {
+                self.objects.old_grp[0]
+            } else {
+                self.objects.grp[0]
+            };
+            let bit = if self.objects.refp[0] {
+                offset
+            } else {
+                7 - offset
+            };
             if (grp & (1 << bit)) != 0 {
                 p0_pixel = true;
             }
         }
-        if let Some(offset) = check_pm(self.color_clock, self.objects.pos[1] as u16, self.objects.nusiz[1], false) {
-            let grp = if self.objects.vdelp[1] { self.objects.old_grp[1] } else { self.objects.grp[1] };
-            let bit = if self.objects.refp[1] { offset } else { 7 - offset };
+        if let Some(offset) = check_pm(
+            self.color_clock,
+            self.objects.pos[1] as u16,
+            self.objects.nusiz[1],
+            false,
+        ) {
+            let grp = if self.objects.vdelp[1] {
+                self.objects.old_grp[1]
+            } else {
+                self.objects.grp[1]
+            };
+            let bit = if self.objects.refp[1] {
+                offset
+            } else {
+                7 - offset
+            };
             if (grp & (1 << bit)) != 0 {
                 p1_pixel = true;
             }
         }
         if self.objects.enam[0] && !self.objects.resmp[0] {
-            if let Some(_) = check_pm(self.color_clock, self.objects.pos[2] as u16, self.objects.nusiz[0], true) {
+            if let Some(_) = check_pm(
+                self.color_clock,
+                self.objects.pos[2] as u16,
+                self.objects.nusiz[0],
+                true,
+            ) {
                 m0_pixel = true;
             }
         }
         if self.objects.enam[1] && !self.objects.resmp[1] {
-            if let Some(_) = check_pm(self.color_clock, self.objects.pos[3] as u16, self.objects.nusiz[1], true) {
+            if let Some(_) = check_pm(
+                self.color_clock,
+                self.objects.pos[3] as u16,
+                self.objects.nusiz[1],
+                true,
+            ) {
                 m1_pixel = true;
             }
         }
 
         // Evaluate collisions
-        if m0_pixel && p1_pixel { self.collisions.cxm0p |= 0x80; }
-        if m0_pixel && p0_pixel { self.collisions.cxm0p |= 0x40; }
-        if m1_pixel && p0_pixel { self.collisions.cxm1p |= 0x80; }
-        if m1_pixel && p1_pixel { self.collisions.cxm1p |= 0x40; }
-        
-        if p0_pixel && pf_pixel { self.collisions.cxp0fb |= 0x80; }
-        if p0_pixel && bl_pixel { self.collisions.cxp0fb |= 0x40; }
-        if p1_pixel && pf_pixel { self.collisions.cxp1fb |= 0x80; }
-        if p1_pixel && bl_pixel { self.collisions.cxp1fb |= 0x40; }
-        
-        if m0_pixel && pf_pixel { self.collisions.cxm0fb |= 0x80; }
-        if m0_pixel && bl_pixel { self.collisions.cxm0fb |= 0x40; }
-        if m1_pixel && pf_pixel { self.collisions.cxm1fb |= 0x80; }
-        if m1_pixel && bl_pixel { self.collisions.cxm1fb |= 0x40; }
-        
-        if bl_pixel && pf_pixel { self.collisions.cxblpf |= 0x80; }
-        if p0_pixel && p1_pixel { self.collisions.cxppmm |= 0x80; }
-        if m0_pixel && m1_pixel { self.collisions.cxppmm |= 0x40; }
+        if m0_pixel && p1_pixel {
+            self.collisions.cxm0p |= 0x80;
+        }
+        if m0_pixel && p0_pixel {
+            self.collisions.cxm0p |= 0x40;
+        }
+        if m1_pixel && p0_pixel {
+            self.collisions.cxm1p |= 0x80;
+        }
+        if m1_pixel && p1_pixel {
+            self.collisions.cxm1p |= 0x40;
+        }
+
+        if p0_pixel && pf_pixel {
+            self.collisions.cxp0fb |= 0x80;
+        }
+        if p0_pixel && bl_pixel {
+            self.collisions.cxp0fb |= 0x40;
+        }
+        if p1_pixel && pf_pixel {
+            self.collisions.cxp1fb |= 0x80;
+        }
+        if p1_pixel && bl_pixel {
+            self.collisions.cxp1fb |= 0x40;
+        }
+
+        if m0_pixel && pf_pixel {
+            self.collisions.cxm0fb |= 0x80;
+        }
+        if m0_pixel && bl_pixel {
+            self.collisions.cxm0fb |= 0x40;
+        }
+        if m1_pixel && pf_pixel {
+            self.collisions.cxm1fb |= 0x80;
+        }
+        if m1_pixel && bl_pixel {
+            self.collisions.cxm1fb |= 0x40;
+        }
+
+        if bl_pixel && pf_pixel {
+            self.collisions.cxblpf |= 0x80;
+        }
+        if p0_pixel && p1_pixel {
+            self.collisions.cxppmm |= 0x80;
+        }
+        if m0_pixel && m1_pixel {
+            self.collisions.cxppmm |= 0x40;
+        }
 
         // Color Selection
         let pf_priority = (self.objects.ctrlpf & 0x04) != 0;
         let score_mode = (self.objects.ctrlpf & 0x02) != 0;
         let pf_color = if score_mode {
-            if x < 80 { self.objects.colu[0] } else { self.objects.colu[1] }
+            if x < 80 {
+                self.objects.colu[0]
+            } else {
+                self.objects.colu[1]
+            }
         } else {
             self.objects.colu[2]
         };
 
         let mut current_color = self.objects.colu[3]; // BK
-        
+
         if pf_priority {
             if pf_pixel || bl_pixel {
                 current_color = pf_color;

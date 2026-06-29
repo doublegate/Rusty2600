@@ -271,6 +271,9 @@ name = "bitflags"
 version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
+dependencies = [
+ "serde_core",
+]
 
 [[package]]
 name = "block-buffer"
@@ -3058,6 +3061,7 @@ name = "rusty2600-cart"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.0",
+ "serde",
 ]
 
 [[package]]
@@ -3072,6 +3076,7 @@ dependencies = [
  "rusty2600-cpu",
  "rusty2600-riot",
  "rusty2600-tia",
+ "serde",
 ]
 
 [[package]]
@@ -3079,6 +3084,7 @@ name = "rusty2600-cpu"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.0",
+ "serde",
 ]
 
 [[package]]
@@ -3102,6 +3108,7 @@ dependencies = [
  "pollster",
  "ratatui",
  "rfd",
+ "rusty2600-cart",
  "rusty2600-core",
  "serde",
  "thiserror 2.0.18",
@@ -3119,6 +3126,7 @@ name = "rusty2600-riot"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.0",
+ "serde",
 ]
 
 [[package]]
@@ -3136,6 +3144,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.13.0",
  "rusty2600-cart",
+ "serde",
 ]
 
 [[package]]

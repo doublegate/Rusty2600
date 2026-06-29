@@ -65,6 +65,7 @@ pub mod config;
 pub mod input;
 pub mod palette;
 pub mod present_buffer;
+pub mod resampler;
 pub mod shell;
 
 // The always-on egui App shell + the wgpu blit + the run loop. Native only — wasm routes through
@@ -97,6 +98,7 @@ pub mod wasm;
 pub use app::App;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cli::Cli;
+pub use config::Config;
 #[cfg(not(target_arch = "wasm32"))]
 pub use emu_thread::{EmuCore, EmuHandle, SharedInput};
 

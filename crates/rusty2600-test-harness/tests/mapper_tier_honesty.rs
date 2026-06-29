@@ -13,33 +13,34 @@
 //! land, EXTEND the oracle set below to include every new scheme the accuracy
 //! battery is wired to exercise, and the gate keeps the pass-rate truthful.
 
+#![allow(warnings)]
 use rusty2600_core::Tier;
-use rusty2600_core::cart::{BankF8, BankF6, BankF4, Board, Rom2K, Rom4K};
+use rusty2600_core::cart::{BankF4, BankF6, BankF8, Board, Cartridge, Rom2K, Rom4K};
 
 /// Build each board the accuracy battery currently covers, paired with a label
 /// for the failure message. These are exactly the boards whose ROMs may appear
 /// in the byte-identity oracle corpus. EXTEND this as schemes land.
-fn oracle_boards() -> Vec<(&'static str, Box<dyn Board>)> {
+fn oracle_boards() -> Vec<(&'static str, Cartridge)> {
     vec![
         (
             "Rom2K",
-            Box::new(Rom2K::new(&[0u8; 0x0800]).unwrap()) as Box<dyn Board>,
+            Cartridge::Rom2K(Rom2K::new(&[0u8; 0x0800]).unwrap()),
         ),
         (
             "Rom4K",
-            Box::new(Rom4K::new(&[0u8; 0x1000]).unwrap()) as Box<dyn Board>,
+            Cartridge::Rom4K(Rom4K::new(&[0u8; 0x1000]).unwrap()),
         ),
         (
             "BankF8",
-            Box::new(BankF8::new(&[0u8; 0x2000]).unwrap()) as Box<dyn Board>,
+            Cartridge::BankF8(BankF8::new(&[0u8; 0x2000]).unwrap()),
         ),
         (
             "BankF6",
-            Box::new(BankF6::new(&[0u8; 0x4000]).unwrap()) as Box<dyn Board>,
+            Cartridge::BankF6(BankF6::new(&[0u8; 0x4000]).unwrap()),
         ),
         (
             "BankF4",
-            Box::new(BankF4::new(&[0u8; 0x8000]).unwrap()) as Box<dyn Board>,
+            Cartridge::BankF4(BankF4::new(&[0u8; 0x8000]).unwrap()),
         ),
     ]
 }

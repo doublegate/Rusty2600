@@ -1,14 +1,11 @@
-
 //! The Bus owns everything mutable.
 
-use alloc::boxed::Box;
-
 use rusty2600_cart::Board;
+use rusty2600_cpu::CpuBus;
 use rusty2600_riot::Riot;
 use rusty2600_tia::Tia;
-use rusty2600_cpu::CpuBus;
 
-#[derive(Default)]
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 /// The main system bus for Rusty2600, holding the chips.
 pub struct Bus {
     /// The TIA video/audio chip.
@@ -16,7 +13,7 @@ pub struct Bus {
     /// The RIOT RAM/Timer/IO chip.
     pub riot: Riot,
     /// The cartridge board (mapper).
-    pub board: Option<Box<dyn Board>>,
+    pub board: Option<rusty2600_cart::Cartridge>,
     /// Open bus value (last driven value).
     pub open_bus: u8,
 }
@@ -26,7 +23,7 @@ impl core::fmt::Debug for Bus {
         f.debug_struct("Bus")
             .field("tia", &self.tia)
             .field("riot", &self.riot)
-            .field("board", &self.board.as_ref().map(|_| "<dyn Board>"))
+            .field("board", &self.board.as_ref().map(|_| "<Cartridge>"))
             .field("open_bus", &self.open_bus)
             .finish()
     }
@@ -40,10 +37,10 @@ impl Bus {
 
     pub fn cpu_read(&mut self, addr: u16) -> u8 {
         let addr = addr & 0x1FFF;
-        
+
         // 6502 open bus behavior: typically the last value on the data bus is returned.
         // We will read the mapped component and if it's open bus, we return self.open_bus.
-        
+
         let val = if addr & 0x1000 != 0 {
             // A12 = 1 -> Cartridge
             if let Some(board) = &mut self.board {
@@ -64,7 +61,7 @@ impl Bus {
                 self.riot.cpu_read(addr)
             }
         };
-        
+
         self.open_bus = val;
         val
     }
@@ -72,7 +69,7 @@ impl Bus {
     pub fn cpu_write(&mut self, addr: u16, val: u8) {
         let addr = addr & 0x1FFF;
         self.open_bus = val;
-        
+
         if addr & 0x1000 != 0 {
             // A12 = 1 -> Cartridge
             if let Some(board) = &mut self.board {
@@ -98,7 +95,7 @@ impl CpuBus for Bus {
     fn read(&mut self, addr: u16) -> u8 {
         self.cpu_read(addr)
     }
-    
+
     fn write(&mut self, addr: u16, val: u8) {
         self.cpu_write(addr, val)
     }

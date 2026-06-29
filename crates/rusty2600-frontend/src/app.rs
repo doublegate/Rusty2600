@@ -49,6 +49,13 @@ struct Active {
     config: Config,
     /// Whether the window is currently fullscreen (toggled from the View menu).
     fullscreen: bool,
+    /// The running audio output stream (keeps the cpal device alive).
+    audio_out: Option<crate::audio::AudioOutput>,
+
+    #[cfg(feature = "emu-thread")]
+    shared_input: Arc<crate::emu_thread::SharedInput>,
+    #[cfg(feature = "emu-thread")]
+    frame_rx: crate::present_buffer::Consumer,
 }
 
 /// The app: holds the config + the deferred ROM path until `resumed()` builds `Active`.
@@ -146,12 +153,45 @@ impl ApplicationHandler for App {
                 Err(e) => eprintln!("rusty2600: cannot read {}: {e}", path.display()),
             }
         }
+
+        let (audio_out, audio_tx) = match crate::audio::AudioOutput::new() {
+            Ok(pair) => (Some(pair.0), Some(pair.1)),
+            Err(e) => {
+                eprintln!("rusty2600: failed to start audio: {e}");
+                (None, None)
+            }
+        };
+        emu.audio_tx = audio_tx;
+
         // `Arc<Mutex<EmuCore>>` is the right shape for the (default-off) dedicated emulation thread
         // + the present path. It is not yet `Send + Sync` only because `rusty2600-cart`'s `Board`
         // trait is not `Send` (the RustyNES `Mapper: Send` rule the cart phase will land); once it
         // is, the `emu-thread` default returns and this allow goes away. TODO(T-PS-063).
         #[allow(clippy::arc_with_non_send_sync)]
         let core = Arc::new(Mutex::new(emu));
+
+        #[cfg(feature = "emu-thread")]
+        let (shared_input, frame_rx) = {
+            let shared_input = Arc::new(crate::emu_thread::SharedInput::new());
+            let (frame_tx, frame_rx) = crate::present_buffer::channel();
+
+            let thread_core = Arc::clone(&core);
+            let thread_input = Arc::clone(&shared_input);
+            std::thread::Builder::new()
+                .name("emu-thread".into())
+                .spawn(move || {
+                    loop {
+                        let mut lock = thread_core.lock().unwrap();
+                        let input = thread_input.load();
+                        lock.step_frame(&frame_tx, Some(input));
+                        drop(lock);
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                })
+                .expect("failed to spawn emu thread");
+
+            (shared_input, frame_rx)
+        };
 
         self.active = Some(Active {
             window,
@@ -164,6 +204,11 @@ impl ApplicationHandler for App {
             shell: ShellState::default(),
             config: self.config.clone(),
             fullscreen: false,
+            audio_out,
+            #[cfg(feature = "emu-thread")]
+            shared_input,
+            #[cfg(feature = "emu-thread")]
+            frame_rx,
         });
     }
 
@@ -218,22 +263,52 @@ impl App {
     /// shell, present. Returns the menu actions to dispatch AFTER this pass (never dispatched
     /// mid-egui).
     fn render(active: &mut Active) -> Vec<MenuAction> {
+        #[cfg(feature = "emu-thread")]
+        active.shared_input.store(active.host_input);
+
         // --- (1) Step one frame + copy the framebuffer + read-only info under a BRIEF lock. ---
         let (fb, fb_dims, info) = {
             let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
-            // Synchronous drive (the `emu-thread` feature is off by default): step exactly one
-            // frame here, then copy out.
+
+            #[cfg(not(feature = "emu-thread"))]
             emu.run_frame(Some(active.host_input));
-            let dims = emu.fb_dims();
+
+            #[cfg(feature = "emu-thread")]
+            let fb = active
+                .frame_rx
+                .take()
+                .map(|f| f.pixels)
+                .unwrap_or_else(|| emu.framebuffer().to_vec());
+            #[cfg(not(feature = "emu-thread"))]
             let fb = emu.framebuffer().to_vec();
+
+            let dims = emu.fb_dims();
             let info = ShellInfo {
                 board_tier: emu.board_tier().map(str::to_string),
                 region: emu.region,
                 fps: 0.0, // TODO(impl-phase): wire the pacer's smoothed FPS estimate.
                 rom_loaded: emu.rom_loaded,
-                cpu_info: format!("A: {:02X}, X: {:02X}, Y: {:02X}, SP: {:02X}, PC: {:04X}, P: {:?}", emu.system.cpu.a, emu.system.cpu.x, emu.system.cpu.y, emu.system.cpu.s, emu.system.cpu.pc, emu.system.cpu.p),
-                tia_info: format!("Color Clock: {}, Scanline: {}", emu.system.bus.tia.color_clock, emu.system.bus.tia.scanline),
-                riot_info: format!("Pins: {:02X} {:02X}, DDR: {:02X} {:02X}, INTIM: {:02X}", emu.system.bus.riot.pins[0], emu.system.bus.riot.pins[1], emu.system.bus.riot.ddr[0], emu.system.bus.riot.ddr[1], emu.system.bus.riot.timer.value),
+                cpu_info: format!(
+                    "A: {:02X}, X: {:02X}, Y: {:02X}, SP: {:02X}, PC: {:04X}, P: {:?}",
+                    emu.system.cpu.a,
+                    emu.system.cpu.x,
+                    emu.system.cpu.y,
+                    emu.system.cpu.s,
+                    emu.system.cpu.pc,
+                    emu.system.cpu.p
+                ),
+                tia_info: format!(
+                    "Color Clock: {}, Scanline: {}",
+                    emu.system.bus.tia.color_clock, emu.system.bus.tia.scanline
+                ),
+                riot_info: format!(
+                    "Pins: {:02X} {:02X}, DDR: {:02X} {:02X}, INTIM: {:02X}",
+                    emu.system.bus.riot.pins[0],
+                    emu.system.bus.riot.pins[1],
+                    emu.system.bus.riot.ddr[0],
+                    emu.system.bus.riot.ddr[1],
+                    emu.system.bus.riot.timer.value
+                ),
             };
             drop(emu); // release the brief lock BEFORE the wgpu upload + egui pass
             (fb, dims, info)

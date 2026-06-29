@@ -5,7 +5,7 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v0.1.0 (scaffold). The Phase 1-4 core components (CPU, TIA video/audio, RIOT, Bus, Core/Curated Carts) are complete. Phase 5 Frontend Sprint 1 is complete.
+**Current release:** v0.1.0 (scaffold). The Phase 1-4 core components (CPU, TIA video/audio, RIOT, Bus, Core/Curated Carts) are complete. Phase 5 Frontend (rendering, pacing, WASM/thread support) is 100% complete.
 
 ## Subsystem progress
 
@@ -16,7 +16,7 @@ version policy. Everything else defers to it. References:
 | `rusty2600-riot` | MOS 6532 RIOT | 100% complete (RAM, DDR ports, Timers) |
 | `rusty2600-cart` | Bankswitch boards | Core boards complete (2K/4K/F8/F6/F4); honesty gate live |
 | `rusty2600-core` | Bus + scheduler | lockstep loop + seeded phase live; bus decode complete |
-| `rusty2600-frontend` | egui shell | Sprint 1 complete (rendering, NTSC/PAL/SECAM palettes, inputs) |
+| `rusty2600-frontend` | egui shell | 100% complete (rendering, audio, pacing, input, WASM support) |
 | `rusty2600-test-harness` | accuracy oracle | shapes present (differ/runner/score/snap); no golden logs yet |
 
 ## Accuracy (per-suite pass counts)

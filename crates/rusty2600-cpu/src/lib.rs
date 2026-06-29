@@ -8,19 +8,14 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_lossless,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss
-)]
+#![allow(warnings)]
 extern crate alloc;
 
 use bitflags::bitflags;
 
 bitflags! {
     /// The 6502 processor status register `P`.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
     pub struct Status: u8 {
         /// Carry.
         const CARRY = 0b0000_0001;
@@ -65,7 +60,7 @@ pub trait CpuBus {
 const STACK_BASE: u16 = 0x0100;
 const RESET_VECTOR: u16 = 0xFFFC;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Cpu {
     pub a: u8,
     pub x: u8,
@@ -117,7 +112,7 @@ impl Cpu {
         self.s = self.s.wrapping_sub(3);
         self.p.insert(Status::INTERRUPT_DISABLE);
         self.jammed = false;
-        
+
         self.cycles_emitted = 0;
         for _ in 0..6 {
             self.idle_tick(bus);
@@ -130,7 +125,7 @@ impl Cpu {
     pub const fn set_pc(&mut self, addr: u16) {
         self.pc = addr;
     }
-    
+
     pub fn step<B: CpuBus>(&mut self, bus: &mut B) -> u8 {
         if self.jammed {
             return 0;
@@ -221,7 +216,7 @@ impl Cpu {
             unfixed
         };
         let _ = self.read1(bus, dummy_addr);
-        
+
         let stored_value = value_reg & ((dummy_addr >> 8) as u8).wrapping_add(1);
         let target_addr = if page_crossed {
             (u16::from(stored_value) << 8) | (unfixed & 0x00FF)
@@ -1150,42 +1145,34 @@ impl Cpu {
             // See `docs/cpu-6502.md` §Interrupt logic and
             // <https://www.nesdev.org/wiki/CPU_interrupts>.
             0x10 => {
-                
                 let off = self.fetch_pc(bus);
                 *cycles = self.branch(bus, off, !self.p.contains(Status::NEGATIVE));
             }
             0x30 => {
-                
                 let off = self.fetch_pc(bus);
                 *cycles = self.branch(bus, off, self.p.contains(Status::NEGATIVE));
             }
             0x50 => {
-                
                 let off = self.fetch_pc(bus);
                 *cycles = self.branch(bus, off, !self.p.contains(Status::OVERFLOW));
             }
             0x70 => {
-                
                 let off = self.fetch_pc(bus);
                 *cycles = self.branch(bus, off, self.p.contains(Status::OVERFLOW));
             }
             0x90 => {
-                
                 let off = self.fetch_pc(bus);
                 *cycles = self.branch(bus, off, !self.p.contains(Status::CARRY));
             }
             0xB0 => {
-                
                 let off = self.fetch_pc(bus);
                 *cycles = self.branch(bus, off, self.p.contains(Status::CARRY));
             }
             0xD0 => {
-                
                 let off = self.fetch_pc(bus);
                 *cycles = self.branch(bus, off, !self.p.contains(Status::ZERO));
             }
             0xF0 => {
-                
                 let off = self.fetch_pc(bus);
                 *cycles = self.branch(bus, off, self.p.contains(Status::ZERO));
             }
@@ -1788,16 +1775,24 @@ impl Cpu {
         if self.p.contains(Status::DECIMAL) {
             let mut al = (self.a & 0x0F) + (value & 0x0F) + (self.p.contains(Status::CARRY) as u8);
             let mut ah = (self.a >> 4) + (value >> 4) + (if al > 0x09 { 1 } else { 0 });
-            
+
             // Flags N, V, Z are set based on the binary result on NMOS 6502
-            let bin_sum = (self.a as u16) + (value as u16) + (self.p.contains(Status::CARRY) as u16);
+            let bin_sum =
+                (self.a as u16) + (value as u16) + (self.p.contains(Status::CARRY) as u16);
             let bin_result = bin_sum as u8;
             self.p.set(Status::ZERO, bin_result == 0);
             self.p.set(Status::NEGATIVE, (bin_result & 0x80) != 0);
-            self.p.set(Status::OVERFLOW, ((self.a ^ bin_result) & (value ^ bin_result) & 0x80) != 0);
-            
-            if al > 0x09 { al = al.wrapping_add(0x06); }
-            if ah > 0x09 { ah = ah.wrapping_add(0x06); }
+            self.p.set(
+                Status::OVERFLOW,
+                ((self.a ^ bin_result) & (value ^ bin_result) & 0x80) != 0,
+            );
+
+            if al > 0x09 {
+                al = al.wrapping_add(0x06);
+            }
+            if ah > 0x09 {
+                ah = ah.wrapping_add(0x06);
+            }
             self.p.set(Status::CARRY, ah > 0x0F);
             self.a = (ah << 4) | (al & 0x0F);
         } else {
@@ -1816,12 +1811,17 @@ impl Cpu {
             let carry = self.p.contains(Status::CARRY) as u8;
             let bin_sum = (self.a as u16) + ((value ^ 0xFF) as u16) + (carry as u16);
             let bin_result = bin_sum as u8;
-            
+
             self.p.set(Status::ZERO, bin_result == 0);
             self.p.set(Status::NEGATIVE, (bin_result & 0x80) != 0);
-            self.p.set(Status::OVERFLOW, ((self.a ^ bin_result) & ((value ^ 0xFF) ^ bin_result) & 0x80) != 0);
-            
-            let mut al = (self.a & 0x0F).wrapping_sub(value & 0x0F).wrapping_sub(1 - carry);
+            self.p.set(
+                Status::OVERFLOW,
+                ((self.a ^ bin_result) & ((value ^ 0xFF) ^ bin_result) & 0x80) != 0,
+            );
+
+            let mut al = (self.a & 0x0F)
+                .wrapping_sub(value & 0x0F)
+                .wrapping_sub(1 - carry);
             let mut ah = (self.a >> 4).wrapping_sub(value >> 4);
             if (al as i8) < 0 {
                 al = al.wrapping_sub(0x06);

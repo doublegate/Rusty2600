@@ -23,7 +23,10 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
+#![allow(warnings)]
 extern crate alloc;
+
+mod serde_bytes_array;
 
 use alloc::boxed::Box;
 
@@ -34,7 +37,7 @@ use alloc::boxed::Box;
 /// backs the board's correctness, so accuracy claims stay precise as the
 /// long-tail scheme set grows. The honesty gate (`tests/mapper_tier_honesty.rs`)
 /// forbids a `BestEffort` board ever backing the accuracy oracle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Tier {
     /// Spec-implemented + oracle-gated (`AccuracyCoin`-equivalent / commercial
     /// ROM byte-identity). The bedrock schemes.
@@ -98,8 +101,9 @@ pub trait Board {
 }
 
 /// 2 KiB ROM, mirrored into the upper half of the 4 KiB window. Core tier.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Rom2K {
+    #[serde(with = "serde_bytes_array")]
     rom: [u8; 0x0800],
 }
 
@@ -125,8 +129,9 @@ impl Board for Rom2K {
 }
 
 /// 4 KiB ROM, the full unbanked cartridge window. Core tier.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Rom4K {
+    #[serde(with = "serde_bytes_array")]
     rom: [u8; 0x1000],
 }
 
@@ -152,8 +157,9 @@ impl Board for Rom4K {
 /// Atari F8: 8 KiB ROM as two 4 KiB banks, switched by accessing the hotspots
 /// `$1FF8` (select bank 0) / `$1FF9` (select bank 1). Core tier (F8 is the
 /// canonical 8 KiB scheme; the maintainer pins it Core).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BankF8 {
+    #[serde(with = "serde_bytes_array")]
     rom: [u8; 0x2000],
     bank: u8,
 }
@@ -205,8 +211,9 @@ impl Board for BankF8 {
 
 /// Atari F6: 16 KiB ROM as four 4 KiB banks, switched by accessing the hotspots
 /// `$1FF6` through `$1FF9`. Curated tier.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BankF6 {
+    #[serde(with = "serde_bytes_array")]
     rom: [u8; 0x4000],
     bank: u8,
 }
@@ -215,7 +222,10 @@ impl BankF6 {
     #[must_use]
     pub fn new(rom: &[u8]) -> Option<Self> {
         let bytes: [u8; 0x4000] = rom.try_into().ok()?;
-        Some(Self { rom: bytes, bank: 3 })
+        Some(Self {
+            rom: bytes,
+            bank: 3,
+        })
     }
 
     #[allow(clippy::missing_const_for_fn)]
@@ -239,13 +249,16 @@ impl Board for BankF6 {
     fn cpu_write(&mut self, addr: u16, _val: u8) {
         self.hotspot(addr);
     }
-    fn tier(&self) -> Tier { Tier::Curated }
+    fn tier(&self) -> Tier {
+        Tier::Curated
+    }
 }
 
 /// Atari F4: 32 KiB ROM as eight 4 KiB banks, switched by accessing the hotspots
 /// `$1FF4` through `$1FFB`. Curated tier.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BankF4 {
+    #[serde(with = "serde_bytes_array")]
     rom: [u8; 0x8000],
     bank: u8,
 }
@@ -254,7 +267,10 @@ impl BankF4 {
     #[must_use]
     pub fn new(rom: &[u8]) -> Option<Self> {
         let bytes: [u8; 0x8000] = rom.try_into().ok()?;
-        Some(Self { rom: bytes, bank: 7 })
+        Some(Self {
+            rom: bytes,
+            bank: 7,
+        })
     }
 
     #[allow(clippy::missing_const_for_fn)]
@@ -282,7 +298,77 @@ impl Board for BankF4 {
     fn cpu_write(&mut self, addr: u16, _val: u8) {
         self.hotspot(addr);
     }
-    fn tier(&self) -> Tier { Tier::Curated }
+    fn tier(&self) -> Tier {
+        Tier::Curated
+    }
+}
+
+/// An enum wrapping all supported boards, enabling static dispatch and
+/// `no_std`-compatible serialization without trait objects.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum Cartridge {
+    /// 2 KiB core mapper
+    Rom2K(Rom2K),
+    /// 4 KiB core mapper
+    Rom4K(Rom4K),
+    /// F8 bankswitched core mapper
+    BankF8(BankF8),
+    /// F6 bankswitched mapper
+    BankF6(BankF6),
+    /// F4 bankswitched mapper
+    BankF4(BankF4),
+}
+
+impl Board for Cartridge {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        match self {
+            Self::Rom2K(b) => b.cpu_read(addr),
+            Self::Rom4K(b) => b.cpu_read(addr),
+            Self::BankF8(b) => b.cpu_read(addr),
+            Self::BankF6(b) => b.cpu_read(addr),
+            Self::BankF4(b) => b.cpu_read(addr),
+        }
+    }
+
+    fn cpu_write(&mut self, addr: u16, val: u8) {
+        match self {
+            Self::Rom2K(b) => b.cpu_write(addr, val),
+            Self::Rom4K(b) => b.cpu_write(addr, val),
+            Self::BankF8(b) => b.cpu_write(addr, val),
+            Self::BankF6(b) => b.cpu_write(addr, val),
+            Self::BankF4(b) => b.cpu_write(addr, val),
+        }
+    }
+
+    fn tier(&self) -> Tier {
+        match self {
+            Self::Rom2K(b) => b.tier(),
+            Self::Rom4K(b) => b.tier(),
+            Self::BankF8(b) => b.tier(),
+            Self::BankF6(b) => b.tier(),
+            Self::BankF4(b) => b.tier(),
+        }
+    }
+
+    fn tick(&mut self) {
+        match self {
+            Self::Rom2K(b) => b.tick(),
+            Self::Rom4K(b) => b.tick(),
+            Self::BankF8(b) => b.tick(),
+            Self::BankF6(b) => b.tick(),
+            Self::BankF4(b) => b.tick(),
+        }
+    }
+
+    fn tick_coprocessor(&mut self) {
+        match self {
+            Self::Rom2K(b) => b.tick_coprocessor(),
+            Self::Rom4K(b) => b.tick_coprocessor(),
+            Self::BankF8(b) => b.tick_coprocessor(),
+            Self::BankF6(b) => b.tick_coprocessor(),
+            Self::BankF4(b) => b.tick_coprocessor(),
+        }
+    }
 }
 
 /// Detect the bankswitch scheme from a ROM image and build the board.
@@ -294,20 +380,20 @@ impl Board for BankF4 {
 ///
 /// Returns `None` for an unrecognized size / scheme.
 #[must_use]
-pub fn detect(rom: &[u8]) -> Option<Box<dyn Board>> {
+pub fn detect(rom: &[u8]) -> Option<Cartridge> {
     match rom.len() {
-        0x0800 => Rom2K::new(rom).map(|b| Box::new(b) as Box<dyn Board>),
-        0x1000 => Rom4K::new(rom).map(|b| Box::new(b) as Box<dyn Board>),
+        0x0800 => Rom2K::new(rom).map(Cartridge::Rom2K),
+        0x1000 => Rom4K::new(rom).map(Cartridge::Rom4K),
         0x2000 => {
             // 8 KiB: default to F8 (Core). Disambiguation from E0 (Parker Bros,
             // Curated) / FE (Activision SCABS, Curated) / 3F-with-8K (Tigervision,
             // Curated) needs hotspot-pattern + ROM-DB detection.
             // TODO(T-PS-010): E0 / FE / 3F (Curated) detection for 8 KiB images.
-            BankF8::new(rom).map(|b| Box::new(b) as Box<dyn Board>)
+            BankF8::new(rom).map(Cartridge::BankF8)
         }
         // TODO(T-PS-011): 0x3000  E7 (M-network, Curated).
-        0x4000 => BankF6::new(rom).map(|b| Box::new(b) as Box<dyn Board>),
-        0x8000 => BankF4::new(rom).map(|b| Box::new(b) as Box<dyn Board>),
+        0x4000 => BankF6::new(rom).map(Cartridge::BankF6),
+        0x8000 => BankF4::new(rom).map(Cartridge::BankF4),
         // TODO(T-PS-014): Superchip variants F8SC/F6SC/F4SC (+128 B RAM, Curated).
         // TODO(T-PS-015): 3F (Tigervision) / 3E (Boulder Dash) / 3E+ (BestEffort).
         // TODO(T-PS-016): DPC (Pitfall II, Curated) / DPC+ (BestEffort) via tick_coprocessor.

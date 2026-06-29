@@ -19,6 +19,9 @@ license = "MIT OR Apache-2.0"
 authors = ["DoubleGate <parobek@gmail.com>"]
 repository = "https://github.com/doublegate/Rusty2600"
 
+[workspace.dependencies]
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+
 [workspace.lints.rust]
 unsafe_code = "warn"
 missing_docs = "warn"

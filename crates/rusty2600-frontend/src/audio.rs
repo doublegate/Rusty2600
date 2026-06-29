@@ -22,7 +22,8 @@ use std::sync::Mutex;
 
 use cpal::traits::{DeviceTrait as _, HostTrait as _, StreamTrait as _};
 
-use crate::audio_ring::Consumer;
+use crate::audio_ring::channel;
+use crate::resampler::{HermiteResampler, drc_ratio};
 
 /// The live cpal output stream + the ring consumer it drains (kept alive for the program's
 /// duration). Dropping it stops the stream.
@@ -41,7 +42,8 @@ impl AudioOutput {
     /// # Errors
     /// Returns an [`AudioError`] when the host has no default output device, the config query
     /// fails, or the stream cannot be built/started.
-    pub fn new(consumer: Consumer) -> Result<Self, AudioError> {
+    pub fn new() -> Result<(Self, AudioProducer), AudioError> {
+        let (producer, consumer) = channel(16384);
         let host = cpal::default_host();
         let device = host.default_output_device().ok_or(AudioError::NoDevice)?;
         let supported = device
@@ -53,13 +55,18 @@ impl AudioOutput {
         let config: cpal::StreamConfig = supported.into();
 
         let err_fn = |e| eprintln!("rusty2600 audio stream error: {e}");
+        let mut mono = Vec::new();
         let stream = device
             .build_output_stream(
                 config,
                 move |data: &mut [f32], _| {
-                    // Drain the ring into the device buffer; underrun -> silence (consumer.pull).
-                    for frame in data.chunks_mut(channels.max(1)) {
-                        let s = consumer.pull();
+                    let chans = channels.max(1);
+                    let frames = data.len() / chans;
+                    if mono.len() < frames {
+                        mono.resize(frames, 0.0);
+                    }
+                    consumer.pop_or_silence(&mut mono[..frames]);
+                    for (frame, &s) in data.chunks_mut(chans).zip(mono.iter()) {
                         for ch in frame.iter_mut() {
                             *ch = s;
                         }
@@ -73,10 +80,49 @@ impl AudioOutput {
             .play()
             .map_err(|e| AudioError::Build(e.to_string()))?;
 
-        Ok(Self {
-            sample_rate,
-            _stream: Mutex::new(stream),
-        })
+        Ok((
+            Self {
+                sample_rate,
+                _stream: Mutex::new(stream),
+            },
+            AudioProducer {
+                sample_rate,
+                queue: producer,
+                resampler: HermiteResampler::new(),
+                resample_buf: Vec::with_capacity(1024),
+                latency_samples: (sample_rate as usize * 60) / 1000, // 60ms latency target
+            },
+        ))
+    }
+}
+
+/// The detached audio producer (resampler + queue push).
+pub struct AudioProducer {
+    /// The device output sample rate.
+    pub sample_rate: u32,
+    queue: crate::audio_ring::Producer,
+    resampler: HermiteResampler,
+    resample_buf: Vec<f32>,
+    latency_samples: usize,
+}
+
+impl AudioProducer {
+    /// Push core samples (at ~31.4 kHz) into the resampler and queue.
+    pub fn push_samples(&mut self, samples: &[f32]) {
+        if samples.is_empty() {
+            return;
+        }
+
+        let source_hz = 31400.0;
+        let base = source_hz / (self.sample_rate as f64);
+        self.resampler.set_base_ratio(base);
+
+        let fill = self.queue.len() as f64 / (2.0 * self.latency_samples.max(1) as f64);
+        self.resampler.set_ratio(drc_ratio(fill) * base);
+
+        self.resample_buf.clear();
+        self.resampler.process(samples, &mut self.resample_buf);
+        self.queue.push_slice(&self.resample_buf);
     }
 }
 

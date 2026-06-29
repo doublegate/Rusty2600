@@ -21,10 +21,12 @@ use std::sync::{Arc, Mutex};
 
 use rusty2600_core::{System, detect};
 
+use crate::audio::AudioProducer;
 use crate::gfx::{MAX_H, MAX_W};
 use crate::input::InputState;
 use crate::palette::Region;
 use crate::present_buffer::Producer as FrameProducer;
+use rusty2600_core::Board;
 
 /// The owned emulator state the emu-thread drives and the winit thread peeks.
 ///
@@ -48,6 +50,11 @@ pub struct EmuCore {
     /// The board's accuracy tier label, cached for the status bar (the 2600 `Board`
     /// trait has no name; `Tier::name` is the honesty marker).
     board_tier: Option<&'static str>,
+    /// The lock-free audio ring producer (pushes samples to the frontend).
+    pub audio_tx: Option<AudioProducer>,
+    /// Snapshots of the system state, stored before each frame is executed.
+    /// Used for rewind/run-ahead. Maintains ~600 frames (10 seconds) of history.
+    pub snapshots: std::collections::VecDeque<System>,
 }
 
 impl EmuCore {
@@ -62,6 +69,8 @@ impl EmuCore {
             rom_loaded: false,
             framebuffer: vec![0u8; (MAX_W * MAX_H * 4) as usize],
             board_tier: None,
+            audio_tx: None,
+            snapshots: std::collections::VecDeque::with_capacity(600),
         }
     }
 
@@ -82,6 +91,7 @@ impl EmuCore {
         let mut system = System::new(0);
         system.bus.board = Some(board);
         self.system = system;
+        self.snapshots.clear();
         self.rom_loaded = true;
         Ok(())
     }
@@ -90,9 +100,17 @@ impl EmuCore {
     /// behavior).
     pub fn close_rom(&mut self) {
         self.system = System::new(0);
+        self.snapshots.clear();
         self.rom_loaded = false;
         self.board_tier = None;
         self.framebuffer.iter_mut().for_each(|b| *b = 0);
+    }
+
+    /// Rewinds the emulator state by one frame if history is available.
+    pub fn rewind(&mut self) {
+        if let Some(prev) = self.snapshots.pop_back() {
+            self.system = prev;
+        }
     }
 
     /// The loaded board's accuracy-tier label, if any (for the status bar).
@@ -127,24 +145,46 @@ impl EmuCore {
             self.system.bus.tia.inpt[4] = inpt4;
             self.system.bus.tia.inpt[5] = inpt5;
         }
-        
+
         if !self.rom_loaded || self.paused {
             return;
         }
+
+        // Save snapshot before advancing state
+        self.snapshots.push_back(self.system.clone());
+        if self.snapshots.len() > 600 {
+            self.snapshots.pop_front();
+        }
+
         let clocks = u64::from(self.region.lines_per_frame()) * 228;
         for _ in 0..clocks {
             self.system.tick_one_color_clock();
-            
+
             let cc = self.system.bus.tia.color_clock;
             let sl = self.system.bus.tia.scanline;
-            
+
+            // Audio ticks every 114 color clocks (twice per scanline, ~31.4 kHz).
+            if cc == 114 || cc == 227 {
+                use rusty2600_core::AudioBus;
+                let s = self.system.bus.audio_sample();
+                // Map [0, 30] to [-1.0, 1.0]
+                let normalized = (s as f32 / 15.0) - 1.0;
+
+                // Collect samples into a small buffer, flush periodically.
+                // For simplicity here, we push them one by one.
+                // Realistically we'd batch, but `push_samples` takes a slice.
+                if let Some(tx) = &mut self.audio_tx {
+                    tx.push_samples(&[normalized]);
+                }
+            }
+
             // Output visible dots (68..=227). Only render active scanlines.
             if cc >= 68 && sl < self.region.active_height() as u16 {
                 let x = (cc - 68) as usize;
                 let y = sl as usize;
                 let color_idx = self.system.bus.tia.current_color;
                 let rgb = self.region.lookup(color_idx >> 1);
-                
+
                 let off = (y * 160 + x) * 4;
                 if off + 3 < self.framebuffer.len() {
                     self.framebuffer[off] = (rgb >> 16) as u8;
@@ -159,25 +199,47 @@ impl EmuCore {
     }
 
     /// Produce exactly one frame's worth of color clocks, accumulating beam dots into
-    /// `frames` (the dedicated-emu-thread path). v0.1 delegates to [`EmuCore::run_frame`];
-    /// the per-dot accumulation into `frames` is a `// TODO`.
-    pub fn step_frame(&mut self, frames: &FrameProducer) {
+    /// `frames` (the dedicated-emu-thread path).
+    pub fn step_frame(&mut self, frames: &FrameProducer, input: Option<(u8, u8, u8, u8)>) {
+        if let Some((swcha, swchb, inpt4, inpt5)) = input {
+            self.system.bus.riot.pins[0] = swcha;
+            self.system.bus.riot.pins[1] = swchb;
+            self.system.bus.tia.inpt[4] = inpt4;
+            self.system.bus.tia.inpt[5] = inpt5;
+        }
+
         if !self.rom_loaded || self.paused {
             return;
         }
-        
+
+        // Save snapshot before advancing state
+        self.snapshots.push_back(self.system.clone());
+        if self.snapshots.len() > 600 {
+            self.snapshots.pop_front();
+        }
+
         let mut frame = crate::present_buffer::Frame::black(
             crate::gfx::VCS_W as usize,
-            self.region.active_height() as usize
+            self.region.active_height() as usize,
         );
-        
+
         let clocks = u64::from(self.region.lines_per_frame()) * 228;
         for _ in 0..clocks {
             self.system.tick_one_color_clock();
-            
+
             let cc = self.system.bus.tia.color_clock;
             let sl = self.system.bus.tia.scanline;
-            
+
+            // Audio ticks every 114 color clocks (twice per scanline, ~31.4 kHz).
+            if cc == 114 || cc == 227 {
+                use rusty2600_core::AudioBus;
+                let s = self.system.bus.audio_sample();
+                let normalized = (s as f32 / 15.0) - 1.0;
+                if let Some(tx) = &mut self.audio_tx {
+                    tx.push_samples(&[normalized]);
+                }
+            }
+
             // Output visible dots (68..=227). Only render active scanlines.
             if cc >= 68 && sl < self.region.active_height() as u16 {
                 let x = (cc - 68) as usize;
@@ -187,10 +249,10 @@ impl EmuCore {
                 frame.put_dot(x, y, rgb);
             }
         }
-        
+
         // Reset scanline counter per frame
         self.system.bus.tia.scanline = 0;
-        
+
         // Publish the produced frame
         frames.publish(frame);
     }
@@ -241,11 +303,23 @@ impl SharedInput {
     pub fn store(&self, state: InputState) {
         let (swcha, swchb) = state.riot_ports();
         let (inpt4, inpt5) = state.fire_inputs();
-        let packed = u32::from(swcha) << 24
-            | u32::from(swchb) << 16
-            | u32::from(inpt4) << 8
+        let packed = (u32::from(swcha) << 24)
+            | (u32::from(swchb) << 16)
+            | (u32::from(inpt4) << 8)
             | u32::from(inpt5);
-        self.packed.store(packed, Ordering::Relaxed);
+        self.packed.store(packed, Ordering::Release);
+    }
+
+    /// Load the latched host input (emu thread).
+    #[must_use]
+    pub fn load(&self) -> (u8, u8, u8, u8) {
+        let packed = self.packed.load(Ordering::Acquire);
+        let swcha = (packed >> 24) as u8;
+        let swchb = (packed >> 16) as u8;
+        let inpt4 = (packed >> 8) as u8;
+        let inpt5 = packed as u8;
+
+        (swcha, swchb, inpt4, inpt5)
     }
 
     /// Read the latched `(SWCHA, SWCHB, INPT4, INPT5)` bytes (emu-thread).
@@ -259,27 +333,6 @@ impl SharedInput {
 
 /// Drive one cooperative emulation pass (the body the dedicated emu-thread will loop).
 ///
-/// v0.1 runs it INLINE rather than on a real OS thread: `rusty2600_core::System` is
-/// not yet `Send` (it boxes a `dyn Board` without a `Send` bound), so
-/// `std::thread::spawn` would not accept the [`EmuHandle`].
-///
-/// Latches `input` late, then produces one frame into `frames`. This keeps the
-/// SharedInput / EmuHandle / FrameProducer wiring real and exercised, so the
-/// real thread spawn is a localized change once the core gains the `Send` bound.
-///
-/// TODO(T-PS-063): add a `Send` bound to `cart::Board`, then move this body into
-/// a named `emu-thread` (`std::thread::Builder`) driven by a produce-interval
-/// pacing timer + best-effort per-thread priority elevation (RustyNES
-/// `elevate_thread_priority`) + a clean shutdown flag.
-pub fn drive_one_pass(handle: &EmuHandle, input: &SharedInput, frames: &FrameProducer) {
-    // Late-latch the input the winit thread published.
-    let (swcha, swchb, _inpt4, _inpt5) = input.load_ports();
-    let _ = (swcha, swchb);
-    if let Ok(mut core) = handle.lock() {
-        core.step_frame(frames);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

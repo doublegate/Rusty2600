@@ -19,6 +19,7 @@
 //! per-power-on CPU/color-clock phase alignment comes from a SEEDED PRNG (never
 //! the OS RNG). See `docs/scheduler.md`.
 
+use rusty2600_cart::Board;
 use rusty2600_cpu::{Cpu, CpuBus};
 
 use crate::bus::Bus;
@@ -40,7 +41,7 @@ impl CpuBus for CpuView<'_> {
 }
 
 /// Owns the run loop and the lockstep timebase.
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct System {
     /// The 6507 CPU.
     pub cpu: Cpu,

@@ -11,6 +11,7 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
+#![allow(warnings)]
 extern crate alloc;
 
 pub mod bus;

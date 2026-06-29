@@ -363,7 +363,9 @@ impl ShellState {
                         ui.label(format!("{}", info.cpu_info));
                     }
                     DebugPanel::Tia => {
-                        ui.label("TIA — object regs (P0/P1/M0/M1/BL), the playfield, the beam position");
+                        ui.label(
+                            "TIA — object regs (P0/P1/M0/M1/BL), the playfield, the beam position",
+                        );
                         ui.label(format!("{}", info.tia_info));
                     }
                     DebugPanel::Riot => {
