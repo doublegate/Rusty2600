@@ -6,9 +6,7 @@ e.g. `T-01-003` = phase 0, sprint 1, ticket 3). Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current phase: Phase 2 (scheduler + video).** Phase 0 (foundation) and Phase 1 (CPU golden log) are complete. The workspace compiles as stubs with the
-lockstep scheduler, the seeded determinism phase, the Core cart boards, and the
-honesty gate already live; the chip engines are `// TODO(T-PS-NNN)`.
+**Current phase: Phase 5 (frontend).** Phase 0 (foundation) through Phase 4 (carts / mappers) are complete. The workspace compiles as fully wired components with the lockstep scheduler, the seeded determinism phase, the Core/Curated cart boards, and the honesty gate already live. We are now working on filling out the frontend egui shell and wiring it perfectly to the core in Phase 5.
 
 ## The phase line
 

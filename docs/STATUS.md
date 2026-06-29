@@ -5,18 +5,18 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v0.1.0 (scaffold). The Phase 1 CPU is complete. The other chips are compiling stubs with real state and `// TODO(T-PS-NNN)` engines.
+**Current release:** v0.1.0 (scaffold). The Phase 1-4 core components (CPU, TIA video/audio, RIOT, Bus, Core/Curated Carts) are complete. Phase 5 Frontend Sprint 1 is complete.
 
 ## Subsystem progress
 
 | Crate | Chip | State |
 |---|---|---|
 | `rusty2600-cpu` | MOS 6507 | 100% complete (BCD, undocumented opcodes) |
-| `rusty2600-tia` | TIA — video + audio | not started (registers + WSYNC/RDY + beam counter stubs) |
-| `rusty2600-riot` | MOS 6532 RIOT | not started (RAM + ports + timer fields) |
-| `rusty2600-cart` | Bankswitch boards | Core boards stubbed (2K/4K/F8); honesty gate live |
-| `rusty2600-core` | Bus + scheduler | lockstep loop + seeded phase live; bus decode stubbed |
-| `rusty2600-frontend` | egui shell | not started |
+| `rusty2600-tia` | TIA — video + audio | 100% complete (beam-raced video, Audio LFSRs) |
+| `rusty2600-riot` | MOS 6532 RIOT | 100% complete (RAM, DDR ports, Timers) |
+| `rusty2600-cart` | Bankswitch boards | Core boards complete (2K/4K/F8/F6/F4); honesty gate live |
+| `rusty2600-core` | Bus + scheduler | lockstep loop + seeded phase live; bus decode complete |
+| `rusty2600-frontend` | egui shell | Sprint 1 complete (rendering, NTSC/PAL/SECAM palettes, inputs) |
 | `rusty2600-test-harness` | accuracy oracle | shapes present (differ/runner/score/snap); no golden logs yet |
 
 ## Accuracy (per-suite pass counts)
