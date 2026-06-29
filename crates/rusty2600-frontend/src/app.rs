@@ -231,6 +231,9 @@ impl App {
                 region: emu.region,
                 fps: 0.0, // TODO(impl-phase): wire the pacer's smoothed FPS estimate.
                 rom_loaded: emu.rom_loaded,
+                cpu_info: format!("A: {:02X}, X: {:02X}, Y: {:02X}, SP: {:02X}, PC: {:04X}, P: {:?}", emu.system.cpu.a, emu.system.cpu.x, emu.system.cpu.y, emu.system.cpu.s, emu.system.cpu.pc, emu.system.cpu.p),
+                tia_info: format!("Color Clock: {}, Scanline: {}", emu.system.bus.tia.color_clock, emu.system.bus.tia.scanline),
+                riot_info: format!("Pins: {:02X} {:02X}, DDR: {:02X} {:02X}, INTIM: {:02X}", emu.system.bus.riot.pins[0], emu.system.bus.riot.pins[1], emu.system.bus.riot.ddr[0], emu.system.bus.riot.ddr[1], emu.system.bus.riot.timer.value),
             };
             drop(emu); // release the brief lock BEFORE the wgpu upload + egui pass
             (fb, dims, info)

@@ -110,6 +110,12 @@ pub struct ShellInfo {
     pub fps: f32,
     /// Whether a ROM is loaded.
     pub rom_loaded: bool,
+    /// CPU debug string.
+    pub cpu_info: String,
+    /// TIA debug string.
+    pub tia_info: String,
+    /// RIOT debug string.
+    pub riot_info: String,
 }
 
 /// Which debugger panels are currently shown.
@@ -284,7 +290,7 @@ impl ShellState {
             self.render_settings(&ctx, cfg);
         }
         if self.debugger_visible {
-            self.render_debugger(&ctx);
+            self.render_debugger(&ctx, info);
         }
 
         actions
@@ -335,7 +341,7 @@ impl ShellState {
     }
 
     /// The debugger overlay: a panel selector + the 2600 chip-panel stubs.
-    fn render_debugger(&mut self, ctx: &egui::Context) {
+    fn render_debugger(&mut self, ctx: &egui::Context, info: &ShellInfo) {
         let mut open = self.debugger_visible;
         egui::Window::new("Debugger")
             .open(&mut open)
@@ -354,17 +360,17 @@ impl ShellState {
                     // grid / disassembly / viewers.
                     DebugPanel::Cpu => {
                         ui.label("6507 — registers (A/X/Y/SP/PC/P), disassembly, breakpoints.");
-                        ui.label("TODO(impl-phase).");
+                        ui.label(format!("{}", info.cpu_info));
                     }
                     DebugPanel::Tia => {
-                        ui.label("TIA — object regs (P0/P1/M0/M1/BL), the playfield, the beam");
-                        ui.label("position, the collision latches. TODO(impl-phase).");
+                        ui.label("TIA — object regs (P0/P1/M0/M1/BL), the playfield, the beam position");
+                        ui.label(format!("{}", info.tia_info));
                     }
                     DebugPanel::Riot => {
                         ui.label(
                             "RIOT — the interval timer (INTIM/INSTAT), the SWCHA/SWCHB ports,",
                         );
-                        ui.label("the data-direction registers. TODO(impl-phase).");
+                        ui.label(format!("{}", info.riot_info));
                     }
                     DebugPanel::Memory => {
                         ui.label("Memory — the RIOT's 128 bytes of RAM + the cart window view +");
