@@ -117,28 +117,82 @@ impl EmuCore {
         &self.framebuffer[..len.min(self.framebuffer.len())]
     }
 
-    /// Advance one video frame (run the scheduler a region's worth of color clocks).
-    /// The synchronous (non-threaded) present path calls this each frame.
-    ///
-    /// v0.1: the chips are skeletons, so this advances the timebase but the TIA emits
-    /// no pixels yet — the framebuffer stays cleared (no TIA output).
-    pub fn run_frame(&mut self) {
+    /// Run a single frame sequentially and accumulate the beam dots into `self.framebuffer`.
+    pub fn run_frame(&mut self, input: Option<InputState>) {
+        if let Some(state) = input {
+            let (swcha, swchb) = state.riot_ports();
+            self.system.bus.riot.pins[0] = swcha;
+            self.system.bus.riot.pins[1] = swchb;
+            let (inpt4, inpt5) = state.fire_inputs();
+            self.system.bus.tia.inpt[4] = inpt4;
+            self.system.bus.tia.inpt[5] = inpt5;
+        }
+        
         if !self.rom_loaded || self.paused {
             return;
         }
         let clocks = u64::from(self.region.lines_per_frame()) * 228;
         for _ in 0..clocks {
             self.system.tick_one_color_clock();
+            
+            let cc = self.system.bus.tia.color_clock;
+            let sl = self.system.bus.tia.scanline;
+            
+            // Output visible dots (68..=227). Only render active scanlines.
+            if cc >= 68 && sl < self.region.active_height() as u16 {
+                let x = (cc - 68) as usize;
+                let y = sl as usize;
+                let color_idx = self.system.bus.tia.current_color;
+                let rgb = self.region.lookup(color_idx >> 1);
+                
+                let off = (y * 160 + x) * 4;
+                if off + 3 < self.framebuffer.len() {
+                    self.framebuffer[off] = (rgb >> 16) as u8;
+                    self.framebuffer[off + 1] = (rgb >> 8) as u8;
+                    self.framebuffer[off + 2] = rgb as u8;
+                    self.framebuffer[off + 3] = 255;
+                }
+            }
         }
-        // TODO(T-PS-061): write each visible dot through `present_buffer` (TIA emit ->
-        // palette RGB) into `framebuffer`, and push the TIA audio sample per CPU cycle.
+        // Reset scanline counter per frame
+        self.system.bus.tia.scanline = 0;
     }
 
     /// Produce exactly one frame's worth of color clocks, accumulating beam dots into
     /// `frames` (the dedicated-emu-thread path). v0.1 delegates to [`EmuCore::run_frame`];
     /// the per-dot accumulation into `frames` is a `// TODO`.
-    pub fn step_frame(&mut self, _frames: &FrameProducer) {
-        self.run_frame();
+    pub fn step_frame(&mut self, frames: &FrameProducer) {
+        if !self.rom_loaded || self.paused {
+            return;
+        }
+        
+        let mut frame = crate::present_buffer::Frame::black(
+            crate::gfx::VCS_W as usize,
+            self.region.active_height() as usize
+        );
+        
+        let clocks = u64::from(self.region.lines_per_frame()) * 228;
+        for _ in 0..clocks {
+            self.system.tick_one_color_clock();
+            
+            let cc = self.system.bus.tia.color_clock;
+            let sl = self.system.bus.tia.scanline;
+            
+            // Output visible dots (68..=227). Only render active scanlines.
+            if cc >= 68 && sl < self.region.active_height() as u16 {
+                let x = (cc - 68) as usize;
+                let y = sl as usize;
+                let color_idx = self.system.bus.tia.current_color;
+                let rgb = self.region.lookup(color_idx >> 1);
+                frame.put_dot(x, y, rgb);
+            }
+        }
+        
+        // Reset scanline counter per frame
+        self.system.bus.tia.scanline = 0;
+        
+        // Publish the produced frame
+        frames.publish(frame);
     }
 }
 

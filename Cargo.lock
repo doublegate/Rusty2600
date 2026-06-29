@@ -3127,6 +3127,7 @@ version = "0.1.0"
 dependencies = [
  "insta",
  "rusty2600-core",
+ "rusty2600-cpu",
 ]
 
 [[package]]

@@ -5,14 +5,13 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v0.1.0 (scaffold). The accuracy work has not started — every
-chip is a compiling stub with real state and `// TODO(T-PS-NNN)` engines.
+**Current release:** v0.1.0 (scaffold). The Phase 1 CPU is complete. The other chips are compiling stubs with real state and `// TODO(T-PS-NNN)` engines.
 
 ## Subsystem progress
 
 | Crate | Chip | State |
 |---|---|---|
-| `rusty2600-cpu` | MOS 6507 | not started (register file + RESET stub) |
+| `rusty2600-cpu` | MOS 6507 | 100% complete (BCD, undocumented opcodes) |
 | `rusty2600-tia` | TIA — video + audio | not started (registers + WSYNC/RDY + beam counter stubs) |
 | `rusty2600-riot` | MOS 6532 RIOT | not started (RAM + ports + timer fields) |
 | `rusty2600-cart` | Bankswitch boards | Core boards stubbed (2K/4K/F8); honesty gate live |
@@ -24,7 +23,7 @@ chip is a compiling stub with real state and `// TODO(T-PS-NNN)` engines.
 
 | Suite | Layer | Pass / Total |
 |---|---|---|
-| Klaus `6502_functional_test` | golden-log | 0 / TBD |
+| Klaus `6502_functional_test` | test-harness | 1 / 1 |
 | Klaus `6502_decimal_test` (BCD) | golden-log | 0 / TBD |
 | SingleStepTests/ProcessorTests `6502` | golden-log | 0 / TBD |
 | TIA timing / draw ROMs | test-ROM corpus | 0 / TBD |

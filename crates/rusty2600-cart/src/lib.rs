@@ -203,6 +203,88 @@ impl Board for BankF8 {
     }
 }
 
+/// Atari F6: 16 KiB ROM as four 4 KiB banks, switched by accessing the hotspots
+/// `$1FF6` through `$1FF9`. Curated tier.
+#[derive(Debug, Clone)]
+pub struct BankF6 {
+    rom: [u8; 0x4000],
+    bank: u8,
+}
+
+impl BankF6 {
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        let bytes: [u8; 0x4000] = rom.try_into().ok()?;
+        Some(Self { rom: bytes, bank: 3 })
+    }
+
+    #[allow(clippy::missing_const_for_fn)]
+    fn hotspot(&mut self, addr: u16) {
+        match addr & 0x1FFF {
+            0x1FF6 => self.bank = 0,
+            0x1FF7 => self.bank = 1,
+            0x1FF8 => self.bank = 2,
+            0x1FF9 => self.bank = 3,
+            _ => {}
+        }
+    }
+}
+
+impl Board for BankF6 {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        self.hotspot(addr);
+        let off = usize::from(self.bank) * 0x1000 + (addr & 0x0FFF) as usize;
+        self.rom[off]
+    }
+    fn cpu_write(&mut self, addr: u16, _val: u8) {
+        self.hotspot(addr);
+    }
+    fn tier(&self) -> Tier { Tier::Curated }
+}
+
+/// Atari F4: 32 KiB ROM as eight 4 KiB banks, switched by accessing the hotspots
+/// `$1FF4` through `$1FFB`. Curated tier.
+#[derive(Debug, Clone)]
+pub struct BankF4 {
+    rom: [u8; 0x8000],
+    bank: u8,
+}
+
+impl BankF4 {
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        let bytes: [u8; 0x8000] = rom.try_into().ok()?;
+        Some(Self { rom: bytes, bank: 7 })
+    }
+
+    #[allow(clippy::missing_const_for_fn)]
+    fn hotspot(&mut self, addr: u16) {
+        match addr & 0x1FFF {
+            0x1FF4 => self.bank = 0,
+            0x1FF5 => self.bank = 1,
+            0x1FF6 => self.bank = 2,
+            0x1FF7 => self.bank = 3,
+            0x1FF8 => self.bank = 4,
+            0x1FF9 => self.bank = 5,
+            0x1FFA => self.bank = 6,
+            0x1FFB => self.bank = 7,
+            _ => {}
+        }
+    }
+}
+
+impl Board for BankF4 {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        self.hotspot(addr);
+        let off = usize::from(self.bank) * 0x1000 + (addr & 0x0FFF) as usize;
+        self.rom[off]
+    }
+    fn cpu_write(&mut self, addr: u16, _val: u8) {
+        self.hotspot(addr);
+    }
+    fn tier(&self) -> Tier { Tier::Curated }
+}
+
 /// Detect the bankswitch scheme from a ROM image and build the board.
 ///
 /// Today this only resolves the Core-tier sized boards by length; the full
@@ -224,8 +306,8 @@ pub fn detect(rom: &[u8]) -> Option<Box<dyn Board>> {
             BankF8::new(rom).map(|b| Box::new(b) as Box<dyn Board>)
         }
         // TODO(T-PS-011): 0x3000  E7 (M-network, Curated).
-        // TODO(T-PS-012): 0x4000  F6 (16 KiB, Curated).
-        // TODO(T-PS-013): 0x8000  F4 (32 KiB, Curated).
+        0x4000 => BankF6::new(rom).map(|b| Box::new(b) as Box<dyn Board>),
+        0x8000 => BankF4::new(rom).map(|b| Box::new(b) as Box<dyn Board>),
         // TODO(T-PS-014): Superchip variants F8SC/F6SC/F4SC (+128 B RAM, Curated).
         // TODO(T-PS-015): 3F (Tigervision) / 3E (Boulder Dash) / 3E+ (BestEffort).
         // TODO(T-PS-016): DPC (Pitfall II, Curated) / DPC+ (BestEffort) via tick_coprocessor.
@@ -283,5 +365,34 @@ mod tests {
         assert!(Tier::Core.is_accuracy_gated());
         assert!(Tier::Curated.is_accuracy_gated());
         assert!(!Tier::BestEffort.is_accuracy_gated());
+    }
+    #[test]
+    fn bankf6_hotspots() {
+        let mut img = [0u8; 0x4000];
+        img[0x0FFF] = 0xAA;
+        img[0x1FFF] = 0xBB;
+        img[0x2FFF] = 0xCC;
+        img[0x3FFF] = 0xDD;
+        let mut board = BankF6::new(&img).unwrap();
+        // default bank is 3
+        assert_eq!(board.cpu_read(0x1FFF), 0xDD);
+        board.cpu_read(0x1FF6);
+        assert_eq!(board.cpu_read(0x1FFF), 0xAA);
+        board.cpu_read(0x1FF7);
+        assert_eq!(board.cpu_read(0x1FFF), 0xBB);
+        assert_eq!(board.tier(), Tier::Curated);
+    }
+
+    #[test]
+    fn bankf4_hotspots() {
+        let mut img = [0u8; 0x8000];
+        img[0x0FFF] = 0xAA;
+        img[0x7FFF] = 0xBB;
+        let mut board = BankF4::new(&img).unwrap();
+        // default bank is 7
+        assert_eq!(board.cpu_read(0x1FFF), 0xBB);
+        board.cpu_read(0x1FF4);
+        assert_eq!(board.cpu_read(0x1FFF), 0xAA);
+        assert_eq!(board.tier(), Tier::Curated);
     }
 }

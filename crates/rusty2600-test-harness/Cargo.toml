@@ -16,6 +16,7 @@ rusty2600-core = { path = "../rusty2600-core", version = "0.1.0" }
 
 [dev-dependencies]
 insta = "1"
+rusty2600-cpu = { path = "../rusty2600-cpu" }
 
 [lints]
 workspace = true

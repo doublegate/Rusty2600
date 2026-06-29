@@ -223,7 +223,7 @@ impl App {
             let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
             // Synchronous drive (the `emu-thread` feature is off by default): step exactly one
             // frame here, then copy out.
-            emu.run_frame();
+            emu.run_frame(Some(active.host_input));
             let dims = emu.fb_dims();
             let fb = emu.framebuffer().to_vec();
             let info = ShellInfo {

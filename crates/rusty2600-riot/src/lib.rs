@@ -1,23 +1,4 @@
 //! `rusty2600-riot` — the MOS 6532 RIOT (RAM-I/O-Timer).
-//!
-//! The 6532 supplies three things the VCS needs outside the TIA:
-//!
-//! - **128 bytes of RAM** — the console's *only* general RAM (there is no
-//!   separate WRAM; the CPU stack overlaps this 128-byte region).
-//! - **Two 8-bit I/O ports** — `SWCHA` (the two joystick directions) and
-//!   `SWCHB` (the console switches: select, reset, difficulty, colour/B-W),
-//!   each with a data-direction register.
-//! - **An interval timer** — write `TIM1T` / `TIM8T` / `TIM64T` / `T1024T` to
-//!   load the counter at a 1 / 8 / 64 / 1024 CPU-cycle prescale; read `INTIM`
-//!   for the current value and `INSTAT` for the timer flags.
-//!
-//! **Audio is NOT here** — the VCS's two sound channels live in the TIA
-//! (`rusty2600-tia::audio`). The 6532 has no sound hardware.
-//!
-//! Part of the one-directional chip-crate graph (see `docs/architecture.md`):
-//! this crate is independent — no video / audio / cart dependency. It is
-//! `no_std` plus `alloc` for bare-metal cross-compile; only the frontend
-//! carries `std` and `unsafe`.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -26,75 +7,148 @@ extern crate alloc;
 /// The interval-timer prescale (CPU cycles per timer decrement).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Prescale {
-    /// `TIM1T` — decrement every CPU cycle.
+    /// Divide by 1
     By1 = 1,
-    /// `TIM8T` — every 8 cycles.
+    /// Divide by 8
     By8 = 8,
-    /// `TIM64T` — every 64 cycles.
+    /// Divide by 64
     By64 = 64,
-    /// `T1024T` — every 1024 cycles (the power-on default).
+    /// Divide by 1024
     #[default]
     By1024 = 1024,
 }
 
-/// The 6532 interval timer.
+/// The RIOT interval timer.
 #[derive(Debug, Default, Clone)]
 pub struct Timer {
-    /// `INTIM` — the current counter value.
+    /// The current timer value.
     pub value: u8,
-    /// The active prescale.
+    /// The current prescale.
     pub prescale: Prescale,
-    /// Cycles accumulated toward the next decrement.
     elapsed: u16,
-    // TODO(T-PS-041): INSTAT underflow flag + the post-underflow 1-cycle mode.
+    underflow: bool,
+    post_underflow: bool,
 }
 
-/// MOS 6532 RIOT state.
-///
-/// Holds the RAM, the two I/O ports + their direction regs, and the interval
-/// timer. Stub: fields are real, the access decode is a `// TODO`. Pin against
-/// the test ROMs FIRST (test-ROM-is-spec), then implement until they pass.
+/// The MOS 6532 RIOT chip.
 #[derive(Debug, Clone)]
 pub struct Riot {
-    /// 128 bytes of RAM — the console's only general RAM (stack overlaps it).
+    /// 128 bytes of RAM.
     pub ram: [u8; 128],
-    /// `SWCHA` (joystick directions) / `SWCHB` (console switches) port latches.
+    /// I/O ports.
     pub ports: [u8; 2],
-    /// Data-direction registers for the two ports (`SWACNT` / `SWBCNT`).
+    /// Data Direction Registers.
     pub ddr: [u8; 2],
     /// The interval timer.
     pub timer: Timer,
+    /// External pins state
+    pub pins: [u8; 2], 
 }
 
 impl Default for Riot {
     fn default() -> Self {
         Self {
             ram: [0; 128],
-            ports: [0xFF; 2], // pulled-up inputs read high when nothing is pressed.
+            ports: [0xFF; 2],
             ddr: [0; 2],
             timer: Timer::default(),
+            pins: [0xFF; 2],
         }
     }
 }
 
 impl Riot {
-    /// Construct at power-on. RAM power-on contents are randomized from a
-    /// *seeded* PRNG by the owning `System` (determinism contract — see
-    /// `docs/adr/0004`), never the OS RNG; this bare constructor zero-inits RAM.
+    /// Creates a new RIOT.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Advance the interval timer by one CPU cycle. Hot path: allocation-free.
-    // Not `const`: this stub will gain real prescale/underflow branching, so
-    // marking it const now would have to be reverted (clippy::missing_const_for_fn
-    // can't see the planned mutation).
-    #[allow(clippy::missing_const_for_fn)]
+    /// Advance the RIOT by one CPU cycle.
     pub fn tick(&mut self) {
-        // TODO(T-PS-040): prescale the timer, decrement `INTIM`, set the
-        // INSTAT underflow flag, and switch to the post-underflow 1-cycle mode.
         self.timer.elapsed = self.timer.elapsed.wrapping_add(1);
+        
+        let target = if self.timer.post_underflow { 1 } else { self.timer.prescale as u16 };
+        
+        if self.timer.elapsed >= target {
+            self.timer.elapsed = 0;
+            
+            if self.timer.value == 0 {
+                self.timer.value = 0xFF;
+                self.timer.underflow = true;
+                self.timer.post_underflow = true;
+            } else {
+                self.timer.value = self.timer.value.wrapping_sub(1);
+            }
+        }
+    }
+    
+    /// CPU reads from the RIOT.
+    pub fn cpu_read(&mut self, addr: u16) -> u8 {
+        if addr & 0x0200 == 0 {
+            // A9 = 0 -> RAM
+            self.ram[(addr & 0x7F) as usize]
+        } else {
+            // A9 = 1 -> I/O & Timer
+            if addr & 0x04 == 0 {
+                // A2 = 0 -> I/O ports
+                match addr & 0x03 {
+                    0 => (self.ports[0] & self.ddr[0]) | (self.pins[0] & !self.ddr[0]),
+                    1 => self.ddr[0],
+                    2 => (self.ports[1] & self.ddr[1]) | (self.pins[1] & !self.ddr[1]),
+                    3 => self.ddr[1],
+                    _ => unreachable!(),
+                }
+            } else {
+                // A2 = 1 -> Timer
+                if addr & 0x01 == 0 {
+                    // A0 = 0 -> INTIM (Read Timer)
+                    self.timer.underflow = false; // Reading INTIM clears timer interrupt flag
+                    self.timer.value
+                } else {
+                    // A0 = 1 -> INSTAT (Read Timer Status)
+                    if self.timer.underflow { 0xC0 } else { 0x00 }
+                }
+            }
+        }
+    }
+    
+    /// CPU writes to the RIOT.
+    pub fn cpu_write(&mut self, addr: u16, val: u8) {
+        if addr & 0x0200 == 0 {
+            // A9 = 0 -> RAM
+            self.ram[(addr & 0x7F) as usize] = val;
+        } else {
+            // A9 = 1 -> I/O & Timer
+            if addr & 0x04 == 0 {
+                // A2 = 0 -> I/O ports
+                match addr & 0x03 {
+                    0 => self.ports[0] = val,
+                    1 => self.ddr[0] = val,
+                    2 => self.ports[1] = val,
+                    3 => self.ddr[1] = val,
+                    _ => unreachable!(),
+                }
+            } else {
+                // A2 = 1 -> Timer Write
+                let prescale = match addr & 0x03 {
+                    0 => Prescale::By1,
+                    1 => Prescale::By8,
+                    2 => Prescale::By64,
+                    3 => Prescale::By1024,
+                    _ => unreachable!(),
+                };
+                self.set_timer(val, prescale);
+            }
+        }
+    }
+    
+    fn set_timer(&mut self, val: u8, prescale: Prescale) {
+        self.timer.value = val;
+        self.timer.prescale = prescale;
+        self.timer.elapsed = 0;
+        self.timer.underflow = false;
+        self.timer.post_underflow = false; // Exits 1T mode
     }
 }
 
@@ -106,7 +160,66 @@ mod tests {
     fn constructs() {
         let riot = Riot::new();
         assert_eq!(riot.ram.len(), 128);
-        // Idle inputs float high.
         assert_eq!(riot.ports[0], 0xFF);
+        assert_eq!(riot.pins[0], 0xFF);
+    }
+    
+    #[test]
+    fn ram_mirroring() {
+        let mut riot = Riot::new();
+        riot.cpu_write(0x0080, 42); // RAM start
+        assert_eq!(riot.cpu_read(0x0080), 42);
+        assert_eq!(riot.cpu_read(0x0180), 42); // Mirrored
+        assert_eq!(riot.cpu_read(0x00FF), 0);  // Unrelated RAM end
+    }
+
+    #[test]
+    fn io_ports_with_ddr() {
+        let mut riot = Riot::new();
+        riot.pins[0] = 0b1010_1010; // External input
+        riot.ddr[0] = 0b1111_0000;  // High nibble output, low nibble input
+        riot.ports[0] = 0b1100_1100; // Output register
+        
+        // Read should combine output and input based on DDR
+        assert_eq!(riot.cpu_read(0x0280), 0b1100_1010);
+    }
+
+    #[test]
+    fn timer_ticks_and_underflows() {
+        let mut riot = Riot::new();
+        riot.cpu_write(0x294, 2); // TIM1T = 2 (A2=1, prescale By1)
+        
+        riot.tick(); // elapsed 1, val 1
+        assert_eq!(riot.cpu_read(0x284), 1);
+        riot.tick(); // elapsed 1, val 0
+        assert_eq!(riot.cpu_read(0x284), 0);
+        riot.tick(); // elapsed 1, underflow to FF
+        assert_eq!(riot.cpu_read(0x284), 0xFF);
+    }
+    
+    #[test]
+    fn timer_instat_and_post_underflow() {
+        let mut riot = Riot::new();
+        riot.cpu_write(0x295, 0); // TIM8T = 0
+        
+        for _ in 0..7 {
+            riot.tick();
+            // Should hold at 0 for one interval duration
+            assert_eq!(riot.cpu_read(0x284), 0);
+        }
+        riot.tick(); // tick 8: underflows
+        
+        // Check INSTAT without clearing the flag
+        assert_eq!(riot.cpu_read(0x285) & 0xC0, 0xC0);
+        
+        // Read INTIM to clear flag
+        assert_eq!(riot.cpu_read(0x284), 0xFF);
+        
+        // INSTAT should now be 0
+        assert_eq!(riot.cpu_read(0x285) & 0xC0, 0x00);
+        
+        // Next tick should decrement by 1 because it's in post-underflow (1T mode)
+        riot.tick();
+        assert_eq!(riot.cpu_read(0x284), 0xFE);
     }
 }

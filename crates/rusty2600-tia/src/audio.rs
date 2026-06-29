@@ -12,10 +12,10 @@
 //! A faithful model is a pair of linear-feedback shift registers (the poly
 //! counters) gated by the divider, summed and scaled — `RustyNES`'s non-linear
 //! NES mixer has no analogue here; the 2600 mix is a simple linear sum of the
-//! two 4-bit volumes. Stub now; pin against audio test ROMs later.
+//! two 4-bit volumes.
 
 /// One TIA audio channel's register state + poly-counter phase.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct Channel {
     /// `AUDCx` — 4-bit waveform / poly-counter control.
     pub control: u8,
@@ -27,22 +27,109 @@ pub struct Channel {
     divider: u8,
     /// Current poly-counter / waveform output bit (0 or 1).
     output: u8,
-    // TODO(T-PS-030): the 4-bit + 5-bit + 9-bit LFSR poly-counter state.
+    /// 4-bit polynomial LFSR.
+    poly4: u8,
+    /// 5-bit polynomial LFSR.
+    poly5: u8,
+    /// Prescaler tracking the 114 (or 342 for CPU/114) color clocks per audio clock.
+    prescale: u16,
+}
+
+impl Default for Channel {
+    fn default() -> Self {
+        Self {
+            control: 0,
+            freq: 0,
+            volume: 0,
+            divider: 0,
+            output: 1,
+            poly4: 1, // Must be non-zero to avoid LFSR lockup
+            poly5: 1, // Must be non-zero to avoid LFSR lockup
+            prescale: 0,
+        }
+    }
 }
 
 impl Channel {
-    /// Advance one audio clock (the horizontal-line rate). Returns the channel's
+    /// Advance one TIA color clock. Returns the channel's
     /// current sample contribution (`0..=15`, i.e. `output * volume`).
-    // Not `const`: the stub holds output steady; the real poly-counter clocking
-    // mutates LFSR state, so const-ness would have to be reverted.
     #[allow(clippy::missing_const_for_fn)]
     fn tick(&mut self) -> u8 {
-        // TODO(T-PS-031): clock the divider, advance the poly counter selected
-        // by `control`, and update `output`. This stub holds output steady.
-        if self.divider == 0 {
-            self.divider = self.freq;
-        } else {
-            self.divider -= 1;
+        let audc = self.control & 0x0F;
+        // Modes 12-15 use CPU/114 which is color/342 (3 times slower than color/114)
+        let limit = if audc >= 12 { 342 } else { 114 };
+
+        self.prescale += 1;
+        if self.prescale >= limit {
+            self.prescale = 0;
+
+            if self.divider == 0 {
+                self.divider = self.freq;
+                
+                // Feedback calculations
+                let in5 = ((self.poly5 >> 4) ^ (self.poly5 >> 3)) & 1;
+                let in4 = ((self.poly4 >> 3) ^ (self.poly4 >> 2)) & 1;
+
+                match audc {
+                    0 | 11 => {
+                        // Set output to 1 (volume only / digital sample mode)
+                        self.output = 1;
+                    }
+                    1 => {
+                        // 4-bit poly
+                        self.poly4 = ((self.poly4 << 1) | in4) & 0x0F;
+                        self.output = self.poly4 & 1;
+                    }
+                    2 => {
+                        // 4-bit poly clocked by div-15 (465-bit composite)
+                        self.poly5 = ((self.poly5 << 1) | in5) & 0x1F;
+                        if (self.poly5 & 1) == 1 {
+                            self.poly4 = ((self.poly4 << 1) | in4) & 0x0F;
+                        }
+                        self.output = self.poly4 & 1;
+                    }
+                    3 => {
+                        // 5-bit poly -> 4-bit poly composite
+                        self.poly5 = ((self.poly5 << 1) | in5) & 0x1F;
+                        // Clock poly4 normally but use poly5 output in feedback
+                        let composite_in4 = in4 ^ (self.poly5 & 1);
+                        self.poly4 = ((self.poly4 << 1) | composite_in4) & 0x0F;
+                        self.output = self.poly4 & 1;
+                    }
+                    4 | 5 | 12 | 13 => {
+                        // Pure tone, divide-by-2
+                        self.output ^= 1;
+                    }
+                    6 | 10 | 14 => {
+                        // Divide-by-31 pure tone
+                        self.poly5 = ((self.poly5 << 1) | in5) & 0x1F;
+                        self.output = self.poly5 & 1;
+                    }
+                    7 | 15 => {
+                        // 5-bit poly -> divide-by-31
+                        self.poly5 = ((self.poly5 << 1) | in5) & 0x1F;
+                        if (self.poly5 & 1) == 1 {
+                            self.output ^= 1;
+                        }
+                    }
+                    8 => {
+                        // 9-bit poly (white noise)
+                        let in9 = ((self.poly5 >> 4) ^ (self.poly4 >> 3)) & 1;
+                        self.poly5 = ((self.poly5 << 1) | in9) & 0x1F;
+                        // Poly4 clocks from poly5's output
+                        self.poly4 = ((self.poly4 << 1) | (self.poly5 & 1)) & 0x0F;
+                        self.output = self.poly4 & 1;
+                    }
+                    9 => {
+                        // 5-bit poly
+                        self.poly5 = ((self.poly5 << 1) | in5) & 0x1F;
+                        self.output = self.poly5 & 1;
+                    }
+                    _ => {}
+                }
+            } else {
+                self.divider -= 1;
+            }
         }
         self.output * self.volume
     }
@@ -65,7 +152,7 @@ impl Audio {
         Self::default()
     }
 
-    /// Advance both channels one audio clock and mix. Linear sum — no non-linear
+    /// Advance both channels one color clock and mix. Linear sum — no non-linear
     /// lookup table (that is an NES-ism with no 2600 analogue).
     pub fn tick(&mut self) {
         let a = self.channels[0].tick();

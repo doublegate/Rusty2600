@@ -14,7 +14,7 @@
 //! battery is wired to exercise, and the gate keeps the pass-rate truthful.
 
 use rusty2600_core::Tier;
-use rusty2600_core::cart::{BankF8, Board, Rom2K, Rom4K};
+use rusty2600_core::cart::{BankF8, BankF6, BankF4, Board, Rom2K, Rom4K};
 
 /// Build each board the accuracy battery currently covers, paired with a label
 /// for the failure message. These are exactly the boards whose ROMs may appear
@@ -32,6 +32,14 @@ fn oracle_boards() -> Vec<(&'static str, Box<dyn Board>)> {
         (
             "BankF8",
             Box::new(BankF8::new(&[0u8; 0x2000]).unwrap()) as Box<dyn Board>,
+        ),
+        (
+            "BankF6",
+            Box::new(BankF6::new(&[0u8; 0x4000]).unwrap()) as Box<dyn Board>,
+        ),
+        (
+            "BankF4",
+            Box::new(BankF4::new(&[0u8; 0x8000]).unwrap()) as Box<dyn Board>,
         ),
     ]
 }
