@@ -1,0 +1,112 @@
+[package]
+name = "rusty2600-frontend"
+description = "Rusty2600: cross-platform Atari 2600 / VCS emulator binary (winit + wgpu + cpal + egui)"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords = ["atari", "2600", "vcs", "emulator", "wgpu"]
+categories = ["emulators", "games"]
+
+[lib]
+name = "rusty2600_frontend"
+path = "src/lib.rs"
+# `cdylib` produces the `.wasm` artifact that wasm-bindgen + trunk consume to
+# ship the browser frontend; `rlib` keeps the normal crate-graph integration so
+# the `[[bin]]` below depends on the lib without duplicating sources.
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "rusty2600"
+path = "src/main.rs"
+
+[features]
+# Two wasm32 frontends; exactly one is compiled (each provides a unique
+# `#[wasm_bindgen(start)]`). `wasm-winit` (default) is the full winit + wgpu +
+# egui experience; `wasm-canvas` is a lightweight canvas-2D embed. `help-tui`
+# adds the ratatui terminal help browser (native-only).
+#
+# NOTE: `emu-thread` is OFF in the v0.1 default because it requires `EmuCore:
+# Send`, which needs `rusty2600-cart`'s `Board` trait to be `Send`. Until that
+# one-word change lands (T-PS-063), the synchronous in-`render` drive (the
+# `not(feature = "emu-thread")` path in `app.rs`) is the default. Flip
+# `Board: Send` + re-add `emu-thread` here to enable the dedicated emu thread.
+default = ["wasm-winit", "help-tui"]
+wasm-winit = []
+wasm-canvas = []
+emu-thread = []
+help-tui = ["dep:ratatui"]
+
+# Off-by-default forward placeholders, mirroring the RustyNES feature surface so
+# the chip-implementation phase can switch them on without restructuring the
+# manifest. They wire no extra code yet (the panels/hooks are TODO stubs).
+# Forwards to the core's run-loop telemetry hooks (breakpoint/trace/event) for
+# the debugger panels. The hooks are determinism-neutral no-ops until armed.
+debug-hooks = []
+# Output-only TIA tile-source export for an HD-pack / texture-replacement loader.
+hd-pack = []
+# RetroAchievements integration (native-only). Off by default so the shipped
+# build links no extra C and the wasm builds never see it.
+retroachievements = []
+
+[dependencies]
+rusty2600-core = { path = "../rusty2600-core", version = "0.1.0" }
+
+# === The always-on egui shell stack ==========================================
+# v0.1 scaffold note: these are intentionally pinned to the exact versions the
+# RustyNES / RustySNES frontends resolve, so a later lift-and-adapt of a sibling
+# module drops in without a version fight. See `references/frontend_reuse.md`.
+winit = "0.30"
+wgpu = { version = "29", features = ["webgl"] }
+cpal = "0.18"
+egui = "0.34"
+egui-wgpu = "0.34"
+egui-winit = { version = "0.34", default-features = false, features = ["links", "wayland", "x11"] }
+thiserror = "2.0"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+toml = "1.1"
+
+# Already transitive deps of wgpu; direct here is free.
+pollster = "0.4"
+bytemuck = "1"
+web-time = "1.1"
+
+# Native-only deps (gilrs / rfd / directories / clap / ratatui). A browser tab
+# has no gamepad-via-gilrs, no rfd dialog, no terminal — the wasm builds never
+# see these (the modules are `cfg(not(target_arch = "wasm32"))`-gated).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+gilrs = "0.11"
+rfd = "0.17"
+directories = "5"
+# clap 4 styled `--help` + `help <topic>` + shell completions (unconditional);
+# the interactive ratatui TUI browser is behind the default-on `help-tui` feature.
+clap = { version = "4", features = ["derive", "color", "cargo"] }
+clap_complete = "4"
+anstyle = "1"
+ratatui = { version = "0.30", optional = true }
+
+# wasm32 target deps. The chip stack is `no_std + alloc`, so the browser build
+# only needs the wasm-bindgen + web-sys bridge here.
+# GOTCHA: the wasm-bindgen CLI pin in web/Trunk.toml MUST equal the resolved
+# wasm-bindgen LIBRARY version in Cargo.lock (grep -A1 'name = "wasm-bindgen"').
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.100"
+wasm-bindgen-futures = "0.4.50"
+console_error_panic_hook = "0.1.7"
+js-sys = "0.3.77"
+web-sys = { version = "0.3.77", features = [
+    "Document", "Window", "Element", "HtmlElement", "HtmlCanvasElement",
+    "Event", "EventTarget", "KeyboardEvent",
+    "CanvasRenderingContext2d", "ImageData", "Storage",
+] }
+
+[dev-dependencies]
+# Validate the embedded WGSL at test time with the same naga wgpu uses at run
+# time, so a shader error fails CI instead of aborting the app.
+naga = { version = "29", features = ["wgsl-in"] }
+
+[lints]
+workspace = true
