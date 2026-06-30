@@ -1,4 +1,5 @@
 //! Lock-free SPSC audio ring buffer.
+#![allow(missing_docs)]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};

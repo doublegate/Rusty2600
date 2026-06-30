@@ -140,7 +140,15 @@ impl Tia {
 
     pub fn write_register(&mut self, reg: u8, val: u8) {
         match reg {
-            regs::VSYNC => self.objects.vsync = val,
+            regs::VSYNC => {
+                let old_vsync = self.objects.vsync;
+                self.objects.vsync = val;
+                // Reset scanline counter when VSYNC ends (1 -> 0 transition).
+                // This correctly synchronizes the emulator's frame with the game's display generation.
+                if (old_vsync & 0x02 != 0) && (val & 0x02 == 0) {
+                    self.scanline = 0;
+                }
+            }
             regs::VBLANK => self.objects.vblank = val,
             regs::WSYNC => self.rdy_stall = true,
             regs::RSYNC => self.color_clock = 0,

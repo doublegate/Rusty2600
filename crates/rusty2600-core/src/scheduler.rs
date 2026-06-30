@@ -68,6 +68,12 @@ impl System {
         }
     }
 
+    /// Resets the CPU using the currently installed cartridge/bus.
+    pub fn reset(&mut self) {
+        let mut view = CpuView(&mut self.bus);
+        self.cpu.reset(&mut view);
+    }
+
     /// Advance exactly one TIA color clock, stepping the CPU on every third one
     /// — unless the TIA is holding `RDY` (the `WSYNC` beam-stall), in which case
     /// the CPU stays frozen while the color clock keeps running. The RIOT timer

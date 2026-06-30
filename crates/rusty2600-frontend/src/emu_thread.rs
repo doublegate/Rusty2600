@@ -55,6 +55,9 @@ pub struct EmuCore {
     /// Snapshots of the system state, stored before each frame is executed.
     /// Used for rewind/run-ahead. Maintains ~600 frames (10 seconds) of history.
     pub snapshots: std::collections::VecDeque<System>,
+    /// State for the high-pass DC blocker.
+    dc_blocker_x: f32,
+    dc_blocker_y: f32,
 }
 
 impl EmuCore {
@@ -71,6 +74,8 @@ impl EmuCore {
             board_tier: None,
             audio_tx: None,
             snapshots: std::collections::VecDeque::with_capacity(600),
+            dc_blocker_x: 0.0,
+            dc_blocker_y: 0.0,
         }
     }
 
@@ -90,6 +95,7 @@ impl EmuCore {
         // cart accesses to it).
         let mut system = System::new(0);
         system.bus.board = Some(board);
+        system.reset();
         self.system = system;
         self.snapshots.clear();
         self.rom_loaded = true;
@@ -156,9 +162,18 @@ impl EmuCore {
             self.snapshots.pop_front();
         }
 
-        let clocks = u64::from(self.region.lines_per_frame()) * 228;
-        for _ in 0..clocks {
+        let vblank_lines = match self.region {
+            crate::palette::Region::Ntsc => 37,
+            _ => 42, // PAL/SECAM standard vblank
+        };
+        let active_h = self.region.active_height() as u16;
+
+        let mut old_vsync = self.system.bus.tia.objects.vsync;
+        let mut clocks = 0;
+
+        loop {
             self.system.tick_one_color_clock();
+            clocks += 1;
 
             let cc = self.system.bus.tia.color_clock;
             let sl = self.system.bus.tia.scanline;
@@ -170,18 +185,24 @@ impl EmuCore {
                 // Map [0, 30] to [-1.0, 1.0]
                 let normalized = (s as f32 / 15.0) - 1.0;
 
+                // DC blocker (1-pole high-pass filter) to remove the massive -1.0 DC offset
+                let r = 0.995;
+                let y = normalized - self.dc_blocker_x + r * self.dc_blocker_y;
+                self.dc_blocker_x = normalized;
+                self.dc_blocker_y = y;
+
                 // Collect samples into a small buffer, flush periodically.
                 // For simplicity here, we push them one by one.
                 // Realistically we'd batch, but `push_samples` takes a slice.
                 if let Some(tx) = &mut self.audio_tx {
-                    tx.push_samples(&[normalized]);
+                    tx.push_samples(&[y]);
                 }
             }
 
             // Output visible dots (68..=227). Only render active scanlines.
-            if cc >= 68 && sl < self.region.active_height() as u16 {
+            if cc >= 68 && sl >= vblank_lines && sl < vblank_lines + active_h {
                 let x = (cc - 68) as usize;
-                let y = sl as usize;
+                let y = (sl - vblank_lines) as usize;
                 let color_idx = self.system.bus.tia.current_color;
                 let rgb = self.region.lookup(color_idx >> 1);
 
@@ -193,9 +214,19 @@ impl EmuCore {
                     self.framebuffer[off + 3] = 255;
                 }
             }
+
+            let vsync = self.system.bus.tia.objects.vsync;
+            // Frame boundary: when VSYNC transitions from 1 -> 0.
+            if (old_vsync & 0x02 != 0) && (vsync & 0x02 == 0) {
+                break;
+            }
+            old_vsync = vsync;
+
+            // Safety timeout in case a game hangs and stops asserting VSYNC.
+            if clocks > 1_000_000 {
+                break;
+            }
         }
-        // Reset scanline counter per frame
-        self.system.bus.tia.scanline = 0;
     }
 
     /// Produce exactly one frame's worth of color clocks, accumulating beam dots into
@@ -223,9 +254,18 @@ impl EmuCore {
             self.region.active_height() as usize,
         );
 
-        let clocks = u64::from(self.region.lines_per_frame()) * 228;
-        for _ in 0..clocks {
+        let vblank_lines = match self.region {
+            crate::palette::Region::Ntsc => 37,
+            _ => 42, // PAL/SECAM standard vblank
+        };
+        let active_h = self.region.active_height() as u16;
+
+        let mut old_vsync = self.system.bus.tia.objects.vsync;
+        let mut clocks = 0;
+
+        loop {
             self.system.tick_one_color_clock();
+            clocks += 1;
 
             let cc = self.system.bus.tia.color_clock;
             let sl = self.system.bus.tia.scanline;
@@ -235,23 +275,40 @@ impl EmuCore {
                 use rusty2600_core::AudioBus;
                 let s = self.system.bus.audio_sample();
                 let normalized = (s as f32 / 15.0) - 1.0;
+                
+                // DC blocker (1-pole high-pass filter) to remove the massive -1.0 DC offset
+                // when TIA outputs silence (s = 0), preventing audio hums or clicks.
+                let r = 0.995;
+                let y = normalized - self.dc_blocker_x + r * self.dc_blocker_y;
+                self.dc_blocker_x = normalized;
+                self.dc_blocker_y = y;
+
                 if let Some(tx) = &mut self.audio_tx {
-                    tx.push_samples(&[normalized]);
+                    tx.push_samples(&[y]);
                 }
             }
 
             // Output visible dots (68..=227). Only render active scanlines.
-            if cc >= 68 && sl < self.region.active_height() as u16 {
+            if cc >= 68 && sl >= vblank_lines && sl < vblank_lines + active_h {
                 let x = (cc - 68) as usize;
-                let y = sl as usize;
+                let y = (sl - vblank_lines) as usize;
                 let color_idx = self.system.bus.tia.current_color;
                 let rgb = self.region.lookup(color_idx >> 1);
                 frame.put_dot(x, y, rgb);
             }
-        }
 
-        // Reset scanline counter per frame
-        self.system.bus.tia.scanline = 0;
+            let vsync = self.system.bus.tia.objects.vsync;
+            // Frame boundary: when VSYNC transitions from 1 -> 0.
+            if (old_vsync & 0x02 != 0) && (vsync & 0x02 == 0) {
+                break;
+            }
+            old_vsync = vsync;
+
+            // Safety timeout in case a game hangs and stops asserting VSYNC.
+            if clocks > 1_000_000 {
+                break;
+            }
+        }
 
         // Publish the produced frame
         frames.publish(frame);

@@ -50,6 +50,7 @@ struct Active {
     /// Whether the window is currently fullscreen (toggled from the View menu).
     fullscreen: bool,
     /// The running audio output stream (keeps the cpal device alive).
+    #[allow(dead_code)]
     audio_out: Option<crate::audio::AudioOutput>,
 
     #[cfg(feature = "emu-thread")]
@@ -183,9 +184,23 @@ impl ApplicationHandler for App {
                     loop {
                         let mut lock = thread_core.lock().unwrap();
                         let input = thread_input.load();
-                        lock.step_frame(&frame_tx, Some(input));
-                        drop(lock);
-                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        let paused = lock.paused || !lock.rom_loaded;
+
+                        // Pace the emulator using the audio ring buffer fill ratio.
+                        // If it's over 60% full, sleep to let the audio consumer drain it.
+                        let fill = if !paused {
+                            lock.audio_tx.as_ref().map_or(0.0, |tx| tx.queue.fill_ratio())
+                        } else {
+                            0.0
+                        };
+
+                        if !paused && fill < 0.6 {
+                            lock.step_frame(&frame_tx, Some(input));
+                            drop(lock);
+                        } else {
+                            drop(lock);
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        }
                     }
                 })
                 .expect("failed to spawn emu thread");
