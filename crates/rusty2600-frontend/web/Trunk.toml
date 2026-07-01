@@ -4,6 +4,11 @@
 # build` / the Pages deploy but wasm clippy still passes. Bump on every resolve that moves it.
 [build]
 target = "index.html"
+# GH Pages serves this repo at https://doublegate.github.io/Rusty2600/, not
+# the domain root, so every asset path Trunk emits must be prefixed to match
+# (the dist/index.html previously committed here used bare "/..." paths,
+# which 404 under a subpath — this is what the Pages deploy actually needs).
+public_url = "/Rusty2600/"
 
 [tools]
 wasm_bindgen = "0.2.126"   # <-- keep == Cargo.lock

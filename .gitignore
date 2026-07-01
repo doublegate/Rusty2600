@@ -28,7 +28,11 @@ Cargo.lock.bak
 /ref-proj/
 /tests/captures/
 /perf-logs/
-/web/dist/
+# The wasm frontend's Trunk project lives at crates/rusty2600-frontend/web/
+# (not a repo-root web/), so this must NOT be root-anchored (the previous
+# `/web/dist/` pattern never actually matched anything — there is no
+# repo-root web/ dir — and this local build output was untracked by luck).
+**/web/dist/
 
 # Test ROMs and Golden Logs (commercial ROMs are never committed; the CC0/MIT
 # SingleStepTests/Klaus corpora ARE committed and live under tests/cpu-timing/

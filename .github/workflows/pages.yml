@@ -10,7 +10,38 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - name: Install Linux system dependencies
+        # cpal (audio) needs ALSA; both the wasm demo build (its dependency
+        # graph still resolves/builds native crates for host tools) and the
+        # rustdoc build below need these, same as ci.yml's `test` job.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev \
+            libxkbcommon-dev libwayland-dev \
+            libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev
+      - uses: dtolnay/rust-toolchain@1.96
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@trunk
       # Build the wasm demo (trunk) at / and the rustdoc at /api/, then deploy ONE artifact.
-      # GOTCHA: keep web/Trunk.toml's wasm-bindgen pin == Cargo.lock library version.
+      # GOTCHA: keep crates/rusty2600-frontend/web/Trunk.toml's wasm-bindgen pin == Cargo.lock
+      # library version (grep -A1 'name = "wasm-bindgen"' Cargo.lock).
+      - name: Build wasm demo
+        working-directory: crates/rusty2600-frontend/web
+        run: trunk build --release
+      - name: Build rustdoc
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+      - name: Assemble Pages artifact
+        run: |
+          mkdir -p pages-artifact/api
+          cp -r crates/rusty2600-frontend/web/dist/. pages-artifact/
+          cp -r target/doc/. pages-artifact/api/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages-artifact
+      - uses: actions/deploy-pages@v4
+        id: deployment

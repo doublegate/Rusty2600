@@ -52,9 +52,16 @@ bit-identically — the basis for rewind, run-ahead, and (later) netplay rollbac
 
 ## wasm
 
-A `winit` + `wgpu` build targets the browser (Javatari is the portable/wasm
-reference for a 2600 web core). wasm parity and the canvas embed are Phase 5 /
-Phase 8 work; the core's `no_std` + `alloc` chip stack already cross-compiles.
+`wasm-winit` (default feature) and `wasm-canvas` (lightweight embed) both
+build for `wasm32-unknown-unknown`. The Trunk project lives at
+`crates/rusty2600-frontend/web/` (not a repo-root `web/`) — `trunk build
+--release` from that directory produces `dist/`, which `.github/workflows/
+pages.yml` deploys to GitHub Pages (demo at `/`, rustdoc at `/api/`) on every
+push to `main`. `web/Trunk.toml` pins `public_url = "/Rusty2600/"` to match
+where Pages actually serves this repo, and pins the `wasm_bindgen` CLI
+version to match Cargo.lock's resolved library version (a mismatch fails the
+build). The core's `no_std` + `alloc` chip stack cross-compiles independent
+of any of this.
 
 
 ---
