@@ -13,11 +13,12 @@ the timebase, the 6507 runs on every third clock, `WSYNC`/`RDY` beam-stalls the 
 owns everything mutable, a one-directional `no_std + alloc` chip-crate graph, a hard determinism
 contract, and test-ROM-is-spec. The frontend is pure Rust (`winit` + `wgpu` + `cpal` + `egui`).
 
-> **Status: v0.7.0 "Cheevos" — real chip cores, full Curated tier + broad BestEffort coverage,
-> real debugger, real RetroAchievements backend.** The 6507 (documented + undocumented opcodes),
-> the TIA (beam-raced video + two-channel audio), and the RIOT are implemented and tested —
-> cycle-exact against a trimmed SingleStepTests corpus (4,660 cases, 233 opcodes, 100% passing)
-> and 142 tests passing workspace-wide (144 with `--features test-roms`). All 8 Curated-tier
+> **Status: v0.8.0 "Battery" — real chip cores, full Curated tier + broad BestEffort coverage,
+> real debugger, real RetroAchievements backend, a real accuracy battery.** The 6507 (documented +
+> undocumented opcodes), the TIA (beam-raced video + two-channel audio), and the RIOT are
+> implemented and tested — cycle-exact against a trimmed SingleStepTests corpus (4,660 cases, 233
+> opcodes, 100% passing) and 150 tests passing workspace-wide (153 with `--features test-roms`,
+> including a real `AccuracyScore`-gated accuracy battery at 2/2, 100%). All 8 Curated-tier
 > bankswitch schemes plus 12 BestEffort schemes are implemented and wired into automatic detection
 > (2K/4K/F8/F6/F4/CV/FA/Superchip/DPC/E7/F0/E0/3F/3E/EF/DF/BF/UA/0840/FE/SB/X07 — 22 of 25
 > catalogued schemes). Only 4A50, AR/Supercharger, and the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family

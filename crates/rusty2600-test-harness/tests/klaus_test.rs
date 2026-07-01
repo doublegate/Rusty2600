@@ -7,6 +7,7 @@
 #![cfg(feature = "test-roms")]
 #![allow(warnings)]
 use rusty2600_cpu::{Cpu, CpuBus};
+use rusty2600_test_harness::{RunOutcome, Sentinel, run_cpu_until_sentinel};
 use std::fs;
 
 struct KlausBus {
@@ -38,21 +39,20 @@ fn klaus_functional_test() {
     cpu.reset(&mut bus);
     cpu.set_pc(0x0400); // Klaus functional test entry point
 
-    let mut clocks = 0;
-    while clocks < 200_000_000 {
-        let prev_pc = cpu.pc;
-        cpu.step(&mut bus);
-
-        if cpu.pc == 0x3469 {
-            // Success trap!
-            return;
-        } else if cpu.pc == prev_pc {
-            // Infinite loop -> failure trap
-            panic!("Klaus test failed at PC={:04X} (trapped)", cpu.pc);
-        }
-        clocks += 1;
+    // The shared Layer 2 runner (rusty2600-test-harness): PC reaching $3469
+    // is the ROM's documented success trap; any OTHER infinite loop is a
+    // failure trap. Same protocol this test always used, now shared with
+    // `accuracy_battery.rs` instead of hand-rolled here.
+    match run_cpu_until_sentinel(
+        &mut cpu,
+        &mut bus,
+        Sentinel::PcTrap { success_pc: 0x3469 },
+        200_000_000,
+    ) {
+        RunOutcome::Passed => {}
+        RunOutcome::Failed(_) => panic!("Klaus test failed at PC={:04X} (trapped)", cpu.pc),
+        RunOutcome::TimedOut => panic!("Klaus test timed out!"),
     }
-    panic!("Klaus test timed out!");
 }
 
 /// Bruce Clark's decimal-mode test (public domain,
@@ -93,20 +93,26 @@ fn klaus_decimal_test() {
     cpu.reset(&mut bus);
     cpu.set_pc(0x0200); // the source's `org $200` code entry point
 
-    let mut clocks = 0;
-    // The exhaustive 256 x 256 x 2-carry-in sweep needs far more instructions
-    // than the functional test's budget above.
-    while clocks < 700_000_000 {
-        if cpu.pc == DONE_ADDR {
-            let error = bus.read(0x000B);
-            assert_eq!(
-                error, 0,
-                "Klaus decimal test failed: ERROR=${error:02X} at zero-page $0B (0 = pass, 1 = fail)"
-            );
-            return;
-        }
-        cpu.step(&mut bus);
-        clocks += 1;
+    // The shared Layer 2 runner: reaching DONE_ADDR (checked BEFORE that
+    // instruction executes, since $DB there is a real illegal opcode on
+    // this CPU type, not a halt -- see the module-level doc above) plus the
+    // ERROR byte at zero-page $0B is this ROM's documented pass/fail
+    // protocol. The exhaustive 256 x 256 x 2-carry-in sweep needs far more
+    // instructions than the functional test's budget above.
+    match run_cpu_until_sentinel(
+        &mut cpu,
+        &mut bus,
+        Sentinel::PcWithZeroPageCheck {
+            success_pc: DONE_ADDR,
+            zp_addr: 0x000B,
+            pass_value: 0,
+        },
+        700_000_000,
+    ) {
+        RunOutcome::Passed => {}
+        RunOutcome::Failed(code) => panic!(
+            "Klaus decimal test failed: ERROR=${code:02X} at zero-page $0B (0 = pass, 1 = fail)"
+        ),
+        RunOutcome::TimedOut => panic!("Klaus decimal test timed out!"),
     }
-    panic!("Klaus decimal test timed out!");
 }

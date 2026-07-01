@@ -6,6 +6,56 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-01 - "Battery"
+
+Stands up `rusty2600-test-harness`'s Layer 4 accuracy battery for real.
+Previously the crate's `GoldenLogDiffer`/`run_until_complete`/
+`AccuracyScore`/`SnapComparator` were unused scaffolding — the real Klaus
+functional/decimal tests hand-rolled their own PC-trap loops directly
+against `rusty2600_cpu::Cpu`, bypassing the harness entirely.
+
+### Added
+
+- **`Sentinel` + `run_cpu_until_sentinel`** — the shared Layer 2 (CPU-only)
+  test-ROM runner. Two variants cover the bundled Klaus oracles' own
+  completion protocols exactly: `PcTrap` (success once PC reaches an
+  address AFTER stepping; a stuck PC anywhere else is a failure — the
+  functional test's convention) and `PcWithZeroPageCheck` (success once PC
+  reaches an address BEFORE stepping, gated on a zero-page pass/fail byte —
+  the decimal test's convention). `tests/klaus_test.rs`'s two tests now run
+  through this shared function instead of each hand-rolling its own loop —
+  a pure refactor, same ROMs, same sentinels, unchanged pass/fail behavior.
+- **`tests/accuracy_battery.rs`** — the real Layer 4 battery. Runs both
+  bundled Klaus oracles through `run_cpu_until_sentinel`, records each into
+  a real `AccuracyScore`, and asserts the aggregate pass rate meets the
+  v1.0 threshold (`docs/STATUS.md`'s Version policy: ≥90%, 100% the goal —
+  currently 2/2, 100%). This lives inside the existing `cargo test
+  --workspace --features test-roms` CI step, so a pass-rate regression
+  already fails CI — no new workflow file was needed.
+- **`SnapComparator` tolerance-aware comparison** —
+  `diff_count_within_tolerance`/`matches_within_tolerance`, both
+  `abs_diff`-based per-byte thresholds, alongside the existing exact
+  byte-diff.
+- **`GoldenLogDiffer` is now a real capture/diff engine** (a genuine
+  `Vec<TraceRecord>` buffer + a real per-record diff algorithm), not just a
+  counter. Honestly documented: no externally-oracled golden CPU trace log
+  is bundled yet (`T-0602-007`), so `bundled()` reports `false` until one
+  is — Klaus's own internal pass/fail trap remains the authoritative CPU
+  oracle in the meantime.
+
+### Notes
+
+- **Deferred, deliberately:** a genuine per-instruction golden CPU trace
+  log produced by an independent, externally-trusted oracle (an
+  instrumented Stella or Gopher2600 build) for `GoldenLogDiffer`
+  (`T-0602-007`), and TIA-timing/draw-ROM test fixtures + goldens for the
+  Layer 3 `run_until_complete` runner and the tolerance-aware
+  `SnapComparator` (`T-0602-006`). Both need real external oracle data to
+  do honestly, not a guessed-at protocol.
+- The `SingleStepTests` cycle-exact audit (233/233 opcodes) remains its own
+  separately-enforced gate in `rusty2600-cpu`'s own test suite, not yet
+  folded into the shared `AccuracyScore` (`T-0602-008`).
+
 ## [0.7.0] - 2026-07-01 - "Cheevos"
 
 The RetroAchievements slice of Phase 8, pulled forward per the ROADMAP's

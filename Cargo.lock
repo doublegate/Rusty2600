@@ -3291,7 +3291,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rusty2600-cart"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bitflags 2.13.0",
  "criterion",
@@ -3300,7 +3300,7 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-cheevos"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "cc",
  "ureq",
@@ -3308,7 +3308,7 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "rusty2600-cart",
  "rusty2600-cpu",
@@ -3319,7 +3319,7 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-cpu"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bitflags 2.13.0",
  "criterion",
@@ -3329,7 +3329,7 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-frontend"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anstyle",
  "bytemuck",
@@ -3364,7 +3364,7 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-riot"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bitflags 2.13.0",
  "criterion",
@@ -3373,7 +3373,7 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-test-harness"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "insta",
  "rusty2600-core",
@@ -3382,7 +3382,7 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-tia"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bitflags 2.13.0",
  "criterion",

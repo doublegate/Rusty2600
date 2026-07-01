@@ -5,9 +5,9 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v0.7.0 "Cheevos" (see `to-dos/ROADMAP.md`
+**Current release:** v0.8.0 "Battery" (see `to-dos/ROADMAP.md`
 for the full v0.1.1→v1.0.0 version-to-phase plan and `CHANGELOG.md`'s
-`[0.7.0]` entry for the complete list) — the full 8-scheme Curated cart tier
+`[0.8.0]` entry for the complete list) — the full 8-scheme Curated cart tier
 (v0.3.0) plus 12 BestEffort schemes (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC,
 BF/BFSC, UA, 0840, FE, SB, X07) are implemented and wired into automatic
 `detect()` — 22 of the 25 schemes in the LOCAL catalogue (`docs/cart.md`).
@@ -25,12 +25,22 @@ rendering, audio, pacing, input, WASM/thread support, AND the real
 continue, a side-effect-free `Bus::peek`/`peek_range`, a standalone
 disassembler — `to-dos/phase-5-frontend/sprint-4-debugger.md`), plus
 populated Criterion benches with real measured baselines
-(`docs/performance.md`). Phase 8's RetroAchievements slice is now real:
+(`docs/performance.md`). Phase 8's RetroAchievements slice is real:
 `rusty2600-cheevos` vendors the `rcheevos` C library and wires a safe
 `RaClient` into the frontend (`retroachievements` feature, off by default)
 — per-frame achievement tracking, hardcore mode, and a RetroAchievements
 menu all work; a dedicated achievement-list/login/toast UI is deferred
-(`to-dos/phase-8-reach/sprint-2-ra-and-tas.md`, `T-0802-005`).
+(`to-dos/phase-8-reach/sprint-2-ra-and-tas.md`, `T-0802-005`). **Phase 6's
+accuracy battery (Layer 4) is now real** — `rusty2600-test-harness` goes
+from unused scaffolding to a real battery: the shared `Sentinel`/
+`run_cpu_until_sentinel` Layer 2 runner (both bundled Klaus oracles refactored
+onto it, unchanged pass/fail behavior), a real `AccuracyScore`-gated
+`tests/accuracy_battery.rs` (2/2, 100%, already CI-enforced via the existing
+`--features test-roms` step), and a real tolerance-aware `SnapComparator`.
+Still honestly deferred: a genuine externally-oracled golden CPU trace log
+for `GoldenLogDiffer` and TIA-timing test-ROM fixtures for the Layer 3
+`run_until_complete` runner (`to-dos/phase-6-accuracy-to-100/
+sprint-2-pass-gate.md`, `T-0602-006`/`007`).
 
 ## Subsystem progress
 
@@ -43,7 +53,7 @@ menu all work; a dedicated achievement-list/login/toast UI is deferred
 | `rusty2600-core` | Bus + scheduler | lockstep loop + seeded phase live; bus decode complete |
 | `rusty2600-frontend` | egui shell | Rendering, audio, pacing, input, WASM support, the emu-thread path, the real debugger (`debug-hooks`, default-on), and now RetroAchievements (`retroachievements`, off by default: `cheevos.rs` owns an `RaClient` on the main thread, pumped once per frame under the brief lock, ROM load/close wired, hardcore-mode menu, unlock events surfaced as status text) all real and tested (v0.5.0-v0.7.0). HD-pack remains an unwired stub. |
 | `rusty2600-cheevos` | RetroAchievements FFI | Vendors the `rcheevos` C library (MIT); safe `RaClient` wrapper adapted from RustyNES's own `rustynes-cheevos` (console-agnostic except the memory map + one console-ID constant). `ra_addr_to_riot` maps RA's flat address space directly onto the RIOT's 128 bytes of RAM. Native-only (`#![cfg(not(target_arch = "wasm32"))]`); 7 tests passing, including real FFI smoke tests (v0.7.0). |
-| `rusty2600-test-harness` | accuracy oracle | Shapes present (`GoldenLogDiffer`/`run_until_complete`/`AccuracyScore`/`SnapComparator`); Klaus functional golden-log passes; the full AccuracyCoin-style battery (live trace buffer, suite result-protocol polling, tolerance-aware snap compare) is still TODO — v0.8.0. |
+| `rusty2600-test-harness` | accuracy oracle | Real as of v0.8.0: `Sentinel`/`run_cpu_until_sentinel` (the shared Layer 2 runner both bundled Klaus oracles now use), a real `AccuracyScore`-gated `tests/accuracy_battery.rs` (2/2, 100%), and a tolerance-aware `SnapComparator`. `GoldenLogDiffer`'s capture/diff machinery is real too, but no externally-oracled golden CPU trace is bundled yet (`T-0602-007`); `run_until_complete` (Layer 3, full-`System`) remains a stub pending TIA-timing test-ROM fixtures (`T-0602-006`). |
 
 ## Accuracy (per-suite pass counts)
 
@@ -53,11 +63,11 @@ menu all work; a dedicated achievement-list/login/toast UI is deferred
 | Klaus `6502_decimal_test` (BCD) | test-harness (`--features test-roms`) | 1 / 1 — wired v0.2.0; exhaustive 256×256×2-carry-in `ADC`/`SBC` decimal-mode sweep, `ERROR=0` (bit-exact) |
 | SingleStepTests/`65x02` `6502` (trimmed: 20 cases/opcode) | cycle-exact audit | 4,660 / 4,660 cases, 233 / 233 opcodes |
 | SingleStepTests/`65x02` `6502` (full corpus, ~10K cases/opcode) | cycle-exact audit | wired v0.2.0 — `.github/workflows/singlestep-full.yml`, weekly cron + manual dispatch (not per-push: ~700 MB download across 233 opcodes) |
-| TIA timing / draw ROMs | test-ROM corpus | not yet wired (v0.8.0) |
-| Stella regression corpus | test-ROM corpus | not yet wired (v0.8.0/v0.9.x) |
-| Accuracy battery (AccuracyCoin-equivalent) | battery | not yet stood up (v0.8.0) |
-| **Workspace test suite** | `cargo test --workspace` | **142 / 142** (both Klaus tests moved to `--features test-roms`, gated out of the fast default path — see `crates/rusty2600-test-harness/tests/klaus_test.rs`) |
-| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **144 / 144** |
+| TIA timing / draw ROMs | test-ROM corpus | not yet wired (`T-0602-006`) |
+| Stella regression corpus | test-ROM corpus | not yet wired (`T-0602-006`/v0.9.x) |
+| **Accuracy battery (AccuracyCoin-equivalent)** | battery | **2 / 2 (100%)** — stood up v0.8.0, `tests/accuracy_battery.rs`, CI-enforced via the existing `--features test-roms` step, ≥90% v1.0 threshold |
+| **Workspace test suite** | `cargo test --workspace` | **150 / 150** (both Klaus tests moved to `--features test-roms`, gated out of the fast default path — see `crates/rusty2600-test-harness/tests/klaus_test.rs`) |
+| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **153 / 153** |
 
 ## Board / mapper matrix
 

@@ -7,7 +7,7 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current release: v0.7.0 "Cheevos".** Phase 0 (foundation) through the
+**Current release: v0.8.0 "Battery".** Phase 0 (foundation) through the
 full Curated-tier board set (Phase 4) are complete. Phase 7 (BestEffort
 breadth) has landed 12 of the ~15-scheme BestEffort long tail cataloged in
 `docs/cart.md` (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA, 0840, FE, SB,
@@ -25,11 +25,19 @@ RetroAchievements slice of Phase 8 is now real: `rusty2600-cheevos` vendors
 the `rcheevos` C library and wires a safe `RaClient` into the frontend
 (`retroachievements`, off by default) — per-frame achievement tracking,
 hardcore mode, and a menu all work; a dedicated achievement-list/login/toast
-UI is deferred (`T-0802-005`). Phase 6 (accuracy-to-100) is actively
-underway (RIOT timing, TIA collision continuity, seeded power-on state, the
-full SingleStepTests corpus, and Klaus's decimal test landed in v0.2.0; a
-Gopher2600 differential probe found and scoped a boot-timing residual in
-Pitfall II, `T-0601-008` — see `CHANGELOG.md`). See `docs/STATUS.md` for the
+UI is deferred (`T-0802-005`). **Phase 6's accuracy battery (Layer 4) is now
+real** — `rusty2600-test-harness` goes from unused scaffolding to a real
+battery: the shared `Sentinel`/`run_cpu_until_sentinel` Layer 2 runner (both
+bundled Klaus oracles refactored onto it), a real `AccuracyScore`-gated
+`tests/accuracy_battery.rs` (2/2, 100%, CI-enforced via the existing
+`--features test-roms` step), and a tolerance-aware `SnapComparator`. Still
+honestly deferred: a genuine externally-oracled golden CPU trace log for
+`GoldenLogDiffer` and TIA-timing test-ROM fixtures for the Layer 3
+`run_until_complete` runner (`T-0602-006`/`007`). RIOT timing, TIA
+collision continuity, seeded power-on state, the full SingleStepTests
+corpus, and Klaus's decimal test landed in v0.2.0; a Gopher2600
+differential probe found and scoped a boot-timing residual in Pitfall II,
+`T-0601-008` — see `CHANGELOG.md`. See `docs/STATUS.md` for the
 authoritative per-suite/per-chip state.
 
 ## The phase line
@@ -72,8 +80,8 @@ Core/Curated set:
 | v0.4.1 | Continues the Batch 2 patch train — UA/0840 (2 more schemes) + `Board::snoop_read`; FE/SB/X07/4A50 and Batches 3-5 (DPC-family, ARM/peripheral, multicarts) target v0.4.2+ |
 | v0.5.0 "Inspector" | Real `debug-hooks` debugger (6507/TIA/RIOT/memory panels, breakpoints/step/continue, `Bus::peek`/`peek_range`, a standalone disassembler); performance benches populated with real Criterion baselines |
 | v0.6.0 "Catalog" | Closes 22 of the local 25-scheme catalogue (`docs/cart.md`): FE, SB, X07 land (`T-0402-006`/`011`, DONE) alongside the existing 19. 4A50 (`T-0402-014`), AR/Supercharger (`T-0402-015`), and the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family (`T-0401-006`, needs a full ARM7TDMI Thumb interpreter) are substantially larger undertakings, deliberately deferred to a v0.6.x patch train rather than rushed |
-| **v0.7.0 "Cheevos"** (current) | RetroAchievements (`rusty2600-cheevos`, `T-0802-001..004`, DONE): vendors `rcheevos`, wires a safe `RaClient` into the frontend behind the off-by-default `retroachievements` feature — real per-frame achievement tracking, hardcore mode, a menu. A dedicated achievement-list/login/toast UI is deferred (`T-0802-005`) |
-| v0.8.0 "Battery" | The accuracy battery itself stood up + CI regression gate |
+| v0.7.0 "Cheevos" | RetroAchievements (`rusty2600-cheevos`, `T-0802-001..004`, DONE): vendors `rcheevos`, wires a safe `RaClient` into the frontend behind the off-by-default `retroachievements` feature — real per-frame achievement tracking, hardcore mode, a menu. A dedicated achievement-list/login/toast UI is deferred (`T-0802-005`) |
+| **v0.8.0 "Battery"** (current) | The accuracy battery stood up for real (`T-0602-001..005`, DONE): shared `Sentinel`/`run_cpu_until_sentinel` Layer 2 runner, a real `AccuracyScore`-gated `accuracy_battery.rs` (2/2, 100%, CI-enforced via the existing `test-roms` step — no new CI YAML needed), tolerance-aware `SnapComparator`. A genuine externally-oracled golden CPU trace log and TIA-timing test-ROM fixtures remain deferred (`T-0602-006`/`007`) |
 | v0.9.x | Battery-driven hardening, commercial-ROM regression oracle, doc sync |
 | **v1.0.0** | Accuracy battery ≥90% (100% goal), debugger + RA shipped, Stella-adjacent cart breadth, green release matrix |
 
