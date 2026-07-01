@@ -516,6 +516,108 @@ impl Board for BankFA {
     }
 }
 
+/// E7 (M-Network): 16 KiB ROM as eight 2 KiB banks + 2 KiB on-cart RAM, the
+/// most complex classic bankswitch scheme (Kevin Horton's description, cited
+/// verbatim in Stella's `CartE7.hxx` and followed here). The CPU's 4 KiB
+/// window splits into two 2 KiB segments:
+///
+/// - **Lower** (`$1000..=$17FF`, selectable via `$1FE0..=$1FE7`): banks 0-6
+///   are plain ROM; bank **7 means "switch to RAM instead"** (not real bank
+///   7 ROM data) — `$1000..=$13FF` write port / `$1400..=$17FF` read port,
+///   both aliasing the SAME underlying 1 KiB (matching this crate's existing
+///   write-low/read-high convention for [`BankFA`]/[`BankCV`]).
+/// - **Upper** (`$1800..=$1FFF`): NOT a single fixed bank — `$1800..=$19FF`
+///   is a separate, always-active 256 B RAM window (write `$1800..=$18FF` /
+///   read `$1900..=$19FF`, aliased the same way) selected via
+///   `$1FE8..=$1FEB` (one of 4 sub-banks); `$1A00..=$1FFF` is the true fixed
+///   region, always the LAST 2 KiB bank's ROM data (so the reset vector is
+///   always reachable regardless of which lower bank is selected).
+///
+/// Curated tier. Only the 16 KiB / 8-bank configuration is implemented (the
+/// only one `docs/cart.md` commits to); Stella also supports rarer 8 KiB /
+/// 12 KiB / 6-bank M-Network variants, out of scope here. **Not wired into
+/// `detect()`**: 16 KiB is the SAME size as [`BankF6`], so — like
+/// Superchip — this needs ROM-DB/hotspot-pattern disambiguation
+/// (`T-0401-009`) before automatic dispatch is safe.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BankE7 {
+    #[serde(with = "serde_bytes_array")]
+    rom: [u8; 0x4000],
+    /// The lower segment's 1 KiB RAM (active only when `bank0 == RAM_BANK`).
+    #[serde(with = "serde_bytes_array")]
+    ram_big: [u8; 0x400],
+    /// The always-active 256 B-per-sub-bank RAM pool (4 sub-banks, 1 KiB total).
+    #[serde(with = "serde_bytes_array")]
+    ram_small: [u8; 0x400],
+    /// Lower-segment bank select, 0-6 = ROM bank, 7 = RAM mode.
+    bank0: u8,
+    /// Which of the 4 always-active 256 B RAM sub-banks is mapped in.
+    ram_bank: u8,
+}
+
+impl BankE7 {
+    /// The pseudo-bank-index meaning "RAM instead of ROM" in the lower segment.
+    const RAM_BANK: u8 = 7;
+    const HOTSPOT_ROM_BASE: u16 = 0x1FE0;
+    const HOTSPOT_RAM_BASE: u16 = 0x1FE8;
+
+    /// Build from a 16 KiB image. Returns `None` if the slice is not 16 KiB.
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        Some(Self {
+            rom: rom.try_into().ok()?,
+            ram_big: [0; 0x400],
+            ram_small: [0; 0x400],
+            bank0: 0,
+            ram_bank: 0,
+        })
+    }
+
+    #[allow(clippy::missing_const_for_fn)]
+    fn check_switch_bank(&mut self, addr: u16) {
+        let a = addr & 0x1FFF;
+        if (Self::HOTSPOT_ROM_BASE..=Self::HOTSPOT_ROM_BASE + 7).contains(&a) {
+            self.bank0 = (a - Self::HOTSPOT_ROM_BASE) as u8;
+        } else if (Self::HOTSPOT_RAM_BASE..=Self::HOTSPOT_RAM_BASE + 3).contains(&a) {
+            self.ram_bank = (a - Self::HOTSPOT_RAM_BASE) as u8;
+        }
+    }
+}
+
+impl Board for BankE7 {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        self.check_switch_bank(addr);
+        let a = addr & 0x0FFF;
+        if a < 0x0800 {
+            if self.bank0 == Self::RAM_BANK {
+                self.ram_big[(a & 0x03FF) as usize]
+            } else {
+                self.rom[usize::from(self.bank0) * 0x800 + a as usize]
+            }
+        } else if a < 0x0A00 {
+            self.ram_small[usize::from(self.ram_bank) * 0x100 + (a & 0x00FF) as usize]
+        } else {
+            self.rom[Self::RAM_BANK as usize * 0x800 + (a & 0x07FF) as usize]
+        }
+    }
+
+    fn cpu_write(&mut self, addr: u16, val: u8) {
+        self.check_switch_bank(addr);
+        let a = addr & 0x0FFF;
+        if a < 0x0400 && self.bank0 == Self::RAM_BANK {
+            self.ram_big[a as usize] = val;
+        } else if (0x0800..0x0900).contains(&a) {
+            self.ram_small[usize::from(self.ram_bank) * 0x100 + (a & 0x00FF) as usize] = val;
+        }
+        // $1400-$17FF (RAM read-port alias), $1900-$19FF (RAM read-port
+        // alias), and $1A00-$1FFF (fixed ROM) writes are all no-ops.
+    }
+
+    fn tier(&self) -> Tier {
+        Tier::Curated
+    }
+}
+
 /// DPC (Pitfall II's "Display Processor Chip"): 8 KiB program ROM as two
 /// 4 KiB F8-style banks (`$1FF8`/`$1FF9` hotspots, same convention as
 /// [`BankF8`]) + a 2 KiB fixed display-data ROM + 8 hardware "data fetchers"
@@ -771,6 +873,8 @@ pub enum Cartridge {
     /// DPC (Pitfall II): 8 KiB program + 2 KiB display ROM + 8 data fetchers
     /// + RNG (Curated tier)
     BankDpc(BankDpc),
+    /// E7 (M-Network): 16 KiB ROM, 8×2K banks + 2 KiB RAM (Curated tier)
+    BankE7(BankE7),
 }
 
 impl Board for Cartridge {
@@ -784,6 +888,7 @@ impl Board for Cartridge {
             Self::BankCV(b) => b.cpu_read(addr),
             Self::BankFA(b) => b.cpu_read(addr),
             Self::BankDpc(b) => b.cpu_read(addr),
+            Self::BankE7(b) => b.cpu_read(addr),
         }
     }
 
@@ -797,6 +902,7 @@ impl Board for Cartridge {
             Self::BankCV(b) => b.cpu_write(addr, val),
             Self::BankFA(b) => b.cpu_write(addr, val),
             Self::BankDpc(b) => b.cpu_write(addr, val),
+            Self::BankE7(b) => b.cpu_write(addr, val),
         }
     }
 
@@ -810,6 +916,7 @@ impl Board for Cartridge {
             Self::BankF4(b) => b.tier(),
             Self::BankFA(b) => b.tier(),
             Self::BankDpc(b) => b.tier(),
+            Self::BankE7(b) => b.tier(),
         }
     }
 
@@ -823,6 +930,7 @@ impl Board for Cartridge {
             Self::BankCV(b) => b.tick(),
             Self::BankFA(b) => b.tick(),
             Self::BankDpc(b) => b.tick(),
+            Self::BankE7(b) => b.tick(),
         }
     }
 
@@ -836,6 +944,7 @@ impl Board for Cartridge {
             Self::BankCV(b) => b.tick_coprocessor(),
             Self::BankFA(b) => b.tick_coprocessor(),
             Self::BankDpc(b) => b.tick_coprocessor(),
+            Self::BankE7(b) => b.tick_coprocessor(),
         }
     }
 }
@@ -883,10 +992,13 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
         0x4000 => {
             // 16 KiB: default to F6 (Curated, the far more common Atari-
             // standard scheme — dozens of Atari-published titles). E7
-            // (M-Network, also Curated) is the SAME size and needs hotspot-
-            // pattern / ROM-DB disambiguation, same class of ambiguity as
-            // the 8 KiB F8/E0/FE/3F case above.
-            // TODO(T-0401-002): E7 detection for 16 KiB images.
+            // (M-Network, implemented as BankE7, also Curated) is the SAME
+            // size and needs hotspot-pattern / ROM-DB disambiguation before
+            // it can be dispatched automatically here — same class of
+            // ambiguity as the 8 KiB F8/E0/FE/3F case above and Superchip's
+            // size collision with plain F8/F6/F4. `BankE7::new()` is public
+            // for direct/future ROM-DB-assisted construction.
+            // TODO(T-0401-009): ROM-DB-assisted E7 vs F6 disambiguation.
             BankF6::new(rom).map(Cartridge::BankF6)
         }
         0x8000 => BankF4::new(rom).map(Cartridge::BankF4),
@@ -1168,5 +1280,59 @@ mod tests {
         // 12 KiB stays unambiguously FA, unaffected by the DPC tolerance window.
         let fa = detect(&[0u8; 0x3000]).unwrap();
         assert!(matches!(fa, Cartridge::BankFA(_)));
+    }
+
+    #[test]
+    fn e7_bank_switch_lower_segment() {
+        let mut img = [0u8; 0x4000];
+        img[3 * 0x800] = 0x33; // bank 3, first byte
+        img[5 * 0x800] = 0x55; // bank 5, first byte
+        let mut board = BankE7::new(&img).unwrap();
+        assert_eq!(board.tier(), Tier::Curated);
+        board.cpu_read(0x1FE3); // select bank 3
+        assert_eq!(board.cpu_read(0x1000), 0x33);
+        board.cpu_read(0x1FE5); // select bank 5
+        assert_eq!(board.cpu_read(0x1000), 0x55);
+    }
+
+    #[test]
+    fn e7_ram_bank_write_low_read_high() {
+        let img = [0u8; 0x4000];
+        let mut board = BankE7::new(&img).unwrap();
+        board.cpu_read(0x1FE7); // select bank 7 -> RAM mode for the lower segment
+        board.cpu_write(0x1000, 0x77); // write port
+        assert_eq!(board.cpu_read(0x1400), 0x77); // read port, same underlying byte
+    }
+
+    #[test]
+    fn e7_writes_to_read_ports_are_ignored() {
+        let img = [0u8; 0x4000];
+        let mut board = BankE7::new(&img).unwrap();
+        board.cpu_read(0x1FE7); // RAM mode
+        board.cpu_write(0x1400, 0xAA); // write to the READ port: must be a no-op
+        assert_eq!(board.cpu_read(0x1000), 0x00);
+    }
+
+    #[test]
+    fn e7_small_ram_window_write_low_read_high_with_subbank_select() {
+        let img = [0u8; 0x4000];
+        let mut board = BankE7::new(&img).unwrap();
+        board.cpu_read(0x1FE9); // select RAM sub-bank 1
+        board.cpu_write(0x1800, 0x22);
+        assert_eq!(board.cpu_read(0x1900), 0x22);
+        board.cpu_read(0x1FE8); // switch to sub-bank 0: independent storage
+        assert_eq!(board.cpu_read(0x1900), 0x00);
+    }
+
+    #[test]
+    fn e7_upper_segment_always_maps_the_last_bank() {
+        let mut img = [0u8; 0x4000];
+        img[7 * 0x800 + 0x200] = 0x99; // last bank, offset matching CPU addr $1A00
+        let mut board = BankE7::new(&img).unwrap();
+        // Regardless of which lower bank (or RAM mode) is selected...
+        board.cpu_read(0x1FE3);
+        assert_eq!(board.cpu_read(0x1A00), 0x99);
+        board.cpu_read(0x1FE7); // RAM mode for the LOWER segment
+        assert_eq!(board.cpu_read(0x1A00), 0x99); // upper segment unaffected
     }
 }

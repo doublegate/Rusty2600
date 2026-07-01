@@ -8,7 +8,12 @@
   hotspot-pattern + ROM-DB-assisted disambiguation from E0 / FE / 3F (all
   BestEffort) so an 8 KiB image isn't silently mis-detected. See
   `crates/rusty2600-cart/src/lib.rs::detect`.
-- [ ] `T-0401-002`: Implement the E7 (M-Network) scheme in `detect()`.
+- [x] `T-0401-002` (DONE): Implement the E7 (M-Network) scheme — `BankE7`,
+  the 16 KiB / 8×2K-bank configuration only (per `docs/cart.md`'s catalogue
+  commitment), following Kevin Horton's description as cited in Stella's
+  `CartE7.hxx`. **Not wired into `detect()`**: 16 KiB collides with plain
+  F6, same class of ambiguity as Superchip; tracked under the `T-0401-009`
+  umbrella below. 5 new unit tests.
 - [x] `T-0401-003` (DONE): Implement the Superchip variants (F8SC/F6SC/F4SC,
   +128 B RAM overlay, write-low `$1000-$107F` / read-high `$1080-$10FF` per
   Stella's `CartF8`/`CartEnhanced`). Added `with_superchip()` builders on
@@ -41,6 +46,14 @@
   reserved for the two schemes needing zero board-specific hotspot logic: 2K,
   4K). Pinned by `mapper_tier_honesty.rs`'s
   `core_tier_is_reserved_for_unbanked_schemes` test.
+- [ ] `T-0401-009`: ROM-DB-assisted disambiguation umbrella — several
+  implemented schemes are byte-size-identical to another implemented scheme
+  and so can't be wired into `detect()`'s automatic size-based dispatch yet:
+  CV vs plain 2K/4K, Superchip (F8SC/F6SC/F4SC) vs plain F8/F6/F4, and E7 vs
+  F6 (both 16 KiB). All have public constructors (`BankCV::new`,
+  `BankF8::with_superchip`/etc., `BankE7::new`) ready for a future ROM-DB
+  (MD5 lookup, matching Stella's own approach) or hotspot-access-pattern
+  probe to select the right one at load time.
 
 
 ---

@@ -61,7 +61,17 @@
   Gopher2600's. See the `rusty2600-gopher-differential-oracle` project
   memory for the probe methodology. Does not block `T-0401-005`'s own
   scope (register-level DPC model + hotspot bankswitching + unit tests),
-  which is complete and independently verified.
+  which is complete and independently verified. **2026-07-01 update:**
+  re-tried the screenshot at 60/300/900/5000 `dump_frame` frames — always
+  the same blank result. Root cause: `EmuCore::run_frame`
+  (`crates/rusty2600-frontend/src/emu_thread.rs`) has a 200,000-instruction
+  safety timeout that fires unconditionally while stuck in this loop (no
+  real VSYNC to break on), so every `run_frame()` call just burns exactly
+  200,000 instructions and returns — by 5000 "frames" the emulator has run
+  on the order of 1 BILLION instructions total, still in the same loop.
+  This makes "INTIM genuinely never reaches zero" (a real bug) more likely
+  than "just slower but still bounded" — re-scope the fix investigation
+  accordingly when this is picked up.
 
 
 ---

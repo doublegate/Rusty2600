@@ -24,7 +24,7 @@ TODO stubs (targeted for v0.5.0).
 | `rusty2600-cpu` | MOS 6507 | Documented + undocumented opcodes implemented; cycle-exact against both the trimmed and full SingleStepTests corpus, and Bruce Clark's exhaustive decimal-mode test (all ERROR=0). Split into `status.rs`/`bus.rs`/`cpu.rs` + a thin `lib.rs` (v0.2.0, `T-0601-006`) — the crate previously also carried a second, entirely dead, never-compiled RustyNES-lineage CPU implementation (`cpu.rs`/`bus.rs`/`disasm.rs`/`status.rs`, ~3,560 lines, no `mod` declarations ever wired them in) plus stale NES-flavored comment prose in the one live file; both fully resolved, see `docs/cpu.md`. |
 | `rusty2600-tia` | TIA — video + audio | Beam-raced video (RESPx/HMOVE/playfield/players/missiles/ball/collisions) + audio poly-counter synthesis implemented and unit-tested. RIOT-timer-adjacent edge cases, AUDC 0xA/0xB pinning, TIA-revision modeling, and power-on RAM determinism are open (v0.2.0). |
 | `rusty2600-riot` | MOS 6532 RIOT | RAM/DDR ports/timer implemented and unit-tested (prescale, underflow, INSTAT). Read-after-write `INTIM` edge case still needs verification against the DirtyHairy/Stella model (v0.2.0). |
-| `rusty2600-cart` | Bankswitch boards | 2K, 4K, F8, F6, F4, CV, FA/CBS-RAM, Superchip (F8SC/F6SC/F4SC), DPC implemented (9 of 25 catalogued schemes); honesty gate live and tier-consistent (all Curated). Curated tier is feature-complete except E7 (v0.3.0, `T-0401-002`); the ~50-scheme BestEffort long tail targets v0.4.x. |
+| `rusty2600-cart` | Bankswitch boards | 2K, 4K, F8, F6, F4, CV, FA/CBS-RAM, Superchip (F8SC/F6SC/F4SC), DPC, E7 implemented (10 of 25 catalogued schemes); honesty gate live and tier-consistent (all Curated). **Curated tier is feature-complete** (`to-dos/ROADMAP.md`'s v0.3.0 line); Superchip/E7 aren't yet wired into `detect()`'s automatic dispatch (same-size collisions with plain F8/F6/F4/F6 respectively — `T-0401-009`), but both have public constructors ready for ROM-DB-assisted dispatch. The ~50-scheme BestEffort long tail targets v0.4.x. |
 | `rusty2600-core` | Bus + scheduler | lockstep loop + seeded phase live; bus decode complete |
 | `rusty2600-frontend` | egui shell | Rendering, audio, pacing, input, WASM support, and the emu-thread path all real and tested. Debugger (`debug-hooks`), HD-pack, and RetroAchievements feature flags remain unwired stubs — v0.5.0 (debugger) and v0.6.0 (RA) respectively. |
 | `rusty2600-test-harness` | accuracy oracle | Shapes present (`GoldenLogDiffer`/`run_until_complete`/`AccuracyScore`/`SnapComparator`); Klaus functional golden-log passes; the full AccuracyCoin-style battery (live trace buffer, suite result-protocol polling, tolerance-aware snap compare) is still TODO — v0.7.0. |
@@ -40,8 +40,8 @@ TODO stubs (targeted for v0.5.0).
 | TIA timing / draw ROMs | test-ROM corpus | not yet wired (v0.7.0) |
 | Stella regression corpus | test-ROM corpus | not yet wired (v0.7.0/v0.8.x) |
 | Accuracy battery (AccuracyCoin-equivalent) | battery | not yet stood up (v0.7.0) |
-| **Workspace test suite** | `cargo test --workspace` | **87 / 87** (both Klaus tests moved to `--features test-roms`, gated out of the fast default path — see `crates/rusty2600-test-harness/tests/klaus_test.rs`) |
-| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **89 / 89** |
+| **Workspace test suite** | `cargo test --workspace` | **100 / 100** (both Klaus tests moved to `--features test-roms`, gated out of the fast default path — see `crates/rusty2600-test-harness/tests/klaus_test.rs`) |
+| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **102 / 102** |
 
 ## Board / mapper matrix
 
@@ -52,7 +52,7 @@ BestEffort board never backs the accuracy oracle. Full catalogue (size / hotspot
 | Tier | Count | Schemes | Accuracy-gated | Implemented |
 |---|---|---|---|---|
 | Core | 2 | 2K, 4K | yes | 2K, 4K |
-| Curated | 8 | CV, F8, F6, F4, FA/CBS-RAM, Superchip (SC), DPC, E7 | yes | 7 of 8 — E7 remains (v0.3.0, `T-0401-002`); DPC and E7 both reclassified from `docs/cart.md`'s original BestEffort listing (see its tier-totals note) |
+| Curated | 8 | CV, F8, F6, F4, FA/CBS-RAM, Superchip (SC), DPC, E7 | yes | all 8 — Curated tier complete (v0.3.0); Superchip/E7 not yet wired into `detect()`'s automatic dispatch (`T-0401-009`, same-size collisions). DPC and E7 both reclassified from `docs/cart.md`'s original BestEffort listing (see its tier-totals note) |
 | BestEffort | 15 | F0, FE, E0, 3F, 3E, UA, 0840, EF, BF, DF, SB, X07, 4A50, AR, DPC+/CDF/CDFJ | **no** | none (target v0.4.x — the development plan extends this tier toward Stella's ~55-60-scheme catalogue, well past this 15) |
 
 The F8 Core-vs-Curated tier discrepancy (`T-0401-008`) is **resolved**:

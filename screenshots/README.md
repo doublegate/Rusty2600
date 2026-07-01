@@ -74,13 +74,16 @@ Current corpus: **15/16 rendered** (2026-07-01, v0.3.0 in progress). See
 
 - **`Pitfall II - Lost Caverns (USA)`** — now boots via the DPC (Display
   Processor Chip) coprocessor scheme (`T-0401-005`, v0.3.0), but its
-  screenshot is a blank blue frame at every frame count tried (60-900): a
-  Gopher2600 differential probe confirmed DPC decode / control-flow are
-  bit-exact for the first ~2,000 executed instructions, but the CPU then
-  spends far longer than Gopher2600 in a boot-time RIOT-timer wait loop
-  before reaching steady gameplay (tracked as `T-0601-008`, likely a data-
-  value rather than control-flow divergence). Not a DPC decode bug; left
-  as-is pending that investigation rather than blocking this ticket.
+  screenshot is a blank blue frame at every frame count tried (60/300/900/
+  5000): a Gopher2600 differential probe confirmed DPC decode / control-
+  flow are bit-exact for the first ~2,000 executed instructions, but the
+  CPU then never returns from a boot-time RIOT-timer wait loop. Since
+  `dump_frame`'s `run_frame` has a 200,000-instruction safety timeout that
+  fires every call while stuck there, higher frame counts just burn more
+  instructions in the same loop (5000 frames ≈ 1 billion instructions) —
+  not a "needs more frames" case. Tracked as `T-0601-008`; not a DPC decode
+  bug (control-flow is independently verified correct), left as-is pending
+  that investigation rather than blocking this ticket.
 - **`Communist Mutants from Space (USA)`** — 8,448-byte image, not one of
   the size buckets `detect()` currently resolves; needs BestEffort-tier
   breadth work (v0.4.x) once its bankswitch scheme is identified. Expected
