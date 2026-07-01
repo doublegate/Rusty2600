@@ -10,7 +10,7 @@
 <p align="center">
   <a href="https://github.com/doublegate/Rusty2600/actions"><img src="https://github.com/doublegate/Rusty2600/workflows/CI/badge.svg" alt="Build Status"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a>
-  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v1.2.0-blue.svg" alt="Version"></a>
+  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v1.3.0-blue.svg" alt="Version"></a>
   <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/rust-1.96-orange.svg" alt="Rust: 1.96"></a>
   <br>
   <a href="#compatibility-and-accuracy"><img src="https://img.shields.io/badge/accuracy%20battery-100%25%20(2%2F2)-brightgreen.svg" alt="Accuracy battery"></a>
@@ -87,7 +87,8 @@ look different, they visibly break.
 | **Cycle-Accurate Core** | Integer TIA-color-clock lockstep scheduler; the 6507 (documented + undocumented opcodes) cycle-exact against SingleStepTests (233/233 opcodes) and Bruce Clark's exhaustive decimal-mode test |
 | **22 of 25 Bankswitch Schemes** | 2K/4K/F8/F6/F4/CV/FA/Superchip/DPC/E7 (all 8 Curated-tier) + F0/E0/3F/3E/EF/DF/BF/UA/0840/FE/SB/X07 (12 BestEffort) — classified behind a CI-enforced Core/Curated/BestEffort honesty gate (ADR 0003) |
 | **Real Debugger** | Live 6507/TIA/RIOT/memory panels, breakpoints/step/continue, a side-effect-free memory peek, a standalone disassembler — default-on |
-| **RetroAchievements** | Native `rcheevos` integration: per-frame achievement tracking, hardcore mode, a RetroAchievements menu (off by default) |
+| **Debugger Depth** *(v1.3.0)* | A watch/conditional-breakpoint expression engine, a live JSR/RTS call stack, a per-scanline TIA write-scatter viewer, and a player/missile/ball position panel |
+| **RetroAchievements** | Native `rcheevos` integration: login, a live achievement list, leaderboards, rich presence, per-frame achievement tracking, hardcore mode, and a recent-unlocks toast list (off by default) |
 | **Save-States + Rewind** *(v1.1.0)* | A versioned binary snapshot format (ADR 0007) reusing the core's own `serde` derives; a rewind ring built on the same format |
 | **Run-Ahead** *(v1.2.0)* | Speculatively simulates a few frames ahead to hide a game's internal input lag, built on the save-state snapshot primitives — off by default, `0..=4` frames, adjustable live from Settings |
 | **Accuracy Battery** | A real `AccuracyScore`-gated battery (`rusty2600-test-harness`), CI-enforced, growing honestly rather than claiming an inflated pass rate |
@@ -97,11 +98,9 @@ look different, they visibly break.
 Planned via the iterative `v1.x.0` line toward `v2.0.0` — see
 [`to-dos/ROADMAP.md`](to-dos/ROADMAP.md) for the full plan, and
 [`CHANGELOG.md`](CHANGELOG.md) for exactly what's shipped in each release:
-a deeper debugger (watch/conditional breakpoints, a TIA scanline-event
-scatter viewer), a composable shader/filter stack, closing the remaining 3
-bankswitch schemes (4A50, AR/Supercharger, the ARM-driven DPC+/CDF/CDFJ/CDFJ+
-family), TAS movie tooling, Lua scripting, rollback netplay, and Android/iOS
-builds.
+a composable shader/filter stack, closing the remaining 3 bankswitch
+schemes (4A50, AR/Supercharger, the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family),
+TAS movie tooling, Lua scripting, rollback netplay, and Android/iOS builds.
 
 ---
 
@@ -139,15 +138,19 @@ substantially larger, separately-scoped undertaking — see
 
 - **Debugger** (`debug-hooks`, default-on) — live 6507/TIA/RIOT/memory
   panels, breakpoints/step/continue, a side-effect-free `Bus::peek`/
-  `peek_range`, a standalone disassembler.
+  `peek_range`, a standalone disassembler, a watch/conditional-breakpoint
+  expression engine, a JSR/RTS call stack, a TIA write-scatter viewer, and a
+  player/missile/ball position panel.
 - **RetroAchievements** (`retroachievements`, off by default) —
-  `rusty2600-cheevos` vendors the `rcheevos` C library; per-frame
-  achievement tracking, hardcore mode, and a menu all work. A dedicated
-  achievement-list/login/toast UI is planned.
+  `rusty2600-cheevos` vendors the `rcheevos` C library; login, a live
+  achievement list, leaderboards, rich presence, per-frame achievement
+  tracking, hardcore mode, and a recent-unlocks toast list all work.
 - **Save-states + rewind** — a versioned binary snapshot format
   (`rusty2600-core::save_state`, ADR 0007) built on the chip stack's
   existing `serde` derives; the rewind ring reuses the same encoding rather
   than paying a raw-clone's worst-case cost.
+- **Run-ahead** — speculatively simulates a few frames ahead to hide a
+  game's internal input lag, built on the save-state snapshot primitives.
 - **WebAssembly** — `wasm-winit` (full winit + wgpu + egui) or a lightweight
   `wasm-canvas` embed mode; native-only features compile out automatically.
 
@@ -256,7 +259,7 @@ seeding, and save-state versioning).
 | SingleStepTests `6502` (trimmed) | cycle-exact audit | 4,660 / 4,660 cases, 233 / 233 opcodes |
 | SingleStepTests `6502` (full corpus) | cycle-exact audit | weekly CI cron (~700 MB across 233 opcodes, not per-push) |
 | **Accuracy battery** | `rusty2600-test-harness` | **2 / 2 (100%)**, CI-enforced, ≥90% v1.0 threshold — growing honestly as real test-ROM fixtures are sourced, not inflated |
-| Workspace test suite | `cargo test --workspace` | 160 / 160 |
+| Workspace test suite | `cargo test --workspace` | 181 / 181 |
 
 Every bankswitch scheme is classified **Core** (register-decode trivial,
 always oracle-gated), **Curated** (a redistributable fixture + full test

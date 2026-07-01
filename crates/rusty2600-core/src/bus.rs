@@ -1,9 +1,66 @@
 //! The Bus owns everything mutable.
 
+use alloc::vec::Vec;
+
 use rusty2600_cart::Board;
 use rusty2600_cpu::CpuBus;
 use rusty2600_riot::Riot;
 use rusty2600_tia::Tia;
+
+/// A single CPU write observed by the debugger's optional [`WriteLog`],
+/// tagged with the TIA beam position at the moment it happened.
+#[derive(Debug, Clone, Copy)]
+pub struct WriteEvent {
+    /// The scanline the write landed on.
+    pub scanline: u16,
+    /// The color clock within that scanline.
+    pub color_clock: u16,
+    /// The 13-bit CPU address written to.
+    pub addr: u16,
+    /// The byte written.
+    pub value: u8,
+}
+
+/// The debugger's optional per-write log (`rusty2600-frontend`'s
+/// `debug-hooks` feature enables it while the debugger overlay is open).
+///
+/// Disabled by default — near-zero cost when off (one `bool` check per
+/// write). Deliberately `#[serde(skip)]` on [`Bus`]: this is debug-tooling
+/// state, not part of the emulator's real state, and must never end up in a
+/// save-state (see `docs/adr/0007-save-state-versioning.md`).
+#[derive(Debug, Default, Clone)]
+pub struct WriteLog {
+    /// Whether writes are currently being recorded.
+    pub enabled: bool,
+    events: Vec<WriteEvent>,
+}
+
+impl WriteLog {
+    /// Caps memory even if a caller forgets to [`Self::clear`] between
+    /// frames — the oldest event is dropped once this many are held.
+    const MAX_EVENTS: usize = 4096;
+
+    /// The events recorded since the last [`Self::clear`], oldest first.
+    #[must_use]
+    pub fn events(&self) -> &[WriteEvent] {
+        &self.events
+    }
+
+    /// Drops all recorded events (called once per frame by the debugger).
+    pub fn clear(&mut self) {
+        self.events.clear();
+    }
+
+    fn record(&mut self, ev: WriteEvent) {
+        if !self.enabled {
+            return;
+        }
+        if self.events.len() >= Self::MAX_EVENTS {
+            self.events.remove(0);
+        }
+        self.events.push(ev);
+    }
+}
 
 #[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 /// The main system bus for Rusty2600, holding the chips.
@@ -16,6 +73,9 @@ pub struct Bus {
     pub board: Option<rusty2600_cart::Cartridge>,
     /// Open bus value (last driven value).
     pub open_bus: u8,
+    /// The debugger's optional write log — see [`WriteLog`].
+    #[serde(skip)]
+    pub write_log: WriteLog,
 }
 
 impl core::fmt::Debug for Bus {
@@ -108,6 +168,13 @@ impl Bus {
         let addr = addr & 0x1FFF;
         self.open_bus = val;
 
+        self.write_log.record(WriteEvent {
+            scanline: self.tia.scanline,
+            color_clock: self.tia.color_clock,
+            addr,
+            value: val,
+        });
+
         if addr & 0x1000 != 0 {
             // A12 = 1 -> Cartridge
             if let Some(board) = &mut self.board {
@@ -188,5 +255,43 @@ mod tests {
             0x22,
             "peek must not trigger bankswitch hotspots"
         );
+    }
+
+    #[test]
+    fn write_log_disabled_by_default_records_nothing() {
+        let mut bus = Bus::new();
+        bus.cpu_write(0x00, 0x02); // VSYNC
+        assert!(bus.write_log.events().is_empty());
+    }
+
+    #[test]
+    fn write_log_records_when_enabled() {
+        let mut bus = Bus::new();
+        bus.write_log.enabled = true;
+        bus.cpu_write(0x06, 0xAB); // COLUP0
+        let events = bus.write_log.events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].addr, 0x06);
+        assert_eq!(events[0].value, 0xAB);
+    }
+
+    #[test]
+    fn write_log_clear_drops_all_events() {
+        let mut bus = Bus::new();
+        bus.write_log.enabled = true;
+        bus.cpu_write(0x06, 0xAB);
+        bus.cpu_write(0x07, 0xCD);
+        bus.write_log.clear();
+        assert!(bus.write_log.events().is_empty());
+    }
+
+    #[test]
+    fn write_log_caps_at_max_events() {
+        let mut bus = Bus::new();
+        bus.write_log.enabled = true;
+        for i in 0..5000u16 {
+            bus.cpu_write(0x06, u8::try_from(i % 256).unwrap_or(0));
+        }
+        assert_eq!(bus.write_log.events().len(), WriteLog::MAX_EVENTS);
     }
 }

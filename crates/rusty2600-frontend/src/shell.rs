@@ -81,6 +81,18 @@ pub enum DebugPanel {
     Riot,
     /// The memory map (the RIOT's 128 bytes + the cart window view).
     Memory,
+    /// Watch expressions + conditional breakpoints (`crate::debugger::expr`).
+    Watch,
+    /// The live JSR/RTS call stack.
+    Callstack,
+    /// A per-scanline TIA register write scatter.
+    Events,
+    /// Live player/missile/ball position + registers.
+    Pmb,
+    /// RetroAchievements: login, achievement/leaderboard lists, rich
+    /// presence, recent unlocks (`T-0802-005`).
+    #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
+    Cheevos,
 }
 
 /// Persistent shell UI toggles (which panels are open, theme, status). Separate from the emulator
@@ -171,6 +183,8 @@ impl ShellState {
         root_ui: &mut egui::Ui,
         info: &ShellInfo,
         cfg: &mut Config,
+        #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
+        cheevos: &mut crate::cheevos::CheevosState,
     ) -> Vec<MenuAction> {
         let mut actions = Vec::new();
         let ctx = root_ui.ctx().clone();
@@ -332,7 +346,13 @@ impl ShellState {
             self.render_settings(&ctx, cfg, &mut actions);
         }
         if self.debugger_visible {
-            self.render_debugger(&ctx, info, &mut actions);
+            self.render_debugger(
+                &ctx,
+                info,
+                &mut actions,
+                #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
+                cheevos,
+            );
         }
 
         actions
@@ -442,6 +462,8 @@ impl ShellState {
         #[cfg_attr(not(feature = "debug-hooks"), allow(unused_variables))] actions: &mut Vec<
             MenuAction,
         >,
+        #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
+        cheevos: &mut crate::cheevos::CheevosState,
     ) {
         let mut open = self.debugger_visible;
         egui::Window::new("Debugger")
@@ -453,6 +475,12 @@ impl ShellState {
                     ui.selectable_value(&mut self.panel, DebugPanel::Tia, "TIA");
                     ui.selectable_value(&mut self.panel, DebugPanel::Riot, "RIOT");
                     ui.selectable_value(&mut self.panel, DebugPanel::Memory, "Memory");
+                    ui.selectable_value(&mut self.panel, DebugPanel::Watch, "Watch");
+                    ui.selectable_value(&mut self.panel, DebugPanel::Callstack, "Callstack");
+                    ui.selectable_value(&mut self.panel, DebugPanel::Events, "Events");
+                    ui.selectable_value(&mut self.panel, DebugPanel::Pmb, "P/M/B");
+                    #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
+                    ui.selectable_value(&mut self.panel, DebugPanel::Cheevos, "Cheevos");
                 });
                 ui.separator();
 
@@ -478,6 +506,27 @@ impl ShellState {
                             &mut self.debugger,
                             &snap.memory_view,
                         ),
+                        DebugPanel::Watch => crate::debugger::watch_panel::render_watch_panel(
+                            ui,
+                            snap,
+                            &mut self.debugger,
+                        ),
+                        DebugPanel::Callstack => {
+                            crate::debugger::callstack::render_callstack_panel(
+                                ui,
+                                &self.debugger.call_stack,
+                            );
+                        }
+                        DebugPanel::Events => {
+                            crate::debugger::event_panel::render_event_panel(ui, &snap.tia_writes);
+                        }
+                        DebugPanel::Pmb => {
+                            crate::debugger::pmb_panel::render_pmb_panel(ui, &snap.tia);
+                        }
+                        #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
+                        DebugPanel::Cheevos => {
+                            crate::debugger::cheevos_panel::render_cheevos_panel(ui, cheevos);
+                        }
                     }
                     for action in debug_actions {
                         actions.push(match action {

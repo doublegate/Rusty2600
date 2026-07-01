@@ -335,7 +335,7 @@ impl App {
     /// `cpu_read`) for the disassembly + memory views so opening the debugger can
     /// never itself perturb bankswitch state or RIOT timer/read latches.
     #[cfg(feature = "debug-hooks")]
-    fn build_debug_snapshot(emu: &EmuCore, memory_base: u16) -> crate::debugger::DebugSnapshot {
+    fn build_debug_snapshot(emu: &mut EmuCore, memory_base: u16) -> crate::debugger::DebugSnapshot {
         use crate::debugger::{CpuSnapshot, RiotSnapshot, TiaSnapshot};
 
         let cpu = CpuSnapshot {
@@ -358,6 +358,9 @@ impl App {
                 "CXM0P:{:02X} CXM1P:{:02X} CXP0FB:{:02X} CXP1FB:{:02X} CXM0FB:{:02X} CXM1FB:{:02X} CXBLPF:{:02X} CXPPMM:{:02X}",
                 c.cxm0p, c.cxm1p, c.cxp0fb, c.cxp1fb, c.cxm0fb, c.cxm1fb, c.cxblpf, c.cxppmm
             ),
+            nusiz: objects.nusiz,
+            hm: objects.hm,
+            refp: objects.refp,
         };
 
         let riot_chip = &emu.system.bus.riot;
@@ -395,12 +398,26 @@ impl App {
             .bus
             .peek_range(memory_base, crate::debugger::MEMORY_VIEW_LEN);
 
+        let riot_ram = emu.system.bus.peek_range(0x0080, 128);
+
+        // Recording is enabled here (not just gated to the Events panel
+        // specifically) so switching to that panel immediately shows this
+        // frame's writes rather than waiting a frame for the flag to catch
+        // up; the cost is one extra `bool` check + capped `Vec` push per
+        // write, only while the debugger overlay is open at all.
+        emu.system.bus.write_log.enabled = true;
+        let tia_writes = emu.system.bus.write_log.events().to_vec();
+        emu.system.bus.write_log.clear();
+
         crate::debugger::DebugSnapshot {
             cpu,
             tia,
             riot,
             disassembly_at_pc,
             memory_view,
+            riot_ram,
+            frame: emu.frame_count,
+            tia_writes,
         }
     }
 
@@ -445,9 +462,6 @@ impl App {
 
         // --- (1) Step one frame + copy the framebuffer + read-only info under a BRIEF lock. ---
         let (fb, fb_dims, info) = {
-            #[cfg(feature = "emu-thread")]
-            let emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
-            #[cfg(not(feature = "emu-thread"))]
             let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
 
             #[cfg(not(feature = "emu-thread"))]
@@ -484,8 +498,18 @@ impl App {
 
             let dims = emu.fb_dims();
             #[cfg(feature = "debug-hooks")]
-            let debug = (active.shell.debugger_visible && emu.rom_loaded)
-                .then(|| Self::build_debug_snapshot(&emu, active.shell.debugger.memory_base));
+            let debug = if active.shell.debugger_visible && emu.rom_loaded {
+                Some(Self::build_debug_snapshot(
+                    &mut emu,
+                    active.shell.debugger.memory_base,
+                ))
+            } else {
+                // No point paying the write-log recording cost while the
+                // debugger overlay (and specifically its Events panel) isn't
+                // even open.
+                emu.system.bus.write_log.enabled = false;
+                None
+            };
             #[cfg(feature = "retroachievements")]
             if emu.rom_loaded {
                 let events = active.cheevos.pump(&mut |addr| emu.system.bus.peek(addr));
@@ -536,8 +560,16 @@ impl App {
         let ctx = active.egui_ctx.clone();
         let shell = &mut active.shell;
         let config = &mut active.config;
+        #[cfg(feature = "retroachievements")]
+        let cheevos = &mut active.cheevos;
         let full_output = ctx.run_ui(raw_input, |ui| {
-            actions = shell.render(ui, &info, config);
+            actions = shell.render(
+                ui,
+                &info,
+                config,
+                #[cfg(feature = "retroachievements")]
+                cheevos,
+            );
         });
         active
             .egui_state
@@ -594,7 +626,10 @@ impl App {
 
     /// Dispatch the menu actions collected during the egui pass (AFTER the pass, so the emu lock is
     /// never taken inside the egui closure).
-    #[allow(clippy::too_many_lines)]
+    // `significant_drop_tightening`: the `DebugStep`/`DebugContinue` arms genuinely need the emu
+    // lock held for their entire body (read-then-step-then-update-callstack, or the whole
+    // stepping loop) — there's no meaningful narrower scope to tighten to.
+    #[allow(clippy::too_many_lines, clippy::significant_drop_tightening)]
     fn dispatch_actions(
         active: &mut Active,
         event_loop: &ActiveEventLoop,
@@ -677,7 +712,18 @@ impl App {
                     let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
                     emu.paused = true;
                     active.shell.paused = true;
+                    // A single side-effect-free peek is trivially cheap here
+                    // (unlike `MenuAction::DebugContinue`'s tight loop, where
+                    // `Bus::peek`'s full-clone cost would multiply badly) —
+                    // safe to keep the call stack accurate on every Step.
+                    let pc_before = emu.system.cpu.pc;
+                    let opcode = emu.system.bus.peek(pc_before);
                     emu.system.step_instruction();
+                    crate::debugger::callstack::track_instruction(
+                        &mut active.shell.debugger.call_stack,
+                        opcode,
+                        pc_before,
+                    );
                 }
                 #[cfg(feature = "debug-hooks")]
                 MenuAction::DebugContinue => {
@@ -687,6 +733,11 @@ impl App {
                     emu.paused = true;
                     active.shell.paused = true;
                     for _ in 0..MAX_STEPS {
+                        // NOTE: the call stack is deliberately NOT tracked here —
+                        // `Bus::peek`'s full-clone cost (TIA's video/audio
+                        // buffers included) would multiply across up to
+                        // MAX_STEPS iterations. Only `DebugStep` (one call per
+                        // click, never a loop) keeps it accurate.
                         emu.system.step_instruction();
                         if active
                             .shell
@@ -694,6 +745,24 @@ impl App {
                             .breakpoints
                             .contains(&emu.system.cpu.pc)
                         {
+                            break;
+                        }
+                        // Watch-armed conditional breakpoints: read RIOT RAM
+                        // directly (a slice reference, not `Bus::peek`'s
+                        // clone) so this check stays cheap even at MAX_STEPS.
+                        let ctx = crate::debugger::expr::EvalContext {
+                            a: emu.system.cpu.a,
+                            x: emu.system.cpu.x,
+                            y: emu.system.cpu.y,
+                            s: emu.system.cpu.s,
+                            pc: emu.system.cpu.pc,
+                            scanline: emu.system.bus.tia.scanline,
+                            color_clock: emu.system.bus.tia.color_clock,
+                            frame: emu.frame_count,
+                            mem: &emu.system.bus.riot.ram,
+                            mem_base: 0x0080,
+                        };
+                        if active.shell.debugger.any_breakpoint_watch_triggered(&ctx) {
                             break;
                         }
                     }

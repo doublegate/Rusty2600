@@ -79,6 +79,10 @@ pub struct EmuCore {
     /// audio device, or run-ahead would emit N frames of audio per real
     /// ~16.67 ms tick and drift out of sync.
     pub audio_output_suppressed: bool,
+    /// Frames completed since power-on/ROM-load — a `frame` term the
+    /// debugger's watch-expression engine (`crate::debugger::expr`) can
+    /// reference, and a natural counter for future TAS/movie work.
+    pub frame_count: u64,
     /// State for the high-pass DC blocker.
     dc_blocker_x: f32,
     dc_blocker_y: f32,
@@ -100,6 +104,7 @@ impl EmuCore {
             snapshots: std::collections::VecDeque::with_capacity(600),
             rewind_capture_suppressed: false,
             audio_output_suppressed: false,
+            frame_count: 0,
             dc_blocker_x: 0.0,
             dc_blocker_y: 0.0,
         }
@@ -124,6 +129,7 @@ impl EmuCore {
         system.reset();
         self.system = system;
         self.snapshots.clear();
+        self.frame_count = 0;
         self.rom_loaded = true;
         Ok(())
     }
@@ -133,6 +139,7 @@ impl EmuCore {
     pub fn close_rom(&mut self) {
         self.system = System::new(0);
         self.snapshots.clear();
+        self.frame_count = 0;
         self.rom_loaded = false;
         self.board_tier = None;
         self.framebuffer.iter_mut().for_each(|b| *b = 0);
@@ -276,6 +283,8 @@ impl EmuCore {
                 }
             }
         }
+
+        self.frame_count = self.frame_count.wrapping_add(1);
     }
 
     /// Produce exactly one frame's worth of color clocks, accumulating beam dots into
@@ -375,6 +384,8 @@ impl EmuCore {
                 frame.put_dot(x, y, rgb);
             }
         }
+
+        self.frame_count = self.frame_count.wrapping_add(1);
 
         // Publish the produced frame
         frames.publish(frame);

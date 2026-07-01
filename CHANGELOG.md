@@ -6,6 +6,66 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-01 - "Scope"
+
+Debugger depth plus the long-deferred RetroAchievements achievement-list/
+login/toast UI (`T-0802-005`).
+
+### Added
+
+- **A watch/conditional-breakpoint expression engine**
+  (`rusty2600-frontend::debugger::expr` + `watch_panel`): a small grammar
+  (`a == $42`, `[$80] != 0`, `scanline >= 192 && color_clock < 20`, register
+  names `a x y s pc scanline color_clock frame`, `[addr]` memory peeks
+  against RIOT RAM, hex `$..`/decimal literals, `== != <= >= < >`, `&&`/`||`)
+  evaluated against a live `EvalContext`. Watches display live PASS/FAIL/
+  ERROR; a "break" checkbox arms one as a real conditional breakpoint,
+  checked every iteration of `MenuAction::DebugContinue`'s step loop
+  against RIOT RAM read directly (not `Bus::peek`'s full-clone path, which
+  would multiply badly across up to 1,000,000 iterations).
+- **`rusty2600-core::WriteLog`** (`Bus::write_log`): an optional per-write
+  log (scanline/color-clock-tagged, capped at 4,096 entries), disabled by
+  default and `#[serde(skip)]` on `Bus` (debug-tooling state, never part of
+  a save-state — see ADR 0007). Backs the new Events panel.
+- **`debugger::event_panel`**: a per-scanline scatter of TIA register
+  writes (`COLUP0/1`, `COLUPF`, `COLUBK`, `GRP0/1`, `HMOVE`, `RESP0`) — the
+  TIA has no VRAM/nametables, so this *is* how "the picture" gets built,
+  making timing quirks like the HMOVE comb visually debuggable.
+- **`debugger::callstack`**: a live JSR/RTS call stack, tracked on every
+  `DebugStep` (a single side-effect-free peek per click is cheap; tracking
+  was deliberately left out of `DebugContinue`'s tight loop for the same
+  clone-cost reason as the watch engine).
+- **`debugger::pmb_panel`**: live player/missile/ball horizontal counters,
+  `NUSIZx` copy-spacing decode, `REFPx` reflect, `HMxx` fine-adjust, and a
+  160-dot scanline ruler — the 2600 analog of an OAM sprite grid (the 2600
+  has exactly 5 fixed objects, no sprite table to browse).
+- **RetroAchievements login + achievement-list panel** (`T-0802-005`,
+  `debugger::cheevos_panel`): login/logout (`CheevosState::begin_login`,
+  tracked via a new `LoginState`), a live achievement list (unlocked/total,
+  points), a leaderboard list, rich presence, and a "recent unlocks" toast
+  list (capped at 20) surfaced alongside the existing status-bar text path.
+  All UI plumbing over `RaClient`'s already-complete surface — no new
+  client capability needed.
+- `EmuCore::frame_count`: frames completed since power-on/ROM-load (the
+  watch engine's `frame` operand; also a natural counter for future
+  TAS/movie work).
+
+### Notes
+
+- 181 tests passing workspace-wide (184 with `--features test-roms`), up
+  from 160/163 at `[1.2.0]` — 21 new tests across the expression engine,
+  the write log, and the call stack tracker.
+- The new panels live inside the existing Debugger window (gated by
+  `debug-hooks`, default-on) rather than as a separate window — including
+  the RetroAchievements panel, which is therefore only reachable when
+  `debug-hooks` is also enabled alongside `retroachievements`. Both are
+  default-on, so this is a non-issue for the default build; a fully
+  independent RA window is a possible future refinement, not pursued here.
+- Clippy verified clean under `--features retroachievements` in addition to
+  the default feature set (not part of the automated `ci-gate` sequence,
+  which never uses `--all-features`, but checked by hand this release since
+  this is the first release touching cheevos-panel code paths).
+
 ## [1.2.0] - 2026-07-01 - "Foresight"
 
 Run-ahead, built entirely on `[1.1.0]`'s save-state/rewind snapshot

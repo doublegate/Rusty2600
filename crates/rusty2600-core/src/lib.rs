@@ -24,7 +24,7 @@ pub use rusty2600_cpu as cpu;
 pub use rusty2600_riot as riot;
 pub use rusty2600_tia as tia;
 
-pub use bus::{AudioBus, Bus, VideoBus};
+pub use bus::{AudioBus, Bus, VideoBus, WriteEvent, WriteLog};
 pub use save_state::{SaveState, SaveStateError};
 pub use scheduler::System;
 

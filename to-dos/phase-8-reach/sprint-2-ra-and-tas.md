@@ -42,11 +42,18 @@ TAS movies remain out of scope for v1.0.0 (Beyond-v1.0, unchanged).
   load/close hooks call `begin_load_game`/`unload_game`; a new Emulation ->
   RetroAchievements menu shows game-recognition status and a hardcore-mode
   toggle; achievement-unlock/server events surface as status-bar text.
-- [ ] `T-0802-005` (not started): A dedicated achievement-list panel, a login
-  dialog, and a rich-presence / unlock-toast HUD. The backend is real and
-  events fire correctly today (surfaced as plain status-bar text); this
-  ticket is the DEDICATED UI surface for them, deferred as a distinct,
-  UI-heavy follow-up rather than folded into the initial wiring.
+- [x] `T-0802-005` (v1.3.0, DONE): A dedicated achievement-list panel, a
+  login dialog, and a rich-presence / recent-unlocks toast list —
+  `crates/rusty2600-frontend/src/debugger/cheevos_panel.rs`, wired as a
+  new tab in the existing Debugger window. `CheevosState` gained
+  `begin_login`/`logout`/`login_state`/`achievement_list`/
+  `leaderboard_list`/`rich_presence`/`game_summary`, all thin wrappers over
+  `RaClient`'s already-complete surface (no new client capability needed).
+  The unlock-toast list is anchored inside the panel (a capped "Recent
+  unlocks" list) rather than a separate screen-wide floating HUD overlay —
+  a deliberate scope cut, not pursued given the existing status-bar text
+  path already surfaces unlocks in real time. See `CHANGELOG.md`'s
+  `[1.3.0]` entry.
 - [ ] `T-0802-006` (not started): TAS movies (record/play/branch + a
   deterministic movie format) and a TAStudio-style editor. Out of scope for
   v1.0.0 per the ROADMAP's non-requirements list; tracked here for

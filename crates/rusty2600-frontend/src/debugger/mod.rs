@@ -6,9 +6,27 @@
 //! under the brief lock in `app.rs`, then handed to the (lock-free) render
 //! functions here.
 
+pub mod callstack;
+#[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
+pub mod cheevos_panel;
 pub mod disasm;
+pub mod event_panel;
+pub mod expr;
+pub mod pmb_panel;
+pub mod watch_panel;
 
 use std::collections::BTreeSet;
+
+/// One user-defined watch expression (`crate::debugger::expr`'s grammar).
+#[derive(Debug, Clone)]
+pub struct WatchEntry {
+    /// The expression text, e.g. `"a == $42"` or `"[$80] != 0"`.
+    pub expr: String,
+    /// When true, this watch also acts as a conditional breakpoint —
+    /// `MenuAction::DebugContinue`'s step loop halts the instant it
+    /// evaluates true, in addition to the existing PC breakpoint set.
+    pub break_when_true: bool,
+}
 
 /// Persistent debugger UI state: breakpoints, the memory-viewer cursor, and
 /// text-input buffers.
@@ -25,6 +43,13 @@ pub struct DebuggerState {
     pub memory_base: u16,
     /// The memory panel's address-range text input buffer.
     pub memory_base_input: String,
+    /// The watch/conditional-breakpoint expression list (`expr`'s grammar).
+    pub watches: Vec<WatchEntry>,
+    /// The text the user is typing into the "add watch" field.
+    pub watch_input: String,
+    /// The live JSR/RTS call stack, return addresses oldest-first —
+    /// updated by `crate::app`'s Step/Continue handlers (see `callstack`).
+    pub call_stack: Vec<u16>,
 }
 
 impl DebuggerState {
@@ -43,6 +68,30 @@ impl DebuggerState {
         if let Ok(addr) = u16::from_str_radix(self.memory_base_input.trim_start_matches('$'), 16) {
             self.memory_base = addr;
         }
+    }
+
+    /// Add `watch_input` as a new (display-only, not breakpoint-armed)
+    /// watch entry, clearing the input. No-ops on an empty/whitespace input.
+    pub fn commit_watch_input(&mut self) {
+        let text = self.watch_input.trim();
+        if !text.is_empty() {
+            self.watches.push(WatchEntry {
+                expr: text.to_string(),
+                break_when_true: false,
+            });
+            self.watch_input.clear();
+        }
+    }
+
+    /// Evaluates every `break_when_true` watch against `ctx`, returning
+    /// true if any evaluates to true (an evaluation error counts as false —
+    /// a typo in one watch must never itself halt execution).
+    #[must_use]
+    pub fn any_breakpoint_watch_triggered(&self, ctx: &expr::EvalContext) -> bool {
+        self.watches
+            .iter()
+            .filter(|w| w.break_when_true)
+            .any(|w| expr::evaluate(&w.expr, ctx) == Ok(true))
     }
 }
 
@@ -63,6 +112,38 @@ pub struct DebugSnapshot {
     /// [`MEMORY_VIEW_LEN`] side-effect-free bytes starting at the memory
     /// panel's current base address (one `Bus::peek_range` call).
     pub memory_view: Vec<u8>,
+    /// The RIOT's full 128 B of RAM (`$0080-$00FF`) — the console's only
+    /// general RAM, and the address range [`expr::EvalContext`]'s `[addr]`
+    /// operand actually resolves against.
+    pub riot_ram: Vec<u8>,
+    /// Frames completed since power-on/ROM-load (`expr`'s `frame` operand).
+    pub frame: u64,
+    /// This frame's TIA write events (`rusty2600_core::WriteEvent`), for
+    /// [`event_panel`] — only populated while that panel is selected, since
+    /// recording has a (small but nonzero) per-write cost.
+    pub tia_writes: Vec<rusty2600_core::WriteEvent>,
+}
+
+impl DebugSnapshot {
+    /// Builds an [`expr::EvalContext`] from this snapshot, peeking `[addr]`
+    /// operands against [`Self::riot_ram`] (`$0080-$00FF`; any other address
+    /// reads as `0` — that range is the console's only general RAM and the
+    /// only address space a watch expression can usefully condition on).
+    #[must_use]
+    pub fn eval_context(&self) -> expr::EvalContext<'_> {
+        expr::EvalContext {
+            a: self.cpu.a,
+            x: self.cpu.x,
+            y: self.cpu.y,
+            s: self.cpu.s,
+            pc: self.cpu.pc,
+            scanline: self.tia.scanline,
+            color_clock: self.tia.color_clock,
+            frame: self.frame,
+            mem: &self.riot_ram,
+            mem_base: 0x0080,
+        }
+    }
 }
 
 /// The 6507's user-visible register file.
@@ -95,6 +176,12 @@ pub struct TiaSnapshot {
     pub colu: [u8; 4],
     /// The 15 pairwise collision latches, formatted as a short hex summary.
     pub collisions: String,
+    /// P0/P1's `NUSIZx` (copy count/spacing + missile-width bits).
+    pub nusiz: [u8; 2],
+    /// P0/P1/M0/M1/BL's `HMxx` fine-adjust (signed, `-8..=7`).
+    pub hm: [i8; 5],
+    /// P0/P1's `REFPx` (horizontal mirror) latch.
+    pub refp: [bool; 2],
 }
 
 /// The RIOT's timer + I/O port state (RAM is shown via the shared memory
