@@ -7,11 +7,11 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current release: v0.4.0 "Breadth" (Batches 1-2).** Phase 0 (foundation)
-through the full Curated-tier board set (Phase 4) are complete; Phase 7
-(BestEffort breadth) is underway — 7 of the ~50-scheme long tail landed
-(F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC), plus a `Board::snoop_write`
-architecture extension several more schemes need. Phase 5 (frontend) is
+**Current release: v0.4.1.** Phase 0 (foundation) through the full
+Curated-tier board set (Phase 4) are complete; Phase 7 (BestEffort breadth)
+is underway — 9 of the ~50-scheme long tail landed (F0, E0, 3F, 3E,
+EF/EFSC, DF/DFSC, BF/BFSC, UA, 0840), plus `Board::snoop_write`/
+`snoop_read` architecture extensions several more schemes need. Phase 5 (frontend) is
 functionally complete except the real debugger (`debug-hooks`, targeted
 v0.5.0); Phase 6 (accuracy-to-100) is actively underway (RIOT timing, TIA
 collision continuity, seeded power-on state, the full SingleStepTests
@@ -56,7 +56,8 @@ Core/Curated set:
 | v0.1.1 / v0.1.2 | Truth-pass (docs/code reconciliation) + release-CI fixes |
 | v0.2.0 "Cycle-Exact" | RIOT/TIA accuracy hardening, ADRs 0005/0006, full SingleStepTests + Klaus decimal in CI, CPU-crate cleanup |
 | v0.3.0 "Curated" | Curated-tier cart schemes finished (CV/FA/Superchip/DPC/E7), all wired into `detect()` via Stella-ported hotspot heuristics (`T-0401-009`) |
-| **v0.4.0 "Breadth"** (current) | BestEffort cart breadth toward Stella-adjacent parity (staged patch train) — Batches 1-2 done (F0/E0/3F/3E/EF/DF/BF, 7 schemes) + `Board::snoop_write`; Batches 3-5 (DPC-family, ARM/peripheral, multicarts) target v0.4.1+ |
+| v0.4.0 "Breadth" | BestEffort cart breadth toward Stella-adjacent parity (staged patch train) — Batches 1-2 done (F0/E0/3F/3E/EF/DF/BF, 7 schemes) + `Board::snoop_write` |
+| **v0.4.1** (current) | Continues the Batch 2 patch train — UA/0840 (2 more schemes) + `Board::snoop_read`; FE/SB/X07/4A50 and Batches 3-5 (DPC-family, ARM/peripheral, multicarts) target v0.4.2+ |
 | v0.5.0 | Real `debug-hooks` debugger; performance benches populated |
 | v0.6.0 | RetroAchievements (`rusty2600-cheevos`) |
 | v0.7.0 | The accuracy battery itself stood up + CI regression gate |

@@ -13,12 +13,12 @@ the timebase, the 6507 runs on every third clock, `WSYNC`/`RDY` beam-stalls the 
 owns everything mutable, a one-directional `no_std + alloc` chip-crate graph, a hard determinism
 contract, and test-ROM-is-spec. The frontend is pure Rust (`winit` + `wgpu` + `cpal` + `egui`).
 
-> **Status: v0.4.0 — real chip cores, full Curated tier + growing BestEffort breadth.** The 6507
+> **Status: v0.4.1 — real chip cores, full Curated tier + growing BestEffort breadth.** The 6507
 > (documented + undocumented opcodes), the TIA (beam-raced video + two-channel audio), and the RIOT
 > are implemented and tested — cycle-exact against a trimmed SingleStepTests corpus (4,660 cases,
-> 233 opcodes, 100% passing) and 119 tests passing workspace-wide (121 with `--features test-roms`).
-> All 8 Curated-tier bankswitch schemes plus 7 BestEffort schemes are implemented and wired into
-> automatic detection (2K/4K/F8/F6/F4/CV/FA/Superchip/DPC/E7/F0/E0/3F/3E/EF/DF/BF — 17 of 25
+> 233 opcodes, 100% passing) and 123 tests passing workspace-wide (125 with `--features test-roms`).
+> All 8 Curated-tier bankswitch schemes plus 9 BestEffort schemes are implemented and wired into
+> automatic detection (2K/4K/F8/F6/F4/CV/FA/Superchip/DPC/E7/F0/E0/3F/3E/EF/DF/BF/UA/0840 — 19 of 25
 > catalogued schemes); the debugger, RetroAchievements, and HD-pack feature flags are still unwired
 > stubs. See `docs/STATUS.md` for the authoritative per-suite / per-chip state and
 > `to-dos/ROADMAP.md` for the full plan through v1.0.0.
@@ -30,7 +30,7 @@ contract, and test-ROM-is-spec. The frontend is pure Rust (`winit` + `wgpu` + `c
 | `rusty2600-cpu` | MOS 6507 (the 6502 in a 28-pin package: A0–A12, no exposed NMI/IRQ pins) |
 | `rusty2600-tia` | TIA (Television Interface Adaptor) — beam-raced **video AND audio** |
 | `rusty2600-riot` | MOS 6532 RIOT — the console's only RAM (128 B) + I/O ports + interval timer |
-| `rusty2600-cart` | Tiered bankswitch catalog behind an honesty gate — all 8 Curated schemes implemented (2K/4K/F8/F6/F4/CV/FA/Superchip/DPC/E7); 7 of the ~50-scheme BestEffort long tail implemented so far (F0/E0/3F/3E/EF/DF/BF), the rest catalogued in `docs/cart.md` and landing through the rest of v0.4.x |
+| `rusty2600-cart` | Tiered bankswitch catalog behind an honesty gate — all 8 Curated schemes implemented (2K/4K/F8/F6/F4/CV/FA/Superchip/DPC/E7); 9 of the ~50-scheme BestEffort long tail implemented so far (F0/E0/3F/3E/EF/DF/BF/UA/0840), the rest catalogued in `docs/cart.md` and landing through the rest of v0.4.x |
 | `rusty2600-core` | the Bus + the master-clock lockstep scheduler (the tie crate) |
 | `rusty2600-frontend` | the `winit + wgpu + cpal + egui` shell (binary `rusty2600`) |
 | `rusty2600-test-harness` | the AccuracyCoin-equivalent oracle + the bankswitch-tier honesty gate |

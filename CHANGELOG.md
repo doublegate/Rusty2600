@@ -6,6 +6,38 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-01
+
+Continues the v0.4.x BestEffort patch train with two more Batch 2 schemes
+and the read-side counterpart of v0.4.0's `snoop_write` hook.
+
+### Added
+
+- **`Board::snoop_read(addr, val)`:** a new default-no-op hook, called from
+  `Bus::cpu_read` for every read the console routes to TIA/RIOT space,
+  after the value TIA/RIOT would return is computed. Simpler than
+  originally scoped in v0.4.0's notes: the schemes needing this only
+  OBSERVE the access and trigger a bankswitch side effect — they still
+  return exactly what TIA/RIOT would have anyway, so no read-redirection
+  capability was needed.
+- **UA (UA Ltd. / Brazilian Digivision):** 8 KiB ROM, 2×4K banks,
+  bank-select triggered by a read OR write to `$220`/`$240` (or the
+  Digivision variant's `$2C0`/`$FB0`).
+- **0840 (EconoBank):** 8 KiB ROM, 2×4K banks, same shape, hotspots at
+  `$800`/`$840`.
+
+Both wired into `detect()` at 8 KiB, checked after 3E/3F and before falling
+back to plain F8, matching Stella's own priority order.
+
+### Notes
+
+- FE (Activision SCABS) remains unimplemented: it additionally needs the
+  snooped *value* (not just the address) to pick a bank — `snoop_read`'s
+  `val` parameter already supports this, so FE's remaining work is its own
+  decode logic, not a further interface change. SB/X07/4A50 likely only
+  need `snoop_read` too, per their own Stella source (also not yet
+  implemented).
+
 ## [0.4.0] - 2026-07-01 - "Breadth" (Batches 1-2)
 
 The first installment of the BestEffort bankswitch long tail (the plan's
