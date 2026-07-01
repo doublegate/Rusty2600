@@ -1,0 +1,26 @@
+name: Full SingleStepTests audit
+on:
+  schedule:
+    # Weekly, not per-push: this downloads the full ~10K-cases/opcode
+    # upstream corpus (~700 MB across 233 opcodes) rather than the trimmed
+    # 20-cases/opcode subset committed at tests/cpu-timing/singlestep-6502/,
+    # which the fast per-push `test` job in ci.yml already covers.
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+jobs:
+  full-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96
+      - name: Fetch the full SingleStepTests corpus
+        run: |
+          mkdir -p /tmp/singlestep-full
+          for f in tests/cpu-timing/singlestep-6502/*.json; do
+            op=$(basename "$f" .json)
+            python3 tests/cpu-timing/fetch-vectors.py "$op" "/tmp/singlestep-full/$op.json" 999999
+          done
+      - name: Run the cycle-exact audit against the full corpus
+        env:
+          SINGLESTEP_VECTORS_DIR: /tmp/singlestep-full
+        run: cargo test -p rusty2600-cpu --test singlestep_test -- --nocapture

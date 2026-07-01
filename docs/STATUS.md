@@ -31,14 +31,15 @@ earlier draft that under-reported the actual pass counts below.
 
 | Suite | Layer | Pass / Total |
 |---|---|---|
-| Klaus `6502_functional_test` | test-harness | 1 / 1 |
-| Klaus `6502_decimal_test` (BCD) | golden-log | not yet wired (v0.2.0) |
+| Klaus `6502_functional_test` | test-harness (`--features test-roms`) | 1 / 1 |
+| Klaus `6502_decimal_test` (BCD) | test-harness (`--features test-roms`) | 1 / 1 — wired v0.2.0; exhaustive 256×256×2-carry-in `ADC`/`SBC` decimal-mode sweep, `ERROR=0` (bit-exact) |
 | SingleStepTests/`65x02` `6502` (trimmed: 20 cases/opcode) | cycle-exact audit | 4,660 / 4,660 cases, 233 / 233 opcodes |
-| SingleStepTests/`65x02` `6502` (full corpus, ~10K cases/opcode) | cycle-exact audit | not yet run in CI (`SINGLESTEP_VECTORS_DIR` override exists; a dedicated slow CI job is v0.2.0) |
+| SingleStepTests/`65x02` `6502` (full corpus, ~10K cases/opcode) | cycle-exact audit | wired v0.2.0 — `.github/workflows/singlestep-full.yml`, weekly cron + manual dispatch (not per-push: ~700 MB download across 233 opcodes) |
 | TIA timing / draw ROMs | test-ROM corpus | not yet wired (v0.7.0) |
 | Stella regression corpus | test-ROM corpus | not yet wired (v0.7.0/v0.8.x) |
 | Accuracy battery (AccuracyCoin-equivalent) | battery | not yet stood up (v0.7.0) |
-| **Workspace test suite** | `cargo test --workspace` | **74 / 74** |
+| **Workspace test suite** | `cargo test --workspace` | **79 / 79** (both Klaus tests moved to `--features test-roms`, gated out of the fast default path — see `crates/rusty2600-test-harness/tests/klaus_test.rs`) |
+| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **81 / 81** |
 
 ## Board / mapper matrix
 
