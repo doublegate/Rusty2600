@@ -21,18 +21,37 @@ confirming test ROM.
   `Sentinel`/`run_cpu_until_sentinel` runner (v0.8.0) rather than each
   hand-rolling its own PC-trap loop. `GoldenLogDiffer` captures a real
   `(PC, A, X, Y, SP, P, cycle)` record per retired instruction and diffs it
-  against a loaded golden log — the capture/diff machinery is real, but no
-  externally-oracled golden log is bundled yet (`bundled()` honestly
-  reports `false` until one is; Klaus's own internal pass/fail trap remains
-  the authoritative CPU oracle meanwhile). Use the `6502` set, **not**
-  `nes6502` (which ignores decimal). Per ref-docs/research-report.md §11.
+  against a loaded golden log. **`T-0602-007` closed (v1.8.0):**
+  `tests/golden/klaus_functional_test_gopher2600.trace` bundles a genuine
+  externally-oracled trace — the first 20,000 retired instructions of the
+  Klaus functional test, captured by running Gopher2600's `hardware/cpu`
+  package directly (the same technique its own `cpu_test.go` uses to unit-test
+  the CPU in isolation) against the identical ROM. `GoldenLogDiffer::bundled()`
+  now reports `true`; `crates/rusty2600-test-harness/tests/golden_log_test.rs`
+  asserts `first_divergence() == None` — two independently-implemented 6502
+  cores agreeing register-for-register and cycle-for-cycle is genuine
+  external validation, distinct from Klaus's own internal pass/fail trap
+  (which only proves the ROM's self-check passed). Deliberately bounded to
+  20,000 instructions, not the full ~30M-instruction run, to keep the
+  fixture a reasonable committed size — still a real, meaningful
+  confirmation over the test's early control flow. Use the `6502` set,
+  **not** `nes6502` (which ignores decimal). Per ref-docs/research-report.md §11.
 - **Layer 3 — test-ROM corpus.** TIA timing/draw ROMs (beam-racing, RESPx,
   HMOVE-comb, collisions) verified against Stella + reference scanline buffers,
   plus the Stella regression corpus for mapper/audio/per-quirk behaviour.
   `run_until_complete(system, max_color_clocks)` steps until the suite's result
-  protocol fires and asserts the code — still a stub; no TIA-timing test-ROM
-  fixtures are bundled yet to define the protocol against (v0.8.0 honesty
-  note, `T-0602-006`).
+  protocol fires and asserts the code — **still a stub, and stays one**
+  (`T-0602-006`): researched (v1.8.0) whether any freely-redistributable
+  2600-specific TIA/RIOT test-ROM corpus exists beyond what's already bundled
+  (`tests/roms/test_suite/`, Tom Harte's SingleStepTests) — none found.
+  Gopher2600's own README makes the same admission (it has never obtained
+  permission to redistribute its TIA/RIOT test ROMs either), and the Atari
+  Diagnostic Test Cartridge 2.0 is official service-center software, not
+  freely redistributable. This is a real, permanent scope boundary, not a
+  gap closed by more effort — TIA/RIOT accuracy work continues via the
+  differential-oracle method (`rusty2600-gopher-differential-oracle` project
+  memory) against specific known-hard titles, the same technique that found
+  the real Frogger WSYNC-jitter and Pitfall II RIOT-timer bugs.
 - **Layer 4 — accuracy battery** (the AccuracyCoin-equivalent), real as of
   v0.8.0. `tests/accuracy_battery.rs` runs the bundled Klaus oracles through
   `run_cpu_until_sentinel`, records each into a real `AccuracyScore`, and

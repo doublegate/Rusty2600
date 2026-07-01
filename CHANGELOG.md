@@ -6,6 +6,59 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-07-01 - "Oracle"
+
+Accuracy battery depth, grown honestly: a genuine externally-oracled
+golden CPU trace closes `T-0602-007`; `T-0602-006` stays a documented,
+permanent scope boundary rather than a gap papered over.
+
+### Added
+
+- **A genuine externally-oracled golden CPU trace** (`T-0602-007`):
+  `tests/golden/klaus_functional_test_gopher2600.trace` bundles the first
+  20,000 retired instructions of the CC0 Klaus `6502_functional_test`,
+  captured by running Gopher2600's `hardware/cpu` package directly against
+  the identical ROM (the same technique its own `cpu_test.go` uses to
+  unit-test the CPU in isolation, via the project's established
+  differential-oracle workflow). `GoldenLogDiffer::bundled()` now reports
+  `true`. A new integration test,
+  `crates/rusty2600-test-harness/tests/golden_log_test.rs`, runs
+  Rusty2600's own `Cpu` over the same instructions from an explicit common
+  baseline and asserts `first_divergence() == None` — two
+  independently-implemented 6502 cores agreeing register-for-register and
+  cycle-for-cycle, real external validation distinct from Klaus's own
+  internal pass/fail trap (which only proves the ROM's self-check passed,
+  not that either emulator matches an independent reference).
+
+### Notes
+
+- **`T-0602-006` (a TIA-timing test-ROM corpus for Layer 3's
+  `run_until_complete`) stays a permanent stub, not a gap to close later.**
+  Researched again this release: no freely-redistributable 2600-specific
+  TIA/RIOT test-ROM corpus exists. Gopher2600's own README makes the same
+  admission (it has never obtained permission to redistribute its
+  TIA/RIOT test ROMs either), and the Atari Diagnostic Test Cartridge 2.0
+  is official service-center software, not freely redistributable.
+  TIA/RIOT accuracy work continues via the differential-oracle method
+  against specific known-hard commercial titles — the same technique that
+  already found the real Frogger WSYNC-jitter and Pitfall II RIOT-timer
+  bugs — not a canned test-ROM suite.
+- The golden trace is deliberately bounded to 20,000 instructions, not the
+  full ~30-million-instruction Klaus run: a full trace would be an
+  impractically large committed fixture, and 20,000 instructions already
+  is a real, meaningful confirmation over the test's early control flow.
+- Both sides of the cross-check start from an explicit, documented common
+  baseline (`A=X=Y=0, SP=0xFF, P=0x34, PC=0x0400`) rather than each
+  emulator's own reset-vector-fetch ceremony, which is an
+  implementation-specific detail neither side claims to model identically
+  and isn't a real accuracy question the Klaus test exercises.
+- The PAL 192-vs-228 visible-line-budget question (`docs/compatibility.md`)
+  remains open, per ADR 0003's honesty principle — no new evidence
+  surfaced this release, so it stays flagged rather than guessed.
+- 238 tests passing workspace-wide (unchanged — the new golden-trace test
+  is `--features test-roms`-gated); 242 with `--features test-roms`
+  (+1 vs. `[1.7.0]`).
+
 ## [1.7.0] - 2026-07-01 - "Chronicle"
 
 A `.r26m` TAS movie format plus a TAStudio-lite piano-roll debugger panel,

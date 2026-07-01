@@ -95,7 +95,7 @@ look different, they visibly break.
 | **4A50 Bankswitching** *(v1.5.0)* | Three independently relocatable ROM/RAM segments plus a previous-access-gated hotspot state machine, ported faithfully from Stella's `Cartridge4A50` — BestEffort tier |
 | **ARM7TDMI Thumb Interpreter** *(v1.6.0)* | A real Thumb-1 interpreter (`rusty2600-thumb`) ported from Gopher2600's Go implementation — registers, N/Z/C/V flags, all 19 instruction-format classes; the substrate the DPC+/CDF/CDFJ/CDFJ+ coprocessor family will wire into starting `v1.6.1` |
 | **TAS Movies** *(v1.7.0)* | A `.r26m` movie format (`rusty2600-core::movie`) — a seeded power-on or embedded save-state start point plus a per-frame input log — and a TAStudio-lite piano-roll debugger panel with jump-to-frame and branch points |
-| **Accuracy Battery** | A real `AccuracyScore`-gated battery (`rusty2600-test-harness`), CI-enforced, growing honestly rather than claiming an inflated pass rate |
+| **Accuracy Battery** | A real `AccuracyScore`-gated battery (`rusty2600-test-harness`), CI-enforced, growing honestly rather than claiming an inflated pass rate. *(v1.8.0)* `GoldenLogDiffer` now bundles a genuine externally-oracled golden CPU trace (20,000 instructions vs. an independent Gopher2600 run) |
 | **WebAssembly** | Runs in-browser via `wasm-winit` (full winit/wgpu/egui) or a lightweight `wasm-canvas` embed mode |
 | **Pure Rust** | `winit` + `wgpu` + `cpal` + `egui` frontend; a safe `no_std + alloc` chip stack behind a one-directional crate graph |
 
@@ -103,10 +103,10 @@ Planned via the iterative `v1.x.0` line toward `v2.0.0` — see
 [`to-dos/ROADMAP.md`](to-dos/ROADMAP.md) for the full plan, and
 [`CHANGELOG.md`](CHANGELOG.md) for exactly what's shipped in each release:
 closing the remaining 2 bankswitch schemes (AR/Supercharger, the ARM-driven
-DPC+/CDF/CDFJ/CDFJ+ family), accuracy battery depth, Lua scripting,
-rollback netplay, and Android/iOS builds. The sprite-pack data model
-(`sprite_pack`, `hd-pack` feature) shipped in v1.4.0; its live rendering
-splice awaits a TIA object-ID mask. The `.r26m` movie format and
+DPC+/CDF/CDFJ/CDFJ+ family), Lua scripting, rollback netplay, and
+Android/iOS builds. The sprite-pack data model (`sprite_pack`, `hd-pack`
+feature) shipped in v1.4.0; its live rendering splice awaits a TIA
+object-ID mask. The `.r26m` movie format and
 TAStudio-lite panel shipped in v1.7.0; live per-frame auto-recording into
 the emu-thread's hot path is honestly deferred (`docs/movie.md`).
 

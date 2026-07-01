@@ -5,9 +5,29 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v1.7.0 "Chronicle" — the seventh release of the
+**Current release:** v1.8.0 "Oracle" — the eighth release of the
 `v1.1.0 -> v2.0.0` RustyNES-parity line (see `to-dos/ROADMAP.md` for the
-full plan and `CHANGELOG.md`'s `[1.7.0]` entry). Adds a `.r26m` TAS movie
+full plan and `CHANGELOG.md`'s `[1.8.0]` entry). Closes `T-0602-007`:
+`GoldenLogDiffer` now bundles a genuine externally-oracled golden CPU
+trace (`tests/golden/klaus_functional_test_gopher2600.trace`, 20,000
+retired instructions of the Klaus functional test, captured by running
+Gopher2600's `hardware/cpu` package directly against the identical CC0
+ROM). `GoldenLogDiffer::bundled()` reports `true`;
+`tests/golden_log_test.rs` confirms `first_divergence() == None` — two
+independently-implemented 6502 cores agreeing register-for-register and
+cycle-for-cycle, real external validation distinct from Klaus's own
+internal pass/fail trap. `T-0602-006` (a TIA-timing test-ROM corpus for
+Layer 3's `run_until_complete`) stays honestly a stub: researched again
+this release, confirming no freely-redistributable 2600-specific TIA/RIOT
+test-ROM corpus exists (Gopher2600's own README makes the same admission;
+the Atari Diagnostic Test Cartridge 2.0 is official service-center
+software, not redistributable) — a real, permanent scope boundary, not a
+gap to close by more effort. TIA/RIOT accuracy work continues via the
+differential-oracle method against specific known-hard titles, the same
+technique that found the real Frogger WSYNC-jitter and Pitfall II
+RIOT-timer bugs. See `docs/testing-strategy.md` for the full detail.
+
+Earlier in the line: `v1.7.0 "Chronicle"` added a `.r26m` TAS movie
 format (`rusty2600-core::movie`, `no_std`-compatible): a start point
 (fresh seeded power-on per ADR 0006, or an embedded save-state blob — a
 branch point is exactly this) plus a per-frame `MovieFrame` input log
@@ -28,7 +48,7 @@ auto-appends a frame every tick yet (the same honest-partial-landing call
 `[1.4.0]`'s sprite-pack data model made). See `docs/movie.md` for the full
 architecture and scope.
 
-Earlier in the line: `v1.6.0 "Coprocessor"` added a new `rusty2600-thumb`
+Earlier still: `v1.6.0 "Coprocessor"` added a new `rusty2600-thumb`
 crate: a real ARM7TDMI Thumb-1 interpreter ported from Gopher2600's Go
 implementation (`hardware/memory/cartridge/arm/`), not Stella's C++
 `Thumbulator` — registers, N/Z/C/V status flags, the `ThumbMemory` trait
@@ -103,10 +123,13 @@ from unused scaffolding to a real battery: the shared `Sentinel`/
 onto it, unchanged pass/fail behavior), a real `AccuracyScore`-gated
 `tests/accuracy_battery.rs` (2/2, 100%, already CI-enforced via the existing
 `--features test-roms` step), and a real tolerance-aware `SnapComparator`.
-Still honestly deferred: a genuine externally-oracled golden CPU trace log
-for `GoldenLogDiffer` and TIA-timing test-ROM fixtures for the Layer 3
-`run_until_complete` runner (`to-dos/phase-6-accuracy-to-100/
-sprint-2-pass-gate.md`, `T-0602-006`/`007`). **A real accuracy bug is fixed
+At the time (v0.8.0), still honestly deferred: a genuine
+externally-oracled golden CPU trace log for `GoldenLogDiffer` and
+TIA-timing test-ROM fixtures for the Layer 3 `run_until_complete` runner
+(`to-dos/phase-6-accuracy-to-100/sprint-2-pass-gate.md`, `T-0602-006`/
+`007`). **`T-0602-007` closed in v1.8.0** (see the "Current release" note
+above); **`T-0602-006` stays a permanent stub** — no legally
+redistributable TIA/RIOT test-ROM corpus exists. **A real accuracy bug is fixed
 in v0.9.0**: `T-0601-008` (Pitfall II never leaving its boot-time RIOT-timer
 wait loop) is resolved — the timer's post-underflow (divide-by-1) decrement
 rate never reverted to the normal prescale after an `INTIM` read (only a
@@ -130,7 +153,7 @@ ROM. See `docs/riot.md` for the full writeup;
 | `rusty2600-frontend` | egui shell | Rendering, audio, pacing, input, WASM support, the emu-thread path, the real debugger (`debug-hooks`, default-on), and RetroAchievements (`retroachievements`, off by default) all real and tested (v0.5.0-v0.7.0). v1.1.0 fixed three real frontend bugs: the `emu-thread` present path's dead-black-buffer fallback (rapid flicker), the blit shader's full-texture UV sampling instead of the active sub-rect, and Settings-window changes never reaching disk. v1.2.0 added `runahead` (off by default, `0..=4` frames, live via a Settings slider). v1.3.0 added debugger depth: `debugger::expr`/`watch_panel`, `callstack`, `event_panel`, `pmb_panel`, and `cheevos_panel` (`T-0802-005`, DONE). v1.4.0 added `shader_pass` (the composable post-process stack `Gfx::present` chains after the base blit — `CrtScanline` + an honestly-labeled `CompositeArtifact` approximation, toggleable from Settings, empty-stack default byte-identical) and `sprite_pack` (`hd-pack` feature: the `(GRPx, NUSIZx)`-keyed replacement-bitmap data model + TOML manifest loader — live rendering splice honestly deferred pending a TIA object-ID mask, a genuine prerequisite not yet built). **v1.7.0 adds `debugger::tastudio_panel`** (a piano-roll input grid over `rusty2600_core::Movie`, jump-to-frame via the existing rewind ring, branch points as separate `.r26m` files — live per-frame auto-recording into `run_frame` honestly deferred, same partial-landing pattern as `sprite_pack`) plus two riders, `debugger::access_counter` (per-address write-count heatmap) and `debugger::memory_compare_panel` (byte-diff two memory snapshots). |
 | `rusty2600-gfx-shaders` | shader sources | New in v1.4.0: `no_std`, zero-dependency-besides-serde WGSL source constants (`CompositeArtifact`, `CrtScanline`) + the `PassKind` selector enum, consumed by `rusty2600-frontend::shader_pass`'s wgpu orchestration. Both passes derive everything from `textureDimensions()`/`@builtin(position)` — no per-pass uniform buffers needed. |
 | `rusty2600-cheevos` | RetroAchievements FFI | Vendors the `rcheevos` C library (MIT); safe `RaClient` wrapper adapted from RustyNES's own `rustynes-cheevos` (console-agnostic except the memory map + one console-ID constant). `ra_addr_to_riot` maps RA's flat address space directly onto the RIOT's 128 bytes of RAM. Native-only (`#![cfg(not(target_arch = "wasm32"))]`); 7 tests passing, including real FFI smoke tests (v0.7.0). |
-| `rusty2600-test-harness` | accuracy oracle | Real as of v0.8.0: `Sentinel`/`run_cpu_until_sentinel` (the shared Layer 2 runner both bundled Klaus oracles now use), a real `AccuracyScore`-gated `tests/accuracy_battery.rs` (2/2, 100%), and a tolerance-aware `SnapComparator`. `GoldenLogDiffer`'s capture/diff machinery is real too, but no externally-oracled golden CPU trace is bundled yet (`T-0602-007`); `run_until_complete` (Layer 3, full-`System`) remains a stub pending TIA-timing test-ROM fixtures (`T-0602-006`). |
+| `rusty2600-test-harness` | accuracy oracle | Real as of v0.8.0: `Sentinel`/`run_cpu_until_sentinel` (the shared Layer 2 runner both bundled Klaus oracles now use), a real `AccuracyScore`-gated `tests/accuracy_battery.rs` (2/2, 100%), and a tolerance-aware `SnapComparator`. **`T-0602-007` closed (v1.8.0)**: `GoldenLogDiffer` now bundles a genuine externally-oracled golden CPU trace (`tests/golden/klaus_functional_test_gopher2600.trace`, 20,000 instructions captured from Gopher2600's `hardware/cpu` package) — `bundled()` reports `true`, `tests/golden_log_test.rs` confirms `first_divergence() == None` against Rusty2600's own CPU. `run_until_complete` (Layer 3, full-`System`) remains — and stays — a stub: `T-0602-006` is a permanent scope boundary, no freely-redistributable TIA/RIOT test-ROM corpus exists (researched again this release; see `docs/testing-strategy.md`). |
 
 ## Accuracy (per-suite pass counts)
 
@@ -140,11 +163,12 @@ ROM. See `docs/riot.md` for the full writeup;
 | Klaus `6502_decimal_test` (BCD) | test-harness (`--features test-roms`) | 1 / 1 — wired v0.2.0; exhaustive 256×256×2-carry-in `ADC`/`SBC` decimal-mode sweep, `ERROR=0` (bit-exact) |
 | SingleStepTests/`65x02` `6502` (trimmed: 20 cases/opcode) | cycle-exact audit | 4,660 / 4,660 cases, 233 / 233 opcodes |
 | SingleStepTests/`65x02` `6502` (full corpus, ~10K cases/opcode) | cycle-exact audit | wired v0.2.0 — `.github/workflows/singlestep-full.yml`, weekly cron + manual dispatch (not per-push: ~700 MB download across 233 opcodes) |
-| TIA timing / draw ROMs | test-ROM corpus | not yet wired (`T-0602-006`) |
-| Stella regression corpus | test-ROM corpus | not yet wired (`T-0602-006`/v0.9.x) |
+| **Golden CPU trace (externally-oracled)** | test-harness (`--features test-roms`) | **1 / 1** — closed v1.8.0 (`T-0602-007`): 20,000 instructions vs. an independent Gopher2600 CPU trace, `first_divergence() == None` |
+| TIA timing / draw ROMs | test-ROM corpus | permanently unavailable (`T-0602-006`) — no freely-redistributable corpus exists; see `docs/testing-strategy.md` |
+| Stella regression corpus | test-ROM corpus | same as above (`T-0602-006`) |
 | **Accuracy battery (AccuracyCoin-equivalent)** | battery | **2 / 2 (100%)** — stood up v0.8.0, `tests/accuracy_battery.rs`, CI-enforced via the existing `--features test-roms` step, ≥90% v1.0 threshold |
-| **Workspace test suite** | `cargo test --workspace` | **238 / 238** (both Klaus tests moved to `--features test-roms`, gated out of the fast default path — see `crates/rusty2600-test-harness/tests/klaus_test.rs`; +21 vs. v1.6.0 for the new `.r26m` movie/TAStudio/access-counter/memory-compare tests) |
-| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **241 / 241** |
+| **Workspace test suite** | `cargo test --workspace` | **238 / 238** (unchanged — the new golden-trace test is `--features test-roms`-gated) |
+| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **242 / 242** (+1 vs. v1.7.0 for the new golden-trace test) |
 | `rusty2600-frontend` (`--features hd-pack`) | `cargo test -p rusty2600-frontend --features hd-pack` | **70 / 70** (+3 sprite-pack loader tests; `hd-pack` off by default, not part of the two workspace-wide counts above) |
 
 ## Board / mapper matrix
