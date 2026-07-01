@@ -7,13 +7,16 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current release: v0.2.0 "Cycle-Exact".** Phase 0 (foundation) through Phase 4
-(carts/mappers, Core+partial-Curated boards) are complete; Phase 5 (frontend)
-is functionally complete except the real debugger (`debug-hooks`, targeted
+**Current release: v0.3.0 "Curated".** Phase 0 (foundation) through Phase 4
+(carts/mappers, full Curated-tier board set — CV/F8/F6/F4/FA/Superchip/DPC/E7,
+all wired into automatic detection) are complete; Phase 5 (frontend) is
+functionally complete except the real debugger (`debug-hooks`, targeted
 v0.5.0); Phase 6 (accuracy-to-100) is actively underway (RIOT timing, TIA
 collision continuity, seeded power-on state, the full SingleStepTests
-corpus, and Klaus's decimal test all landed in v0.2.0 — see `CHANGELOG.md`).
-See `docs/STATUS.md` for the authoritative per-suite/per-chip state.
+corpus, and Klaus's decimal test landed in v0.2.0; a Gopher2600 differential
+probe found and scoped a boot-timing residual in Pitfall II, `T-0601-008` —
+see `CHANGELOG.md`). See `docs/STATUS.md` for the authoritative
+per-suite/per-chip state.
 
 ## The phase line
 
@@ -49,8 +52,8 @@ Core/Curated set:
 | Version | Content |
 |---|---|
 | v0.1.1 / v0.1.2 | Truth-pass (docs/code reconciliation) + release-CI fixes |
-| **v0.2.0 "Cycle-Exact"** (current) | RIOT/TIA accuracy hardening, ADRs 0005/0006, full SingleStepTests + Klaus decimal in CI, CPU-crate cleanup |
-| v0.3.0 | Curated-tier cart schemes finished (CV/FA/Superchip/DPC/E7) |
+| v0.2.0 "Cycle-Exact" | RIOT/TIA accuracy hardening, ADRs 0005/0006, full SingleStepTests + Klaus decimal in CI, CPU-crate cleanup |
+| **v0.3.0 "Curated"** (current) | Curated-tier cart schemes finished (CV/FA/Superchip/DPC/E7), all wired into `detect()` via Stella-ported hotspot heuristics (`T-0401-009`) |
 | v0.4.0–v0.4.x | BestEffort cart breadth toward Stella-adjacent parity (staged patch train) |
 | v0.5.0 | Real `debug-hooks` debugger; performance benches populated |
 | v0.6.0 | RetroAchievements (`rusty2600-cheevos`) |

@@ -6,6 +6,90 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-01 - "Curated"
+
+Closes out the full Curated-tier cart-scheme set the plan scoped for this
+release: CommaVid (CV), CBS RAM Plus (FA), Superchip (F8SC/F6SC/F4SC), the
+DPC coprocessor (Pitfall II), and E7 (M-Network) are all implemented — 8 of 8
+Curated schemes, all wired into `detect()`'s automatic dispatch via
+hotspot-pattern heuristics ported from Stella's `CartDetector.cxx`. Also
+reorganizes the local commercial-ROM staging convention and adds a
+`screenshots/commercial/` showcase corpus alongside the existing
+`screenshots/homebrew/` one.
+
+### Added
+
+- **CV (Commavid):** 2 KiB ROM + 1 KiB on-cart RAM, no bank switching.
+  Accepts either a 2 KiB ROM-only image or a 4 KiB image whose first 2 KiB
+  is initial RAM content (Stella's "MagiCard saved program listing" case).
+- **FA (CBS RAM Plus):** 12 KiB ROM as three 4 KiB banks (`$1FF8`/`9`/`A`) +
+  256 B RAM (write-low `$1000-$10FF` / read-high `$1100-$11FF`).
+- **Superchip (F8SC/F6SC/F4SC):** a 128 B RAM overlay
+  (write-low `$1000-$107F` / read-high `$1080-$10FF`) added to `BankF8`/
+  `BankF6`/`BankF4` via an opt-in `with_superchip()` builder rather than new
+  types, since Superchip variants are ROM-size-identical to their plain
+  counterparts (Stella itself can't tell them apart by size either).
+- **DPC (Pitfall II's "Display Processor Chip"):** F8-style hotspot
+  bankswitching + a memory-mapped register file at `$1000-$107F` — an LFSR
+  random-number generator and 8 hardware "data fetchers" (graphics reads,
+  level-generation RNG, and a "music mode" for fetchers 5-7). Verified with
+  a Gopher2600 differential probe: byte-identical CPU control-flow through
+  the first ~2,000 executed instructions of the real Pitfall II ROM. One
+  deliberate residual, documented rather than silently guessed at: DF5-7's
+  oscillator-driven auto-advance isn't implemented, since it only drives
+  the cartridge's own analog audio-mixing hardware and Rusty2600's audio
+  bus is entirely TIA-owned with no cart-audio path.
+- **E7 (M-Network):** the 16 KiB / 8×2K-bank configuration, the most
+  complex classic bankswitch scheme — a selectable lower 2 KiB segment
+  (banks 0-6 ROM, bank 7 "switch to RAM instead"), a separate always-active
+  256 B RAM window, and a fixed upper region always mapping the last bank's
+  ROM (so the reset vector is always reachable).
+- **ROM-DB disambiguation (`T-0401-009`):** CV vs plain 2K/4K, Superchip vs
+  plain F8/F6/F4, and E7 vs plain F6 were all same-size collisions blocking
+  automatic dispatch — resolved with three hotspot-pattern heuristics
+  (`is_probably_cv`/`is_probably_superchip`/`is_probably_e7`) ported
+  directly from Stella's `CartDetector.cxx`, checked before falling back to
+  the more common plain scheme. Validated against a real commercial ROM:
+  `BurgerTime (USA).a26` was previously misdetected as plain F6 (an
+  all-black frame); it's now correctly identified as E7, cross-checked
+  against Stella's own properties database ("M Network" manufacturer).
+- **`screenshots/commercial/`:** a gameplay showcase for the local
+  commercial-ROM corpus, mirroring `screenshots/homebrew/`'s convention —
+  15 of 16 staged titles render (the one exception, Pitfall II, boots
+  correctly but never clears a boot-time RIOT-timer wait loop; see Fixed
+  below). ROMs themselves stay gitignored; only the rendered PNGs are
+  committed (a frame carries no copyrighted game code).
+
+### Changed
+
+- **`tests/roms/external/`** commercial-ROM staging now lives under a
+  `commercial/` subfolder (`tests/roms/external/commercial/`), mirroring
+  RustyNES's `tests/roms/external/<family>/` convention — still gitignored,
+  never committed.
+- **`docs/cart.md`'s tier catalogue:** DPC and E7 were both originally
+  classified BestEffort in the research-report catalogue; reclassified
+  Curated to match the approved plan's v0.3.0 scope (both now implemented
+  and tier-pinned by their own `Board::tier()`).
+
+### Found (tracked, not fixed this release)
+
+- **`T-0601-008`:** Pitfall II boots with independently-verified-correct
+  DPC control-flow, but never clears a boot-time RIOT-timer (`INTIM`) wait
+  loop at `$F108-$F112` — confirmed via a Gopher2600 differential probe
+  that both emulators enter the identical loop, but Rusty2600 doesn't exit
+  it within a billion-instruction budget where Gopher2600 does. Since the
+  loop's exit condition depends only on `INTIM`, not on the DPC read it
+  also performs, this points to a data-value divergence somewhere upstream
+  (likely feeding the timer's reload value) rather than a DPC decode bug.
+
+### Notes
+
+- **Explicitly out of scope for v0.3.0** (tracked as separate tickets, not
+  overlooked): 8 KiB ambiguity between the implemented `BankF8` and three
+  not-yet-implemented BestEffort schemes (E0/FE/3F, `T-0401-001`); DPC+
+  detection (`T-0401-006`); pirate/homebrew BMC schemes (`T-0401-007`). The
+  ~50-scheme BestEffort long tail targets v0.4.x.
+
 ## [0.2.0] - 2026-07-01 - "Cycle-Exact"
 
 Closes out the accuracy-hardening pass the plan scoped for this release:
