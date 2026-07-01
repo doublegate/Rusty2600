@@ -17,6 +17,7 @@
 //! The frontend owns pacing + run-ahead; the core never sees wall-clock time (determinism).
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use winit::application::ApplicationHandler;
@@ -71,6 +72,13 @@ struct Active {
     shared_input: Arc<crate::emu_thread::SharedInput>,
     #[cfg(feature = "emu-thread")]
     frame_rx: crate::present_buffer::Consumer,
+    /// The live run-ahead frame count (`crate::runahead`).
+    ///
+    /// Shared with the emu-thread so a Settings-window change takes effect
+    /// without a restart. `0` = off (the default) — a plain
+    /// `EmuCore::step_frame` call with no speculative work.
+    #[cfg(feature = "emu-thread")]
+    runahead_frames: Arc<AtomicU32>,
     /// The most recently PUBLISHED frame's pixels, reused when `frame_rx.take()`
     /// finds nothing new this render pass. The emu-thread only publishes at the
     /// region's frame rate (~60 Hz NTSC), while `RedrawRequested` fires with no
@@ -218,12 +226,14 @@ impl ApplicationHandler for App {
         let core = Arc::new(Mutex::new(emu));
 
         #[cfg(feature = "emu-thread")]
-        let (shared_input, frame_rx) = {
+        let (shared_input, frame_rx, runahead_frames) = {
             let shared_input = Arc::new(crate::emu_thread::SharedInput::new());
             let (frame_tx, frame_rx) = crate::present_buffer::channel();
+            let runahead_frames = Arc::new(AtomicU32::new(self.config.video.runahead_frames));
 
             let thread_core = Arc::clone(&core);
             let thread_input = Arc::clone(&shared_input);
+            let thread_runahead = Arc::clone(&runahead_frames);
             std::thread::Builder::new()
                 .name("emu-thread".into())
                 .spawn(move || {
@@ -243,7 +253,8 @@ impl ApplicationHandler for App {
                         };
 
                         if !paused && fill < 0.6 {
-                            lock.step_frame(&frame_tx, Some(input));
+                            let ra = thread_runahead.load(Ordering::Relaxed);
+                            crate::runahead::step_frame(&mut lock, &frame_tx, Some(input), ra);
                             drop(lock);
                         } else {
                             drop(lock);
@@ -253,7 +264,7 @@ impl ApplicationHandler for App {
                 })
                 .expect("failed to spawn emu thread");
 
-            (shared_input, frame_rx)
+            (shared_input, frame_rx, runahead_frames)
         };
 
         self.active = Some(Active {
@@ -274,6 +285,8 @@ impl ApplicationHandler for App {
             shared_input,
             #[cfg(feature = "emu-thread")]
             frame_rx,
+            #[cfg(feature = "emu-thread")]
+            runahead_frames,
             #[cfg(feature = "emu-thread")]
             last_frame: vec![0u8; (crate::gfx::VCS_W * crate::gfx::VCS_H_NTSC * 4) as usize],
             last_render_at: std::time::Instant::now(),
@@ -694,6 +707,12 @@ impl App {
                 }
                 MenuAction::OpenSettings => active.shell.settings_open = true,
                 MenuAction::SaveConfig => {
+                    // Sync the live run-ahead atomic the emu-thread reads, so a
+                    // Settings-window change takes effect without a restart.
+                    #[cfg(feature = "emu-thread")]
+                    active
+                        .runahead_frames
+                        .store(active.config.video.runahead_frames, Ordering::Relaxed);
                     let _ = active.config.save();
                 }
                 MenuAction::Quit => event_loop.exit(),

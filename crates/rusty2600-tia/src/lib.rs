@@ -312,7 +312,15 @@ impl Tia {
         self.color_clock += 1;
         if self.color_clock >= 228 {
             self.color_clock = 0;
-            self.scanline += 1;
+            // `wrapping_add`, not `+=`: a hung or misbehaving program that
+            // never asserts VSYNC (e.g. one that trips a run loop's
+            // instruction-count safety timeout every "frame" instead of
+            // reaching a real frame boundary) would otherwise overflow this
+            // `u16` and panic — a rare but real path (run-ahead's speculative
+            // frames can run several such timeouts back-to-back), not
+            // something external/untrusted program behavior should be able
+            // to crash the emulator over.
+            self.scanline = self.scanline.wrapping_add(1);
             self.rdy_stall = false;
         }
         self.render_pixel();

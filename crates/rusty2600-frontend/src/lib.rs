@@ -96,6 +96,14 @@ pub mod gfx;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod emu_thread;
 
+/// Run-ahead: hides a game's internal input lag.
+///
+/// Speculatively simulates a few frames ahead of the canonical timeline and
+/// displays that, built on [`emu_thread::EmuCore`]'s save-state/rewind
+/// snapshot primitives.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod runahead;
+
 /// RetroAchievements integration.
 ///
 /// Owns the [`rusty2600_cheevos::RaClient`] on the main thread (never inside

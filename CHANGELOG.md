@@ -6,6 +6,49 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-01 - "Foresight"
+
+Run-ahead, built entirely on `[1.1.0]`'s save-state/rewind snapshot
+primitives — no new serialization machinery needed.
+
+### Added
+
+- **Run-ahead** (`rusty2600-frontend::runahead`, off by default —
+  `config.video.runahead_frames`, `0..=4` via a new Settings slider, live
+  without a restart). Per real `step_frame` call with `runahead_frames = N`:
+  runs the real persistent frame (rewind capture ON, audio suppressed),
+  snapshots the resulting state, runs `N - 1` hidden frames plus one more
+  displayed frame with the same latched input (rewind capture suppressed
+  throughout; only the final frame's audio reaches the ring), then restores
+  the checkpoint — discarding the entire speculative run so the canonical
+  timeline is exactly where the persistent frame left it. Snapshot/restore
+  only ever happens at frame boundaries (the VSYNC edge), never
+  mid-instruction, so the WSYNC/RDY beam-stall (a sub-instruction,
+  sub-frame mechanic) never interacts with it.
+- `EmuCore` gained two suppression flags backing run-ahead:
+  `rewind_capture_suppressed` (speculative frames never enter rewind
+  history) and `audio_output_suppressed` (only the one frame the user
+  actually hears reaches the audio device — without this, run-ahead would
+  emit `N` frames of audio per real ~16.67 ms tick and drift out of sync).
+- Three regression tests: run-ahead with `0` lookahead is equivalent to a
+  plain `step_frame`; the persistent timeline matches a plain run
+  byte-for-byte regardless of lookahead depth (`1`/`2`/`5` frames tested);
+  speculative frames never leak into `EmuCore::snapshots`.
+
+### Fixed
+
+- `rusty2600-tia`'s `Tia::tick_color_clock` incremented `scanline` (a `u16`)
+  with a plain `+=`, which could overflow and panic if a program never
+  asserts VSYNC for long enough (e.g. several of run-ahead's speculative
+  frames each hitting `step_frame`'s 200,000-instruction safety timeout
+  back-to-back, found by this release's own regression tests). Switched to
+  `wrapping_add` — a hung or misbehaving program should never be able to
+  crash the emulator over this.
+
+### Notes
+
+- 160 tests passing workspace-wide (163 with `--features test-roms`).
+
 ## [1.1.0] - 2026-07-01 - "Persistence"
 
 The first release of the `v1.1.0 -> v2.0.0` RustyNES-parity line

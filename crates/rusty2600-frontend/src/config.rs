@@ -36,6 +36,12 @@ pub struct VideoConfig {
     pub pacing: PacingMode,
     /// Integer-scale the framebuffer (true) or fit-to-window with aspect correction (false).
     pub integer_scale: bool,
+    /// Run-ahead frame count (`0` = off, the default). See [`crate::runahead`].
+    ///
+    /// Each additional frame hides one more frame of a game's internal input
+    /// lag, at the cost of running that many extra hidden frames per real
+    /// tick under the `emu-thread` feature.
+    pub runahead_frames: u32,
 }
 
 impl Default for VideoConfig {
@@ -44,6 +50,7 @@ impl Default for VideoConfig {
             present_mode: "fifo".into(),
             pacing: PacingMode::default(),
             integer_scale: false,
+            runahead_frames: 0,
         }
     }
 }

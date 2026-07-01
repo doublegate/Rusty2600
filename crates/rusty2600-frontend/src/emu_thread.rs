@@ -62,6 +62,23 @@ pub struct EmuCore {
     /// pays that cost for every game. Serializing through the real data shrinks
     /// a 2K/4K-cart entry to its true size (see `docs/adr/0007-save-state-versioning.md`).
     pub snapshots: std::collections::VecDeque<Vec<u8>>,
+    /// Suppresses rewind capture, set by [`crate::runahead`] around its
+    /// hidden/speculative frames.
+    ///
+    /// While true, [`Self::step_frame`] does not push onto
+    /// [`Self::snapshots`] — a speculative frame never actually happened on
+    /// the canonical timeline, so it must never enter rewind history.
+    pub rewind_capture_suppressed: bool,
+    /// Suppresses audio output, set by [`crate::runahead`] around its
+    /// persistent + hidden frames.
+    ///
+    /// While true, [`Self::step_frame`] still drains the TIA's audio buffer
+    /// (so it can't leak into a later real call) but skips the DC-blocker
+    /// processing and the push to `audio_tx` — only the one frame the user
+    /// actually sees/hears (the final speculative frame) should reach the
+    /// audio device, or run-ahead would emit N frames of audio per real
+    /// ~16.67 ms tick and drift out of sync.
+    pub audio_output_suppressed: bool,
     /// State for the high-pass DC blocker.
     dc_blocker_x: f32,
     dc_blocker_y: f32,
@@ -81,6 +98,8 @@ impl EmuCore {
             board_tier: None,
             audio_tx: None,
             snapshots: std::collections::VecDeque::with_capacity(600),
+            rewind_capture_suppressed: false,
+            audio_output_suppressed: false,
             dc_blocker_x: 0.0,
             dc_blocker_y: 0.0,
         }
@@ -278,11 +297,15 @@ impl EmuCore {
             return;
         }
 
-        // Save snapshot before advancing state
-        self.snapshots
-            .push_back(SaveState::capture(&self.system, 0).encode());
-        if self.snapshots.len() > 600 {
-            self.snapshots.pop_front();
+        // Save snapshot before advancing state — unless this is one of
+        // run-ahead's hidden/speculative frames, which never happened on the
+        // canonical timeline and must never enter rewind history.
+        if !self.rewind_capture_suppressed {
+            self.snapshots
+                .push_back(SaveState::capture(&self.system, 0).encode());
+            if self.snapshots.len() > 600 {
+                self.snapshots.pop_front();
+            }
         }
 
         let mut frame = crate::present_buffer::Frame::black(
@@ -319,18 +342,26 @@ impl EmuCore {
             }
         }
 
+        // Always drain the TIA's audio buffer (it must never carry over into
+        // the next call), but skip the DC-blocker processing and the push to
+        // `audio_tx` for run-ahead's persistent/hidden frames: only the one
+        // frame actually presented to the user should ever reach the audio
+        // device, or run-ahead would emit multiple frames of audio per real
+        // ~16.67 ms tick and drift out of sync (see `audio_output_suppressed`).
         let samples = core::mem::take(&mut self.system.bus.tia.audio_buffer);
-        for s in samples {
-            let normalized = (s as f32 / 15.0) - 1.0;
-            // DC blocker (1-pole high-pass filter) to remove the massive -1.0 DC offset
-            // when TIA outputs silence (s = 0), preventing audio hums or clicks.
-            let r = 0.995;
-            let y = normalized - self.dc_blocker_x + r * self.dc_blocker_y;
-            self.dc_blocker_x = normalized;
-            self.dc_blocker_y = y;
+        if !self.audio_output_suppressed {
+            for s in samples {
+                let normalized = (s as f32 / 15.0) - 1.0;
+                // DC blocker (1-pole high-pass filter) to remove the massive -1.0 DC offset
+                // when TIA outputs silence (s = 0), preventing audio hums or clicks.
+                let r = 0.995;
+                let y = normalized - self.dc_blocker_x + r * self.dc_blocker_y;
+                self.dc_blocker_x = normalized;
+                self.dc_blocker_y = y;
 
-            if let Some(tx) = &mut self.audio_tx {
-                tx.push_samples(&[y]);
+                if let Some(tx) = &mut self.audio_tx {
+                    tx.push_samples(&[y]);
+                }
             }
         }
 

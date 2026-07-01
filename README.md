@@ -10,7 +10,7 @@
 <p align="center">
   <a href="https://github.com/doublegate/Rusty2600/actions"><img src="https://github.com/doublegate/Rusty2600/workflows/CI/badge.svg" alt="Build Status"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a>
-  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v1.1.0-blue.svg" alt="Version"></a>
+  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v1.2.0-blue.svg" alt="Version"></a>
   <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/rust-1.96-orange.svg" alt="Rust: 1.96"></a>
   <br>
   <a href="#compatibility-and-accuracy"><img src="https://img.shields.io/badge/accuracy%20battery-100%25%20(2%2F2)-brightgreen.svg" alt="Accuracy battery"></a>
@@ -68,7 +68,8 @@ look different, they visibly break.
 - **Determinism as a hard contract** — same seed, ROM, and input sequence
   yield a bit-identical framebuffer and audio (ADR 0004). This is what makes
   save-state round-trips and regression testing correct by construction, and
-  what the planned rewind / run-ahead / rollback-netplay work all build on.
+  what save-states, rewind, run-ahead, and the planned rollback-netplay work
+  all build on.
 - **An honesty gate, not a marketing number** — every bankswitch scheme is
   classified Core / Curated / BestEffort (ADR 0003); a BestEffort scheme
   can *never* silently back the accuracy oracle, enforced structurally by
@@ -88,6 +89,7 @@ look different, they visibly break.
 | **Real Debugger** | Live 6507/TIA/RIOT/memory panels, breakpoints/step/continue, a side-effect-free memory peek, a standalone disassembler — default-on |
 | **RetroAchievements** | Native `rcheevos` integration: per-frame achievement tracking, hardcore mode, a RetroAchievements menu (off by default) |
 | **Save-States + Rewind** *(v1.1.0)* | A versioned binary snapshot format (ADR 0007) reusing the core's own `serde` derives; a rewind ring built on the same format |
+| **Run-Ahead** *(v1.2.0)* | Speculatively simulates a few frames ahead to hide a game's internal input lag, built on the save-state snapshot primitives — off by default, `0..=4` frames, adjustable live from Settings |
 | **Accuracy Battery** | A real `AccuracyScore`-gated battery (`rusty2600-test-harness`), CI-enforced, growing honestly rather than claiming an inflated pass rate |
 | **WebAssembly** | Runs in-browser via `wasm-winit` (full winit/wgpu/egui) or a lightweight `wasm-canvas` embed mode |
 | **Pure Rust** | `winit` + `wgpu` + `cpal` + `egui` frontend; a safe `no_std + alloc` chip stack behind a one-directional crate graph |
@@ -95,11 +97,11 @@ look different, they visibly break.
 Planned via the iterative `v1.x.0` line toward `v2.0.0` — see
 [`to-dos/ROADMAP.md`](to-dos/ROADMAP.md) for the full plan, and
 [`CHANGELOG.md`](CHANGELOG.md) for exactly what's shipped in each release:
-run-ahead, a deeper debugger (watch/conditional breakpoints, a TIA
-scanline-event scatter viewer), a composable shader/filter stack, closing the
-remaining 3 bankswitch schemes (4A50, AR/Supercharger, the ARM-driven
-DPC+/CDF/CDFJ/CDFJ+ family), TAS movie tooling, Lua scripting, rollback
-netplay, and Android/iOS builds.
+a deeper debugger (watch/conditional breakpoints, a TIA scanline-event
+scatter viewer), a composable shader/filter stack, closing the remaining 3
+bankswitch schemes (4A50, AR/Supercharger, the ARM-driven DPC+/CDF/CDFJ/CDFJ+
+family), TAS movie tooling, Lua scripting, rollback netplay, and Android/iOS
+builds.
 
 ---
 
@@ -254,7 +256,7 @@ seeding, and save-state versioning).
 | SingleStepTests `6502` (trimmed) | cycle-exact audit | 4,660 / 4,660 cases, 233 / 233 opcodes |
 | SingleStepTests `6502` (full corpus) | cycle-exact audit | weekly CI cron (~700 MB across 233 opcodes, not per-push) |
 | **Accuracy battery** | `rusty2600-test-harness` | **2 / 2 (100%)**, CI-enforced, ≥90% v1.0 threshold — growing honestly as real test-ROM fixtures are sourced, not inflated |
-| Workspace test suite | `cargo test --workspace` | 157 / 157 |
+| Workspace test suite | `cargo test --workspace` | 160 / 160 |
 
 Every bankswitch scheme is classified **Core** (register-decode trivial,
 always oracle-gated), **Curated** (a redistributable fixture + full test

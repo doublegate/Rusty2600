@@ -381,6 +381,15 @@ impl ShellState {
                         {
                             changed = true;
                         }
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut cfg.video.runahead_frames, 0..=4)
+                                    .text("Run-ahead frames"),
+                            )
+                            .changed()
+                        {
+                            changed = true;
+                        }
                     }
                     1 => {
                         if ui

@@ -7,9 +7,14 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current release: v1.1.0 "Persistence"** — the first release of the
+**Current release: v1.2.0 "Foresight"** — the second release of the
 `v1.1.0 -> v2.0.0` RustyNES-parity line (see "Version -> Phase mapping
-(v1.1.0 -> v2.0.0)" below for the full plan). Ships save-states
+(v1.1.0 -> v2.0.0)" below for the full plan). Adds run-ahead
+(`rusty2600-frontend::runahead`, off by default), built entirely on
+`[1.1.0]`'s save-state snapshot primitives — no new serialization machinery
+needed. Along the way fixed a real `Tia::scanline` `u16` overflow panic
+(exposed by run-ahead's own regression tests) — see `CHANGELOG.md`'s
+`[1.2.0]` entry. `v1.1.0 "Persistence"` shipped save-states
 (`rusty2600-core::save_state`, ADR 0007) + a rewind rework, plus fixes for
 three real frontend bugs found during manual verification (a rapid
 gameplay/debugger flicker, a window that didn't display the whole active
@@ -116,8 +121,8 @@ the `v0.x.0` line.
 
 | Version | Codename | Headline content |
 |---|---|---|
-| **v1.1.0 "Persistence"** (current) | Save-states (`rusty2600-core::save_state`, ADR 0007) + a rewind rework reusing the same serialized format; three real frontend bugs fixed (gameplay/debugger flicker, window sizing, Settings persistence) |
-| v1.2.0 "Foresight" | Run-ahead (`rusty2600-frontend::runahead`), built on v1.1.0's snapshot/restore primitives |
+| v1.1.0 "Persistence" | Save-states (`rusty2600-core::save_state`, ADR 0007) + a rewind rework reusing the same serialized format; three real frontend bugs fixed (gameplay/debugger flicker, window sizing, Settings persistence) |
+| **v1.2.0 "Foresight"** (current) | Run-ahead (`rusty2600-frontend::runahead`, off by default, `0..=4` frames), built on v1.1.0's snapshot/restore primitives; a `Tia::scanline` overflow panic fixed along the way |
 | v1.3.0 "Scope" | Debugger depth: watch/conditional-breakpoint expression engine, callstack, a TIA per-scanline event/write-scatter viewer, a player/missile/ball position view — plus the long-deferred RetroAchievements achievement-list/login/toast UI (`T-0802-005`) |
 | v1.4.0 "Signal" | A composable shader/filter stack (composite-NTSC + CRT-scanline) + a right-sized sprite-replacement overlay (the 2600-appropriate HD-pack analog — player/missile/ball only) |
 | v1.5.0 "Full Catalog" | 4A50 (`T-0402-014`) + AR/Supercharger (`T-0402-015`) — closes 24 of 25 cataloged cart schemes |
