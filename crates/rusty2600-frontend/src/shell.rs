@@ -39,6 +39,13 @@ pub enum MenuAction {
     /// Debugger -> run until a breakpoint is hit or a safety step-cap fires.
     #[cfg(feature = "debug-hooks")]
     DebugContinue,
+    /// TAStudio -> jump playback to this recorded frame index, via the
+    /// existing rewind ring (`crate::debugger::tastudio_panel`).
+    #[cfg(feature = "debug-hooks")]
+    TastudioJumpToFrame(usize),
+    /// TAStudio -> save a branch point (`.r26m`) to disk.
+    #[cfg(feature = "debug-hooks")]
+    TastudioSaveBranch,
     /// Emulation -> RetroAchievements -> toggle hardcore mode.
     #[cfg(feature = "retroachievements")]
     ToggleHardcore,
@@ -89,6 +96,12 @@ pub enum DebugPanel {
     Events,
     /// Live player/missile/ball position + registers.
     Pmb,
+    /// TAStudio-lite: piano-roll movie recording/editing (`tastudio_panel`).
+    Tastudio,
+    /// Per-address write-count heatmap (`access_counter`).
+    AccessCounter,
+    /// Byte-by-byte memory-snapshot diff (`memory_compare_panel`).
+    MemoryCompare,
     /// RetroAchievements: login, achievement/leaderboard lists, rich
     /// presence, recent unlocks (`T-0802-005`).
     #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
@@ -471,6 +484,7 @@ impl ShellState {
 
     /// The debugger overlay: a panel selector + the live 6507/TIA/RIOT/memory
     /// panels (`crate::debugger`, behind the `debug-hooks` feature).
+    #[allow(clippy::too_many_lines)]
     fn render_debugger(
         &mut self,
         ctx: &egui::Context,
@@ -495,6 +509,9 @@ impl ShellState {
                     ui.selectable_value(&mut self.panel, DebugPanel::Callstack, "Callstack");
                     ui.selectable_value(&mut self.panel, DebugPanel::Events, "Events");
                     ui.selectable_value(&mut self.panel, DebugPanel::Pmb, "P/M/B");
+                    ui.selectable_value(&mut self.panel, DebugPanel::Tastudio, "TAStudio");
+                    ui.selectable_value(&mut self.panel, DebugPanel::AccessCounter, "Access");
+                    ui.selectable_value(&mut self.panel, DebugPanel::MemoryCompare, "Compare");
                     #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
                     ui.selectable_value(&mut self.panel, DebugPanel::Cheevos, "Cheevos");
                 });
@@ -538,6 +555,36 @@ impl ShellState {
                         }
                         DebugPanel::Pmb => {
                             crate::debugger::pmb_panel::render_pmb_panel(ui, &snap.tia);
+                        }
+                        DebugPanel::Tastudio => {
+                            let tastudio_actions =
+                                crate::debugger::tastudio_panel::render_tastudio_panel(
+                                    ui,
+                                    &mut self.debugger.tastudio,
+                                );
+                            for action in tastudio_actions {
+                                actions.push(match action {
+                                    crate::debugger::tastudio_panel::TastudioAction::JumpToFrame(
+                                        idx,
+                                    ) => MenuAction::TastudioJumpToFrame(idx),
+                                    crate::debugger::tastudio_panel::TastudioAction::SaveBranch => {
+                                        MenuAction::TastudioSaveBranch
+                                    }
+                                });
+                            }
+                        }
+                        DebugPanel::AccessCounter => {
+                            crate::debugger::access_counter::render_access_counter_panel(
+                                ui,
+                                &snap.tia_writes,
+                            );
+                        }
+                        DebugPanel::MemoryCompare => {
+                            crate::debugger::memory_compare_panel::render_memory_compare_panel(
+                                ui,
+                                &mut self.debugger.memory_compare_baseline,
+                                &snap.riot_ram,
+                            );
                         }
                         #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
                         DebugPanel::Cheevos => {

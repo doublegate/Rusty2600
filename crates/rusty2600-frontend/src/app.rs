@@ -769,6 +769,46 @@ impl App {
                         }
                     }
                 }
+                #[cfg(feature = "debug-hooks")]
+                MenuAction::TastudioJumpToFrame(target) => {
+                    let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                    // `EmuCore::rewind()` restores `system` from the snapshot
+                    // ring but doesn't track frame numbering itself (that's
+                    // this frontend's own `frame_count` bookkeeping) — so
+                    // walk it back one frame per rewind, bounded by however
+                    // much history the 600-entry ring actually has.
+                    while emu.frame_count > target as u64 && !emu.snapshots.is_empty() {
+                        emu.rewind();
+                        emu.frame_count = emu.frame_count.saturating_sub(1);
+                    }
+                }
+                #[cfg(feature = "debug-hooks")]
+                MenuAction::TastudioSaveBranch => {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Rusty2600 TAS movie", &["r26m"])
+                        .save_file()
+                    {
+                        let emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                        let region = match emu.region {
+                            crate::palette::Region::Ntsc => rusty2600_core::MovieRegion::Ntsc,
+                            crate::palette::Region::Pal => rusty2600_core::MovieRegion::Pal,
+                            crate::palette::Region::Secam => rusty2600_core::MovieRegion::Secam,
+                        };
+                        let bytes =
+                            active
+                                .shell
+                                .debugger
+                                .tastudio
+                                .save_branch(0, region, &emu.system);
+                        drop(emu);
+                        match std::fs::write(&path, bytes) {
+                            Ok(()) => {
+                                active.shell.status = format!("Branch saved to {}", path.display());
+                            }
+                            Err(e) => active.shell.status = format!("branch save failed: {e}"),
+                        }
+                    }
+                }
                 MenuAction::ToggleFullscreen => {
                     active.fullscreen = !active.fullscreen;
                     let mode = active

@@ -6,6 +6,65 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-07-01 - "Chronicle"
+
+A `.r26m` TAS movie format plus a TAStudio-lite piano-roll debugger panel,
+built on `[1.1.0]`'s save-state snapshot substrate.
+
+### Added
+
+- **`rusty2600-core::movie`** (new module, `no_std`-compatible): a `.r26m`
+  TAS movie format mirroring `save_state.rs`'s header conventions (magic
+  `"R26M"`, format version, `rom_tag`, `postcard`-encoded, typed
+  `MovieError`) without depending on it beyond reusing `SaveState`'s
+  encoding for embedded branch points.
+  - `MovieStart::PowerOn { seed }` — a fresh power-on, exercising ADR
+    0006's deterministic seeded RIOT RAM / CPU `A`/`X`/`Y`.
+  - `MovieStart::FromSaveState(Vec<u8>)` — an embedded `SaveState`-encoded
+    blob. A branch point is exactly this: `Movie::new_branch` captures the
+    running `System` via `SaveState::capture`, no parallel snapshot system.
+  - `MovieFrame` — one frame's worth of joystick directions/fire, four
+    paddle positions + fire, and console switches (per-frame fields, since
+    Select/Reset/Color/Difficulty can all change mid-run on real
+    hardware, unlike a fixed NES controller). Packed to mirror the
+    RIOT/TIA port-byte conventions `rusty2600-frontend::input` already
+    established.
+  - `MovieRegion` — a small, deliberate 3-variant duplication of
+    `rusty2600-frontend::palette::Region` (the crate graph is
+    one-directional; core cannot depend on the frontend crate).
+- **`rusty2600-frontend::debugger::tastudio_panel`**: a piano-roll input
+  grid (click-to-toggle editing), deliberately scoped below RustyNES's own
+  ~609-line TAStudio panel. Jump-to-frame reuses the existing `[1.1.0]`
+  rewind ring (`EmuCore::snapshots`/`rewind`) rather than a new "greenzone"
+  structure; branch points save as separate `.r26m` files via
+  `Movie::new_branch`.
+- **Two riders**: `debugger::access_counter` (a per-address write-count
+  heatmap sourced from the existing `[1.3.0]` `Bus::write_log`) and
+  `debugger::memory_compare_panel` (a byte-diff between two memory
+  snapshots) — both small, generic, address-space-agnostic tools landed
+  alongside the TAS work since they're cheap.
+
+### Notes
+
+- **Live per-frame recording is not yet wired into `EmuCore::run_frame`'s
+  hot path.** The format, the panel's state machine, and manual
+  jump-to-frame/save-branch actions are real and tested, but nothing
+  automatically appends a `MovieFrame` every frame the emulator runs yet —
+  the same honest-partial-landing call this project made for `[1.4.0]`'s
+  sprite-pack data model (shipped without its render splice, clearly
+  documented as deferred rather than rushed or silently skipped). See
+  `docs/movie.md` for the full scope.
+- Explicitly out of scope: foreign movie-format import (no existing 2600
+  movie format to import from) and branch-tree visualization (a flat list
+  of saved branch files is enough for a first cut).
+- `MovieFrame`'s `Default` is hand-implemented, not derived: `swcha`/
+  `swchb` default to `0xFF` (idle, matching real hardware's active-low
+  pull-ups) — a naive all-zero derive would instead mean "every direction
+  and switch held down simultaneously," caught by the module's own tests.
+- 238 tests passing workspace-wide (241 with `--features test-roms`; +21
+  for the new `.r26m` movie/TAStudio/access-counter/memory-compare tests),
+  up from 217/220 at `[1.6.0]`.
+
 ## [1.6.0] - 2026-07-01 - "Coprocessor"
 
 A new `rusty2600-thumb` crate: a real ARM7TDMI Thumb-1 interpreter, the

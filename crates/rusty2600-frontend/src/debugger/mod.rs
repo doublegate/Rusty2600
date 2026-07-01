@@ -6,13 +6,16 @@
 //! under the brief lock in `app.rs`, then handed to the (lock-free) render
 //! functions here.
 
+pub mod access_counter;
 pub mod callstack;
 #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
 pub mod cheevos_panel;
 pub mod disasm;
 pub mod event_panel;
 pub mod expr;
+pub mod memory_compare_panel;
 pub mod pmb_panel;
+pub mod tastudio_panel;
 pub mod watch_panel;
 
 use std::collections::BTreeSet;
@@ -50,6 +53,11 @@ pub struct DebuggerState {
     /// The live JSR/RTS call stack, return addresses oldest-first —
     /// updated by `crate::app`'s Step/Continue handlers (see `callstack`).
     pub call_stack: Vec<u16>,
+    /// TAStudio-lite: the in-progress/loaded movie, cursor, and mode
+    /// (`tastudio_panel`).
+    pub tastudio: tastudio_panel::TastudioState,
+    /// `memory_compare_panel`'s captured baseline snapshot, if any.
+    pub memory_compare_baseline: Option<Vec<u8>>,
 }
 
 impl DebuggerState {

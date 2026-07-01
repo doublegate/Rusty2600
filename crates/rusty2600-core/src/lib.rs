@@ -15,6 +15,7 @@
 extern crate alloc;
 
 pub mod bus;
+pub mod movie;
 pub mod save_state;
 pub mod scheduler;
 
@@ -25,6 +26,7 @@ pub use rusty2600_riot as riot;
 pub use rusty2600_tia as tia;
 
 pub use bus::{AudioBus, Bus, VideoBus, WriteEvent, WriteLog};
+pub use movie::{Movie, MovieError, MovieFrame, MovieRegion, MovieStart};
 pub use save_state::{SaveState, SaveStateError};
 pub use scheduler::System;
 

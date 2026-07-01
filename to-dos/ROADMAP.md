@@ -7,16 +7,25 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current release: v1.6.0 "Coprocessor"** — the sixth release of the
+**Current release: v1.7.0 "Chronicle"** — the seventh release of the
 `v1.1.0 -> v2.0.0` RustyNES-parity line (see "Version -> Phase mapping
-(v1.1.0 -> v2.0.0)" below for the full plan). Adds a new `rusty2600-thumb`
-crate: a real ARM7TDMI Thumb-1 interpreter ported from Gopher2600's Go
-implementation (not Stella's C++ `Thumbulator`) — registers, N/Z/C/V
-status flags, a generic `ThumbMemory` trait seam, an approximate N/S/I
-cycle + MAM prefetch-latch timing model, and all 19 Thumb-1
-instruction-format classes, with 27 conformance tests. This release lands
-the interpreter core only — see `docs/thumb.md` and `CHANGELOG.md`'s
-`[1.6.0]` entry. Earlier: `v1.5.0 "Full Catalog"` implemented `Bank4A50`
+(v1.1.0 -> v2.0.0)" below for the full plan). Adds a `.r26m` TAS movie
+format (`rusty2600-core::movie`): a start point (fresh seeded power-on per
+ADR 0006, or an embedded save-state blob — a branch point is exactly this)
+plus a per-frame `MovieFrame` input log, built on `[1.1.0]`'s save-state
+substrate. Also adds a TAStudio-lite piano-roll panel
+(`debugger/tastudio_panel.rs`, jump-to-frame via the existing rewind ring)
+plus two riders (`access_counter`, `memory_compare_panel`). Live per-frame
+auto-recording into `EmuCore::run_frame` is honestly deferred — see
+`docs/movie.md` and `CHANGELOG.md`'s `[1.7.0]` entry. Earlier: `v1.6.0
+"Coprocessor"` added a new `rusty2600-thumb` crate: a real ARM7TDMI
+Thumb-1 interpreter ported from Gopher2600's Go implementation (not
+Stella's C++ `Thumbulator`) — registers, N/Z/C/V status flags, a generic
+`ThumbMemory` trait seam, an approximate N/S/I cycle + MAM prefetch-latch
+timing model, and all 19 Thumb-1 instruction-format classes, with 27
+conformance tests. That release landed the interpreter core only — see
+`docs/thumb.md` and `CHANGELOG.md`'s `[1.6.0]` entry. Earlier still:
+`v1.5.0 "Full Catalog"` implemented `Bank4A50`
 (`T-0402-014`, BestEffort): three independently relocatable ROM/RAM
 segments plus a previous-access-gated hotspot state machine ported
 faithfully from Stella's `Cartridge4A50::checkBankSwitch`, wired into
@@ -35,7 +44,7 @@ long-deferred RetroAchievements achievement-list/login/toast UI
 `[1.1.0]`'s save-state snapshot primitives; `v1.1.0 "Persistence"` shipped
 save-states (`rusty2600-core::save_state`, ADR 0007) + a rewind rework,
 plus fixes for three real frontend bugs found during manual verification —
-see `CHANGELOG.md`'s `[1.1.0]`-`[1.5.0]` entries. Phase 0 (foundation)
+see `CHANGELOG.md`'s `[1.1.0]`-`[1.6.0]` entries. Phase 0 (foundation)
 through the full Curated-tier board set (Phase 4) are complete. Phase 7
 (BestEffort breadth) has landed 13 of the ~15-scheme BestEffort long tail
 cataloged in `docs/cart.md` (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA,
@@ -143,8 +152,8 @@ the `v0.x.0` line.
 | v1.3.0 "Scope" | Debugger depth: watch/conditional-breakpoint expression engine, callstack, a TIA per-scanline event/write-scatter viewer, a player/missile/ball position view — plus the long-deferred RetroAchievements achievement-list/login/toast UI (`T-0802-005`, DONE) |
 | v1.4.0 "Signal" | A composable shader/filter stack (`rusty2600-gfx-shaders`: `CrtScanline` + an honestly-labeled `CompositeArtifact` approximation) + the data-model half of a right-sized sprite-replacement overlay (`sprite_pack`, `hd-pack` feature — live rendering splice deferred pending a TIA object-ID mask) |
 | v1.5.0 "Full Catalog" | `Bank4A50` (`T-0402-014`, DONE): three independently relocatable ROM/RAM segments + a previous-access-gated hotspot state machine — closes 23 of 25 cataloged cart schemes. AR/Supercharger (`T-0402-015`) deliberately NOT attempted this release (its "fast-load" mode alone needs a bank-config decode, a 5-distinct-access delayed-write protocol, and a synthesized dummy BIOS stub — substantially larger than every other scheme here) |
-| **v1.6.0 → v1.6.x "Coprocessor"** (patch train, v1.6.0 current) | A new `rusty2600-thumb` crate: a real ARM7TDMI Thumb-1 interpreter (ported from Gopher2600's Go implementation, all 19 instruction-format classes, 27 conformance tests) for the DPC+/CDF/CDFJ/CDFJ+ family (`T-0401-006`). **v1.6.0 lands the interpreter core only** — no `Board`/`Cartridge` wiring yet (`docs/thumb.md`). `v1.6.1+` wires DPC+, then CDF, then CDFJ/CDFJ+ into `detect()` one family at a time — closing the catalogue to 24/25, leaving only AR/Supercharger (`T-0402-015`) as its own separately-scoped follow-up to reach 25/25 |
-| v1.7.0 "Chronicle" | TAS movie format (`.r26m`) + a TAStudio-lite panel, built on v1.1.0's snapshot substrate |
+| v1.6.0 → v1.6.x "Coprocessor" (patch train) | A new `rusty2600-thumb` crate: a real ARM7TDMI Thumb-1 interpreter (ported from Gopher2600's Go implementation, all 19 instruction-format classes, 27 conformance tests) for the DPC+/CDF/CDFJ/CDFJ+ family (`T-0401-006`). `v1.6.0` (DONE) lands the interpreter core only — no `Board`/`Cartridge` wiring yet (`docs/thumb.md`). `v1.6.1+` wires DPC+, then CDF, then CDFJ/CDFJ+ into `detect()` one family at a time — closing the catalogue to 24/25, leaving only AR/Supercharger (`T-0402-015`) as its own separately-scoped follow-up to reach 25/25 |
+| **v1.7.0 "Chronicle"** (current) | `.r26m` TAS movie format (`rusty2600-core::movie`, DONE): a start point (fresh seeded power-on or an embedded save-state blob — a branch point is exactly this) + a per-frame `MovieFrame` input log, built on v1.1.0's snapshot substrate. TAStudio-lite piano-roll panel (jump-to-frame via the existing rewind ring, branch points as separate `.r26m` files) + two riders (`access_counter`, `memory_compare_panel`). Live per-frame auto-recording into `EmuCore::run_frame` honestly deferred (`docs/movie.md`) |
 | v1.8.0 "Oracle" | Accuracy battery depth: real, license-clear TIA-timing test-ROM fixtures (`T-0602-006`) and a genuine externally-oracled golden CPU trace (`T-0602-007`), grown honestly rather than claiming an inflated pass rate |
 | v1.9.0 "Scriptable" | Lua scripting (`rusty2600-script`: `mlua` native + `piccolo` wasm fallback) |
 | v1.10.0 → v1.10.x "Rollback" (train) | Rollback netplay (`rusty2600-netplay`), 2-player-only by deliberate scope cut vs. RustyNES's 2-4-player mesh |

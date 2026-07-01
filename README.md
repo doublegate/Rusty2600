@@ -94,6 +94,7 @@ look different, they visibly break.
 | **Shader Stack** *(v1.4.0)* | A composable post-process stack (`rusty2600-gfx-shaders`) — CRT scanline darkening and an honestly-labeled composite-artifact color-bleed approximation, toggleable from Settings; empty stack (the default) is byte-identical to the direct blit |
 | **4A50 Bankswitching** *(v1.5.0)* | Three independently relocatable ROM/RAM segments plus a previous-access-gated hotspot state machine, ported faithfully from Stella's `Cartridge4A50` — BestEffort tier |
 | **ARM7TDMI Thumb Interpreter** *(v1.6.0)* | A real Thumb-1 interpreter (`rusty2600-thumb`) ported from Gopher2600's Go implementation — registers, N/Z/C/V flags, all 19 instruction-format classes; the substrate the DPC+/CDF/CDFJ/CDFJ+ coprocessor family will wire into starting `v1.6.1` |
+| **TAS Movies** *(v1.7.0)* | A `.r26m` movie format (`rusty2600-core::movie`) — a seeded power-on or embedded save-state start point plus a per-frame input log — and a TAStudio-lite piano-roll debugger panel with jump-to-frame and branch points |
 | **Accuracy Battery** | A real `AccuracyScore`-gated battery (`rusty2600-test-harness`), CI-enforced, growing honestly rather than claiming an inflated pass rate |
 | **WebAssembly** | Runs in-browser via `wasm-winit` (full winit/wgpu/egui) or a lightweight `wasm-canvas` embed mode |
 | **Pure Rust** | `winit` + `wgpu` + `cpal` + `egui` frontend; a safe `no_std + alloc` chip stack behind a one-directional crate graph |
@@ -102,10 +103,12 @@ Planned via the iterative `v1.x.0` line toward `v2.0.0` — see
 [`to-dos/ROADMAP.md`](to-dos/ROADMAP.md) for the full plan, and
 [`CHANGELOG.md`](CHANGELOG.md) for exactly what's shipped in each release:
 closing the remaining 2 bankswitch schemes (AR/Supercharger, the ARM-driven
-DPC+/CDF/CDFJ/CDFJ+ family), TAS movie tooling, Lua scripting, rollback
-netplay, and Android/iOS builds. The sprite-pack data model
+DPC+/CDF/CDFJ/CDFJ+ family), accuracy battery depth, Lua scripting,
+rollback netplay, and Android/iOS builds. The sprite-pack data model
 (`sprite_pack`, `hd-pack` feature) shipped in v1.4.0; its live rendering
-splice awaits a TIA object-ID mask.
+splice awaits a TIA object-ID mask. The `.r26m` movie format and
+TAStudio-lite panel shipped in v1.7.0; live per-frame auto-recording into
+the emu-thread's hot path is honestly deferred (`docs/movie.md`).
 
 ---
 
@@ -323,6 +326,7 @@ numbers as deltas across changes, not absolute cross-machine guarantees.
 | [`docs/cpu.md`](docs/cpu.md) / [`docs/tia.md`](docs/tia.md) / [`docs/riot.md`](docs/riot.md) | Per-chip specs |
 | [`docs/cart.md`](docs/cart.md) | The full bankswitch catalogue and Core/Curated/BestEffort tiering |
 | [`docs/thumb.md`](docs/thumb.md) | The ARM7TDMI Thumb-1 interpreter (`rusty2600-thumb`): architecture, scope, deviations from the Go reference |
+| [`docs/movie.md`](docs/movie.md) | The `.r26m` TAS movie format and TAStudio-lite panel: architecture and scope |
 | [`docs/frontend.md`](docs/frontend.md) | The frontend crate's shape and behavior |
 | [`docs/testing-strategy.md`](docs/testing-strategy.md) | The layered accuracy-oracle methodology |
 | [`docs/performance.md`](docs/performance.md) | Measured Criterion baselines and profiling guidance |
