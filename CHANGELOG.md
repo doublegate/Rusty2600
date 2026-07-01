@@ -67,7 +67,21 @@ anchor it to.
   `clippy --all-targets -- -D warnings`.
 - **CI:** the previous three `main`-branch CI runs all failed at `cargo fmt
   --all --check` (formatting drift in `app.rs`/`emu_thread.rs` predating this
-  release); resolved as part of this pass.
+  release); resolved as part of this pass. The fmt fix then surfaced two more
+  real gaps: `ci.yml` never installed the Linux system packages
+  (ALSA/xkbcommon/Wayland/X11) `cpal`/`winit`/`egui` need, so `ubuntu-latest`
+  failed to even build; and `pages.yml` (activated for the first time by the
+  branch rename below) was an unimplemented stub — just a checkout step and
+  comments — that failed instantly with zero real steps. Both fixed: ci.yml
+  now installs the needed apt packages, and pages.yml is a real pipeline
+  (wasm demo via the previously-uncommitted `crates/rusty2600-frontend/web/`
+  Trunk project + `cargo doc`, combined into one Pages artifact — demo at
+  `/`, rustdoc at `/api/`). Also fixed along the way: `web/Trunk.toml` was
+  missing `public_url = "/Rusty2600/"` (GH Pages serves this repo at a
+  subpath, not the domain root); `.gitignore`'s `/web/dist/` entry was
+  root-anchored and never matched the real nested path; and pages.yml's
+  explicit `permissions:` block omitted `contents: read`, silently revoking
+  checkout's ability to clone the repo at all.
 
 ### Changed
 
