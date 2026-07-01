@@ -73,4 +73,6 @@ No emojis in code, comments, or commits (project policy).
 
 Never commit commercial Atari ROMs. Only CC0 / public-domain test ROMs and
 their reference screenshots are committed; your own commercial dumps live in
-the gitignored `tests/roms/external/`.
+the gitignored `tests/roms/external/commercial/`. Screenshots generated from
+those dumps (`screenshots/commercial/`) ARE committed — same convention as
+`screenshots/homebrew/` — since a PNG carries no copyrighted game code.

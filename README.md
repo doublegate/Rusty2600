@@ -85,6 +85,8 @@ Rusty2600 is dual-licensed under **MIT OR Apache-2.0**. See `LICENSE-MIT` and `L
 `tests/cpu-timing/singlestep-6502/` carries a trimmed SingleStepTests/`65x02` corpus (20
 cases/opcode; `fetch-vectors.py` regenerates or extends it from the full ~10K-cases/opcode upstream
 source). `tests/roms/` holds the Klaus2m5 functional test and ProcessorTests golden logs; commercial
-ROMs for mapper/coprocessor validation are staged locally under `tests/roms/external/` (gitignored —
-never committed) behind the `commercial-roms` feature. See `docs/testing-strategy.md` for the full
-methodology and `to-dos/ROADMAP.md` for the phase/sprint plan.
+ROMs for mapper/coprocessor validation are staged locally under `tests/roms/external/commercial/`
+(gitignored — never committed) behind the `commercial-roms` feature; `screenshots/commercial/`
+carries their gameplay screenshots the same way `screenshots/homebrew/` does for the free ROM
+corpus. See `docs/testing-strategy.md` for the full methodology and `to-dos/ROADMAP.md` for the
+phase/sprint plan.

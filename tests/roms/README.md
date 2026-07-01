@@ -30,7 +30,11 @@ screenshots + `.snap` golden baselines they produce, NEVER the ROMs (copyright).
 - **`klaus/`**, **`Klaus2m5/`** — historical/duplicate staging locations for
   the same Klaus test binaries; `test_suite/` is the one actually read by
   the test harness.
-- **`external/`** (gitignored) — local commercial-ROM staging, as above.
+- **`external/commercial/`** (gitignored) — local commercial-ROM staging, as
+  above; used for mapper/coprocessor validation behind the `commercial-roms`
+  feature. Screenshots generated from these (`screenshots/commercial/`) ARE
+  committed, same convention as `homebrew/` above — see
+  `screenshots/commercial/README.md`.
 
 Commercial ROMs were found and scrubbed from `test_suite/`'s history once
 already — see the `rusty2600-commercial-rom-scrub-2026-07-01` project memory
