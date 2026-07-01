@@ -50,7 +50,7 @@ impl Joystick {
     /// `SWCHA` layout: bits 7-4 = port 0 (P0) right/left/down/up, bits 3-0 =
     /// port 1 (P1). Active-LOW: a pressed direction drives its bit to 0.
     ///
-    /// TODO(T-PS-054): confirm the exact bit order against a real `SWCHA`
+    /// TODO(T-0501-005): confirm the exact bit order against a real `SWCHA`
     /// read-back test ROM before wiring this into the RIOT port latch.
     #[must_use]
     pub const fn swcha_nibble(self) -> u8 {
@@ -136,7 +136,7 @@ impl ConsoleSwitches {
     /// Select, bit 3 = Color/B&W (1 = colour), bit 6 = P0 difficulty (1 = A),
     /// bit 7 = P1 difficulty (1 = A). Bits 2/4/5 read high.
     ///
-    /// TODO(T-PS-055): pin against a `SWCHB` read-back test ROM, then route
+    /// TODO(T-0501-006): pin against a `SWCHB` read-back test ROM, then route
     /// into the RIOT port-1 latch.
     #[must_use]
     pub const fn swchb(self) -> u8 {
@@ -174,7 +174,7 @@ pub struct InputState {
 impl InputState {
     /// Build the `(SWCHA, SWCHB)` port bytes the RIOT exposes to the program.
     ///
-    /// TODO(T-PS-056): fold the paddle fire buttons into `SWCHA` and honour the
+    /// TODO(T-0501-007): fold the paddle fire buttons into `SWCHA` and honour the
     /// data-direction registers (`SWACNT` / `SWBCNT`) so output bits read back
     /// the last written value.
     #[must_use]

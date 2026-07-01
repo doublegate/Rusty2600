@@ -31,8 +31,8 @@ optional later dependency.
 
 ## Sprints
 
-- Sprint 1 — Curated F-series + Superchip + RAM carts → `sprint-1-curated-boards.md`
-  (`T-41-NNN`).
+- Sprint 1 — Curated F-series + Superchip + RAM carts → `sprint-1-core-curated-boards.md`
+  (`T-0401-NNN`).
 
 ## Risks
 

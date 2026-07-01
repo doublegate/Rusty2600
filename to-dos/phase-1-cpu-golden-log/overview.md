@@ -33,7 +33,7 @@ Phase 2+). No interrupts (the 6507 has none).
 ## Sprints
 
 - Sprint 1 — documented core + addressing + decimal → `sprint-1-documented-core.md`
-  (`T-11-NNN`).
+  (`T-0101-NNN`).
 - Sprint 2 — undocumented opcodes + per-cycle bus parity (stub — add
   `sprint-2-undocumented-and-cycles.md` when Sprint 1 is ~complete).
 

@@ -36,10 +36,10 @@ TAS) — Phase 8. New chip *features* are out — this phase is bug-closure only
 
 ## Sprints
 
-- Sprint 1 — TIA / CPU / RIOT residual closure → `sprint-1-residual-closure.md`
-  (`T-61-NNN`).
+- Sprint 1 — TIA / CPU / RIOT residual closure → `sprint-1-accuracy.md`
+  (`T-0601-NNN`).
 - Sprint 2 — pass-count pinning + the CI regression gate → `sprint-2-pass-gate.md`
-  (`T-62-NNN`).
+  (`T-0602-NNN`).
 
 ## Risks
 

@@ -30,9 +30,10 @@ trait Board {
 
 Both `cpu_read` and `cpu_write` must run the bank logic even when the access is
 nominally a fetch (many schemes switch on reads). `detect(rom: &[u8]) ->
-Option<Box<dyn Board>>` resolves the scheme; today it picks the Core sized boards
-by length and stubs the rest (each unimplemented branch carries its intended
-tier as a `T-PS-0NN` TODO).
+Option<Cartridge>` resolves the scheme (a closed enum over every implemented
+`Board`, not a trait object — keeps `no_std` dispatch static); today it picks
+the sized boards by length and stubs the rest (each unimplemented branch
+carries its intended tier as a `T-0401-NNN` TODO).
 
 ## The tier model
 
@@ -42,12 +43,13 @@ returns true for `Core`/`Curated` and false for `BestEffort`; the honesty gate
 (`tests/mapper_tier_honesty.rs`, ADR 0003) forbids a `BestEffort` board ever
 backing the accuracy oracle. Per ref-docs/research-report.md §8.3.
 
-> Crate-vs-doc note: the cart crate module doc currently pins **F8 as Core** (it
-> is the canonical 8 KiB scheme) and labels E0/E7/FE/3F/3E as Curated. This doc
-> follows the **research-report tier split** (F8/F6/F4 → Curated) as the
-> authoritative catalogue. The discrepancy is cosmetic — the `Tier` value each
-> `Board` returns is what the honesty gate actually checks, and both placements
-> are accuracy-gated. Reconcile the labels when the boards land (`T-PS-012/013`).
+> Resolved (`T-0401-008`): the cart crate briefly pinned F8 as `Core`
+> pre-v0.1.1; `BankF8::tier()` now returns `Curated`, matching this doc's
+> catalogue and the research-report split. `Core` is reserved for the two
+> schemes needing zero board-specific hotspot logic (2K, 4K); every
+> hotspot-driven scheme, including F8/F6/F4, is `Curated`. Pinned by
+> `crates/rusty2600-test-harness/tests/mapper_tier_honesty.rs`'s
+> `core_tier_is_reserved_for_unbanked_schemes` test so it can't regress.
 
 ## Scheme catalogue (size / hotspot / RAM / coprocessor / tier)
 
@@ -102,11 +104,12 @@ Per ref-docs/research-report.md §8.2.
 
 ## Detection
 
-`detect()` resolves Core sized boards by length now (2K → `Rom2K`, 4K → `Rom4K`,
-8K → `BankF8`). The full scheme set needs hotspot-pattern + ROM-DB-assisted
-detection (8 KiB alone is ambiguous between F8, E0, FE, and 3F). The tiered
-TODOs (`T-PS-010..017`) track each board family; the honesty gate's oracle set
-must be extended in lockstep so the pass-rate stays truthful as boards land.
+`detect()` resolves the sized boards by length now (2K → `Rom2K`, 4K → `Rom4K`,
+8K → `BankF8` Curated, 16K → `BankF6` Curated, 32K → `BankF4` Curated). The
+full scheme set needs hotspot-pattern + ROM-DB-assisted detection (8 KiB alone
+is ambiguous between F8, E0, FE, and 3F). The tiered TODOs (`T-0401-001..007`)
+track each board family; the honesty gate's oracle set must be extended in
+lockstep so the pass-rate stays truthful as boards land.
 
 
 ---

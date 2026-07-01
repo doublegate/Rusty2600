@@ -37,11 +37,11 @@ features (netplay / RA / TAS / Lua / shaders) — Phase 8.
 ## Sprints
 
 - Sprint 1 — BestEffort bank-register + RAM board families → `sprint-1-besteffort-boards.md`
-  (`T-71-NNN`).
+  (`T-0701-NNN`).
 - Sprint 2 — region-as-data (NTSC/PAL/SECAM) + auto-detect → `sprint-2-region-data.md`
-  (`T-72-NNN`).
+  (`T-0702-NNN`).
 - Sprint 3 — DPC / DPC+ / CDF coprocessor boards (optional ARM interpreter) →
-  `sprint-3-coprocessor-carts.md` (`T-73-NNN`).
+  `sprint-3-coprocessor-carts.md` (`T-0703-NNN`).
 
 ## Risks
 

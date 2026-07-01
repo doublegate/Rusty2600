@@ -30,7 +30,7 @@ Out: the frontend audio sink / DRC / device picker (Phase 5); any EQ/effects
 ## Sprints
 
 - Sprint 1 — poly counters + AUDC modes + mixer (stub — add
-  `sprint-1-poly-and-mixer.md` with `T-31-NNN` when Phase 2 is ~complete).
+  `sprint-1-poly-and-mixer.md` with `T-0301-NNN` when Phase 2 is ~complete).
 
 ## Risks
 

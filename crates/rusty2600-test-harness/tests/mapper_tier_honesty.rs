@@ -75,3 +75,33 @@ fn besteffort_is_structurally_never_accuracy_gated() {
     assert!(Tier::Curated.is_accuracy_gated());
     assert!(!Tier::BestEffort.is_accuracy_gated());
 }
+
+/// `Core` is reserved for the two schemes needing zero board-specific hotspot
+/// logic (2K, 4K); every hotspot-driven scheme — including F8 — is `Curated`.
+/// `T-0401-008` reconciled a stray `Core` placement on `BankF8`; this
+/// pins the fix so it can't silently regress (`docs/cart.md`'s tier table is
+/// the source of truth these must match).
+#[test]
+fn core_tier_is_reserved_for_unbanked_schemes() {
+    assert_eq!(
+        Cartridge::Rom2K(Rom2K::new(&[0u8; 0x0800]).unwrap()).tier(),
+        Tier::Core
+    );
+    assert_eq!(
+        Cartridge::Rom4K(Rom4K::new(&[0u8; 0x1000]).unwrap()).tier(),
+        Tier::Core
+    );
+    assert_eq!(
+        Cartridge::BankF8(BankF8::new(&[0u8; 0x2000]).unwrap()).tier(),
+        Tier::Curated,
+        "F8 is hotspot-driven — it must be Curated, not Core (docs/cart.md)"
+    );
+    assert_eq!(
+        Cartridge::BankF6(BankF6::new(&[0u8; 0x4000]).unwrap()).tier(),
+        Tier::Curated
+    );
+    assert_eq!(
+        Cartridge::BankF4(BankF4::new(&[0u8; 0x8000]).unwrap()).tier(),
+        Tier::Curated
+    );
+}

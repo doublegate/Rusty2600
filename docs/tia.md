@@ -43,6 +43,20 @@ starts. The TIA owns the signal (`Tia::rdy_stall`); the scheduler reads it and
 freezes only the CPU — the color clock keeps running. Released on the 228 → 0
 color-clock wrap. See `docs/scheduler.md` §WSYNC/RDY.
 
+**Line-boundary edge case (`color_clock == 0` at the strobe).** The scheduler
+advances the `STA WSYNC`'s own CPU cycle (its 3 color clocks) *before* applying
+the write, so when the store's final cycle lands exactly on the 228 → 0 wrap the
+beam is already at `color_clock == 0` — the start of the very scanline the WSYNC
+was waiting for. In that case `write_register` must **not** arm `rdy_stall`:
+doing so would make the next opcode fetch spin until the *following* wrap, a
+phantom extra scanline. This matches Gopher2600 / Stella ("`RDY` released at the
+leading edge of the next HBLANK") — the strobe is satisfied by the boundary it
+coincides with, not the next one. Frogger's `STA WSYNC; STA HMOVE` object
+fine-positioning routine strobes WSYNC right at the line boundary; the phantom
+line made its frame wobble 262..267 instead of a rock-steady 262 (verified
+byte-for-byte against Gopher2600: the whole frame's instruction stream was
+identical, differing only by this single over-long stall).
+
 ## Object positioning by write timing (RESPx) — the cycle-exact crux
 
 Five movable objects: player 0, player 1, missile 0, missile 1, ball. Each is

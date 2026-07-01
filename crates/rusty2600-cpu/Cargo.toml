@@ -14,5 +14,8 @@ std = []
 serde.workspace = true
 bitflags = { version = "2", features = ["serde"] }
 
+[dev-dependencies]
+serde_json = "1"
+
 [lints]
 workspace = true

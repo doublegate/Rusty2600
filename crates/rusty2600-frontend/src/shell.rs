@@ -360,19 +360,19 @@ impl ShellState {
                     // grid / disassembly / viewers.
                     DebugPanel::Cpu => {
                         ui.label("6507 — registers (A/X/Y/SP/PC/P), disassembly, breakpoints.");
-                        ui.label(format!("{}", info.cpu_info));
+                        ui.label(info.cpu_info.clone());
                     }
                     DebugPanel::Tia => {
                         ui.label(
                             "TIA — object regs (P0/P1/M0/M1/BL), the playfield, the beam position",
                         );
-                        ui.label(format!("{}", info.tia_info));
+                        ui.label(info.tia_info.clone());
                     }
                     DebugPanel::Riot => {
                         ui.label(
                             "RIOT — the interval timer (INTIM/INSTAT), the SWCHA/SWCHB ports,",
                         );
-                        ui.label(format!("{}", info.riot_info));
+                        ui.label(info.riot_info.clone());
                     }
                     DebugPanel::Memory => {
                         ui.label("Memory — the RIOT's 128 bytes of RAM + the cart window view +");

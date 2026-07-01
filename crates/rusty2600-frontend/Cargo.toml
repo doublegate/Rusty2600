@@ -28,12 +28,14 @@ path = "src/main.rs"
 # egui experience; `wasm-canvas` is a lightweight canvas-2D embed. `help-tui`
 # adds the ratatui terminal help browser (native-only).
 #
-# NOTE: `emu-thread` is OFF in the v0.1 default because it requires `EmuCore:
-# Send`, which needs `rusty2600-cart`'s `Board` trait to be `Send`. Until that
-# one-word change lands (T-PS-063), the synchronous in-`render` drive (the
-# `not(feature = "emu-thread")` path in `app.rs`) is the default. Flip
-# `Board: Send` + re-add `emu-thread` here to enable the dedicated emu thread.
-default = ["wasm-winit", "help-tui"]
+# `emu-thread` runs `EmuCore` on a dedicated thread (paced by the audio ring
+# buffer's fill ratio) instead of stepping synchronously inside `render()`.
+# It needs `EmuCore: Send`, which in turn needs `rusty2600-cart::Board`'s
+# implementors to be `Send` — true since `Bus::board` is a concrete
+# `Cartridge` enum (not `Box<dyn Board>`), confirmed by a successful
+# `--features emu-thread` build (T-0503-001, closing the stale blocker note
+# this comment used to carry). Default-on as of v0.1.1.
+default = ["wasm-winit", "help-tui", "emu-thread"]
 wasm-winit = []
 wasm-canvas = []
 emu-thread = []

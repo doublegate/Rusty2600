@@ -53,11 +53,12 @@ not look for audio in the RIOT. Per ref-docs/research-report.md §6 (TIA audio),
 
 `rusty2600-cpu` depends on nothing console-specific (`core` + `alloc` +
 `bitflags`). `rusty2600-tia` depends on `rusty2600-cart` only (its memory bus
-for the cart-mediated reads the video path needs). `rusty2600-riot` is fully
-independent. `rusty2600-cart` is independent. `rusty2600-core` ties them
-together and re-exports their public types. Result: each chip is fuzzable and
-benchmarkable in isolation. Adding a cross-chip dependency breaks this
-invariant — don't.
+for the cart-mediated reads the video path needs) — this is the **one declared
+exception** to one-directionality, not a violation of it. `rusty2600-riot` is
+fully independent. `rusty2600-cart` is independent. `rusty2600-core` ties them
+together and re-exports their public types. Result: each chip (other than the
+declared `tia`→`cart` edge) is fuzzable and benchmarkable in isolation. Adding
+any *other* cross-chip dependency breaks this invariant — don't.
 
 ### 6. Board (bankswitch) logic lives in the cart crate, not the TIA
 

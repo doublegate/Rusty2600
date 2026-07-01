@@ -13,11 +13,13 @@ the timebase, the 6507 runs on every third clock, `WSYNC`/`RDY` beam-stalls the 
 owns everything mutable, a one-directional `no_std + alloc` chip-crate graph, a hard determinism
 contract, and test-ROM-is-spec. The frontend is pure Rust (`winit` + `wgpu` + `cpal` + `egui`).
 
-> **Status: v0.1.0 — compiling skeleton.** The workspace, the architecture, the docs, and the
-> frontend shell are in place; the chip cores (6507 / TIA / RIOT / cart) are TODO-laden skeletons,
-> so the emulator opens a window and presents a cleared frame while the per-chip models land. See
-> `docs/STATUS.md` for the authoritative per-suite / per-chip state and `to-dos/ROADMAP.md` for the
-> plan.
+> **Status: v0.1.1 — real chip cores, growing cart/feature breadth.** The 6507 (documented +
+> undocumented opcodes), the TIA (beam-raced video + two-channel audio), and the RIOT are
+> implemented and tested — cycle-exact against a trimmed SingleStepTests corpus (4,660 cases, 233
+> opcodes, 100% passing) and 74 tests passing workspace-wide. 5 of 25 catalogued bankswitch schemes
+> are implemented (2K/4K/F8/F6/F4); the debugger, RetroAchievements, and HD-pack feature flags are
+> still unwired stubs. See `docs/STATUS.md` for the authoritative per-suite / per-chip state and
+> `to-dos/ROADMAP.md` for the full plan through v1.0.0.
 
 ## Crates
 
@@ -26,7 +28,7 @@ contract, and test-ROM-is-spec. The frontend is pure Rust (`winit` + `wgpu` + `c
 | `rusty2600-cpu` | MOS 6507 (the 6502 in a 28-pin package: A0–A12, no exposed NMI/IRQ pins) |
 | `rusty2600-tia` | TIA (Television Interface Adaptor) — beam-raced **video AND audio** |
 | `rusty2600-riot` | MOS 6532 RIOT — the console's only RAM (128 B) + I/O ports + interval timer |
-| `rusty2600-cart` | Tiered bankswitch catalog (2K/4K/F8/F6/F4/E0/E7/FE/3F/FA/DPC…) behind an honesty gate |
+| `rusty2600-cart` | Tiered bankswitch catalog behind an honesty gate — 2K/4K/F8/F6/F4 implemented today; CV/FA/Superchip/DPC/E7 and the ~50-scheme BestEffort long tail (E0/E7/FE/3F/…) are catalogued in `docs/cart.md` and land through v0.3.0–v0.4.x |
 | `rusty2600-core` | the Bus + the master-clock lockstep scheduler (the tie crate) |
 | `rusty2600-frontend` | the `winit + wgpu + cpal + egui` shell (binary `rusty2600`) |
 | `rusty2600-test-harness` | the AccuracyCoin-equivalent oracle + the bankswitch-tier honesty gate |
@@ -35,11 +37,11 @@ contract, and test-ROM-is-spec. The frontend is pure Rust (`winit` + `wgpu` + `c
 
 | Feature | Effect |
 |---------|--------|
-| `debug-hooks` | arms the core's run-loop trace/breakpoint/event hooks for the debugger panels |
-| `hd-pack` | output-only TIA tile-source export for a texture-replacement loader |
-| `retroachievements` | native-only RetroAchievements integration |
-| `emu-thread` | runs frame production on a dedicated thread (off until `Board: Send` lands) |
-| `help-tui` | the ratatui terminal help browser (`rusty2600 help --interactive`) |
+| `debug-hooks` | arms the core's run-loop trace/breakpoint/event hooks for the debugger panels (unwired stub today; real debugger lands v0.5.0) |
+| `hd-pack` | output-only TIA tile-source export for a texture-replacement loader (unwired stub) |
+| `retroachievements` | native-only RetroAchievements integration (unwired stub today; lands v0.6.0) |
+| `emu-thread` | runs frame production on a dedicated thread, paced by the audio ring buffer's fill ratio — **default-on** |
+| `help-tui` | the ratatui terminal help browser (`rusty2600 help --interactive`) — default-on |
 
 ## Build / test
 
@@ -78,5 +80,11 @@ Paddles (INPT0–3, analog) bind to the mouse / gamepad axes. USB gamepads auto-
 
 Rusty2600 is dual-licensed under **MIT OR Apache-2.0**. See `LICENSE-MIT` and `LICENSE-APACHE`.
 
-## Test ROMs & Oracles Setup (2026-06-29)
-The project has been seeded with commercial test ROMs (in `tests/roms/external`) spanning multiple mappers (Core, Curated, and BestEffort). Test suites including Klaus2m5 and ProcessorTests have been staged for 6502/6507 CPU golden log validation. Sprints and Phase documentation are available in `to-dos/`.
+## Test ROMs & accuracy oracles
+
+`tests/cpu-timing/singlestep-6502/` carries a trimmed SingleStepTests/`65x02` corpus (20
+cases/opcode; `fetch-vectors.py` regenerates or extends it from the full ~10K-cases/opcode upstream
+source). `tests/roms/` holds the Klaus2m5 functional test and ProcessorTests golden logs; commercial
+ROMs for mapper/coprocessor validation are staged locally under `tests/roms/external/` (gitignored —
+never committed) behind the `commercial-roms` feature. See `docs/testing-strategy.md` for the full
+methodology and `to-dos/ROADMAP.md` for the phase/sprint plan.

@@ -16,7 +16,7 @@ timer, cart window); the TIA beam renderer (emit one dot per visible color clock
 RESPx 9-CLK reset pipeline + NUSIZ copy offsets; HMOVE clock-stuffing + the 8-clock
 HBLANK-extend comb; PF0/PF1/PF2 + CTRLPF; GRPx/NUSIZx/REFPx/VDELPx; missiles/ball;
 the 15 collision latches; COLUPx → region palette; the WSYNC mid-instruction
-freeze point (`T-PS-061`); the `SnapComparator` wired to scanline goldens.
+freeze point (`T-0201-006`); the `SnapComparator` wired to scanline goldens.
 
 Out: audio (Phase 3 — though the audio register *writes* are decoded here),
 board breadth (Phase 4), the frontend (Phase 5).
@@ -34,7 +34,7 @@ board breadth (Phase 4), the frontend (Phase 5).
 ## Sprints
 
 - Sprint 1 — bus decode + the beam renderer core → `sprint-1-bus-and-beam.md`
-  (`T-21-NNN`).
+  (`T-0201-NNN`).
 - Sprint 2 — RESPx / HMOVE / collisions (stub — add when Sprint 1 is ~complete).
 
 ## Risks

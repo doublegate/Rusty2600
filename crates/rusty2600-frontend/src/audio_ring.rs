@@ -133,12 +133,14 @@ impl SampleQueue {
         n
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         let tail = self.inner.tail.load(Ordering::Acquire);
         let head = self.inner.head.load(Ordering::Acquire);
         tail.wrapping_sub(head)
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -183,10 +185,22 @@ impl Producer {
         self.0.push(s);
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    /// `Producer` exposes `len` (queued sample count) so pair it with `is_empty` per clippy's
+    /// `len_without_is_empty` convention.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    // Ring buffer capacities are tiny (audio sample counts, far below f32's 2^24 exact-integer
+    // range), so the usize -> f32 conversions here never lose precision in practice.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub fn fill_ratio(&self) -> f32 {
         let cap = self.0.inner.ring.capacity();
         if cap == 0 {
@@ -198,6 +212,7 @@ impl Producer {
 }
 
 impl Consumer {
+    #[must_use]
     pub fn pull(&self) -> Sample {
         let mut buf = [0.0; 1];
         self.0.pop_or_silence(&mut buf);

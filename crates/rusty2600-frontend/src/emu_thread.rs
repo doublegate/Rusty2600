@@ -142,6 +142,14 @@ impl EmuCore {
     }
 
     /// Run a single frame sequentially and accumulate the beam dots into `self.framebuffer`.
+    // Byte-packing casts (RGB channel extraction, sample normalization, scanline-count
+    // narrowing from a region constant that's always < 256) are inherently truncating /
+    // sign-dropping by design, not bugs.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_lossless
+    )]
     pub fn run_frame(&mut self, input: Option<InputState>) {
         if let Some(state) = input {
             let (swcha, swchb) = state.riot_ports();
@@ -169,51 +177,19 @@ impl EmuCore {
         let active_h = self.region.active_height() as u16;
 
         let mut old_vsync = self.system.bus.tia.objects.vsync;
-        let mut clocks = 0;
+        let mut instructions = 0;
 
+        // Drive the CPU instruction-by-instruction (see
+        // `rusty2600-core::scheduler`'s module doc comment for why this
+        // replaced the old per-color-clock-tick loop): each call advances the
+        // TIA/RIOT/cart in lockstep internally, cycle by cycle, as the
+        // instruction executes. The TIA accumulates its own video/audio dots
+        // into `video_buffer`/`audio_buffer` as it goes (it has to — a single
+        // instruction can span many color clocks, so this outer loop can no
+        // longer sample one dot per iteration the way it used to).
         loop {
-            self.system.tick_one_color_clock();
-            clocks += 1;
-
-            let cc = self.system.bus.tia.color_clock;
-            let sl = self.system.bus.tia.scanline;
-
-            // Audio ticks every 114 color clocks (twice per scanline, ~31.4 kHz).
-            if cc == 114 || cc == 227 {
-                use rusty2600_core::AudioBus;
-                let s = self.system.bus.audio_sample();
-                // Map [0, 30] to [-1.0, 1.0]
-                let normalized = (s as f32 / 15.0) - 1.0;
-
-                // DC blocker (1-pole high-pass filter) to remove the massive -1.0 DC offset
-                let r = 0.995;
-                let y = normalized - self.dc_blocker_x + r * self.dc_blocker_y;
-                self.dc_blocker_x = normalized;
-                self.dc_blocker_y = y;
-
-                // Collect samples into a small buffer, flush periodically.
-                // For simplicity here, we push them one by one.
-                // Realistically we'd batch, but `push_samples` takes a slice.
-                if let Some(tx) = &mut self.audio_tx {
-                    tx.push_samples(&[y]);
-                }
-            }
-
-            // Output visible dots (68..=227). Only render active scanlines.
-            if cc >= 68 && sl >= vblank_lines && sl < vblank_lines + active_h {
-                let x = (cc - 68) as usize;
-                let y = (sl - vblank_lines) as usize;
-                let color_idx = self.system.bus.tia.current_color;
-                let rgb = self.region.lookup(color_idx >> 1);
-
-                let off = (y * 160 + x) * 4;
-                if off + 3 < self.framebuffer.len() {
-                    self.framebuffer[off] = (rgb >> 16) as u8;
-                    self.framebuffer[off + 1] = (rgb >> 8) as u8;
-                    self.framebuffer[off + 2] = rgb as u8;
-                    self.framebuffer[off + 3] = 255;
-                }
-            }
+            self.system.step_instruction();
+            instructions += 1;
 
             let vsync = self.system.bus.tia.objects.vsync;
             // Frame boundary: when VSYNC transitions from 1 -> 0.
@@ -223,14 +199,58 @@ impl EmuCore {
             old_vsync = vsync;
 
             // Safety timeout in case a game hangs and stops asserting VSYNC.
-            if clocks > 1_000_000 {
+            if instructions > 200_000 {
                 break;
+            }
+        }
+
+        // Drain this frame's audio samples (DC-blocked + normalized) to the ring.
+        let samples = core::mem::take(&mut self.system.bus.tia.audio_buffer);
+        if !samples.is_empty() {
+            let mut out = Vec::with_capacity(samples.len());
+            for s in samples {
+                // Map [0, 30] to [-1.0, 1.0].
+                let normalized = (s as f32 / 15.0) - 1.0;
+                // 1-pole high-pass DC blocker: removes the massive -1.0 offset
+                // during TIA silence (s = 0).
+                let r = 0.995;
+                let y = normalized - self.dc_blocker_x + r * self.dc_blocker_y;
+                self.dc_blocker_x = normalized;
+                self.dc_blocker_y = y;
+                out.push(y);
+            }
+            if let Some(tx) = &mut self.audio_tx {
+                tx.push_samples(&out);
+            }
+        }
+
+        // Crop the TIA's accumulated video buffer down to the active window
+        // and convert color indices to RGBA8 for the present path.
+        let video = &self.system.bus.tia.video_buffer;
+        for y in 0..active_h as usize {
+            let sl = y + vblank_lines as usize;
+            for x in 0..160usize {
+                let src = sl * 160 + x;
+                let color_idx = video.get(src).copied().unwrap_or(0);
+                let rgb = self.region.lookup(color_idx >> 1);
+                let off = (y * 160 + x) * 4;
+                if off + 3 < self.framebuffer.len() {
+                    self.framebuffer[off] = (rgb >> 16) as u8;
+                    self.framebuffer[off + 1] = (rgb >> 8) as u8;
+                    self.framebuffer[off + 2] = rgb as u8;
+                    self.framebuffer[off + 3] = 255;
+                }
             }
         }
     }
 
     /// Produce exactly one frame's worth of color clocks, accumulating beam dots into
     /// `frames` (the dedicated-emu-thread path).
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_lossless
+    )]
     pub fn step_frame(&mut self, frames: &FrameProducer, input: Option<(u8, u8, u8, u8)>) {
         if let Some((swcha, swchb, inpt4, inpt5)) = input {
             self.system.bus.riot.pins[0] = swcha;
@@ -261,41 +281,14 @@ impl EmuCore {
         let active_h = self.region.active_height() as u16;
 
         let mut old_vsync = self.system.bus.tia.objects.vsync;
-        let mut clocks = 0;
+        let mut instructions = 0;
 
+        // See `run_frame`'s doc comment: the CPU drives its own ticking now,
+        // so video/audio dots are accumulated by the TIA itself and read back
+        // once per frame instead of sampled per color clock from this loop.
         loop {
-            self.system.tick_one_color_clock();
-            clocks += 1;
-
-            let cc = self.system.bus.tia.color_clock;
-            let sl = self.system.bus.tia.scanline;
-
-            // Audio ticks every 114 color clocks (twice per scanline, ~31.4 kHz).
-            if cc == 114 || cc == 227 {
-                use rusty2600_core::AudioBus;
-                let s = self.system.bus.audio_sample();
-                let normalized = (s as f32 / 15.0) - 1.0;
-                
-                // DC blocker (1-pole high-pass filter) to remove the massive -1.0 DC offset
-                // when TIA outputs silence (s = 0), preventing audio hums or clicks.
-                let r = 0.995;
-                let y = normalized - self.dc_blocker_x + r * self.dc_blocker_y;
-                self.dc_blocker_x = normalized;
-                self.dc_blocker_y = y;
-
-                if let Some(tx) = &mut self.audio_tx {
-                    tx.push_samples(&[y]);
-                }
-            }
-
-            // Output visible dots (68..=227). Only render active scanlines.
-            if cc >= 68 && sl >= vblank_lines && sl < vblank_lines + active_h {
-                let x = (cc - 68) as usize;
-                let y = (sl - vblank_lines) as usize;
-                let color_idx = self.system.bus.tia.current_color;
-                let rgb = self.region.lookup(color_idx >> 1);
-                frame.put_dot(x, y, rgb);
-            }
+            self.system.step_instruction();
+            instructions += 1;
 
             let vsync = self.system.bus.tia.objects.vsync;
             // Frame boundary: when VSYNC transitions from 1 -> 0.
@@ -305,8 +298,34 @@ impl EmuCore {
             old_vsync = vsync;
 
             // Safety timeout in case a game hangs and stops asserting VSYNC.
-            if clocks > 1_000_000 {
+            if instructions > 200_000 {
                 break;
+            }
+        }
+
+        let samples = core::mem::take(&mut self.system.bus.tia.audio_buffer);
+        for s in samples {
+            let normalized = (s as f32 / 15.0) - 1.0;
+            // DC blocker (1-pole high-pass filter) to remove the massive -1.0 DC offset
+            // when TIA outputs silence (s = 0), preventing audio hums or clicks.
+            let r = 0.995;
+            let y = normalized - self.dc_blocker_x + r * self.dc_blocker_y;
+            self.dc_blocker_x = normalized;
+            self.dc_blocker_y = y;
+
+            if let Some(tx) = &mut self.audio_tx {
+                tx.push_samples(&[y]);
+            }
+        }
+
+        let video = &self.system.bus.tia.video_buffer;
+        for y in 0..active_h as usize {
+            let sl = y + vblank_lines as usize;
+            for x in 0..160usize {
+                let src = sl * 160 + x;
+                let color_idx = video.get(src).copied().unwrap_or(0);
+                let rgb = self.region.lookup(color_idx >> 1);
+                frame.put_dot(x, y, rgb);
             }
         }
 
@@ -340,7 +359,7 @@ pub type EmuHandle = Arc<Mutex<EmuCore>>;
 /// RIOT port bytes + the two fire inputs (4 bytes) behind a single `AtomicU32`,
 /// so the read is wait-free without a mutex.
 ///
-/// TODO(T-PS-062): widen to carry the analog paddle bytes too (a second atomic).
+/// TODO(T-0501-010): widen to carry the analog paddle bytes too (a second atomic).
 #[derive(Debug, Default)]
 pub struct SharedInput {
     /// Packed `[SWCHA, SWCHB, INPT4, INPT5]` — the emu-thread unpacks this.
@@ -368,7 +387,10 @@ impl SharedInput {
     }
 
     /// Load the latched host input (emu thread).
+    // `packed` is a deliberately bit-packed u32 (4 bytes via SWCHA/SWCHB/INPT4/INPT5 shifts);
+    // truncating `as u8` here intentionally takes the low byte of each known field, not a bug.
     #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
     pub fn load(&self) -> (u8, u8, u8, u8) {
         let packed = self.packed.load(Ordering::Acquire);
         let swcha = (packed >> 24) as u8;
@@ -419,7 +441,7 @@ mod tests {
         let mut core = EmuCore::new(0);
         core.rom_loaded = true;
         let before = core.system.color_clocks();
-        core.step_frame(&tx);
+        core.step_frame(&tx, None);
         assert!(core.system.color_clocks() > before);
     }
 }

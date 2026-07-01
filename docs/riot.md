@@ -56,7 +56,7 @@ polls `INTIM`**. Per ref-docs/research-report.md §7.
 
 The `Prescale` enum (`By1` / `By8` / `By64` / `By1024`) and the `Timer` struct
 (`value` = INTIM, `prescale`, accumulated `elapsed`) model this. The
-`INSTAT` underflow flag + the post-underflow 1-cycle mode are `T-PS-041`.
+`INSTAT` underflow flag + the post-underflow 1-cycle mode are `T-0601-005`.
 
 ## Timing
 

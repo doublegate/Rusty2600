@@ -107,14 +107,24 @@ pub struct AudioProducer {
 }
 
 impl AudioProducer {
+    /// How full the audio ring buffer is (0.0 = empty, 1.0 = full). The
+    /// emu-thread run loop paces on this to avoid overrunning the consumer.
+    #[must_use]
+    pub fn fill_ratio(&self) -> f32 {
+        self.queue.fill_ratio()
+    }
+
     /// Push core samples (at ~31.4 kHz) into the resampler and queue.
+    // `queue.len()`/`latency_samples` are small audio buffer sizes (far below f64's 52-bit
+    // exact-integer range), so the usize -> f64 conversions below never lose precision in practice.
+    #[allow(clippy::cast_precision_loss)]
     pub fn push_samples(&mut self, samples: &[f32]) {
         if samples.is_empty() {
             return;
         }
 
         let source_hz = 31400.0;
-        let base = source_hz / (self.sample_rate as f64);
+        let base = source_hz / f64::from(self.sample_rate);
         self.resampler.set_base_ratio(base);
 
         let fill = self.queue.len() as f64 / (2.0 * self.latency_samples.max(1) as f64);

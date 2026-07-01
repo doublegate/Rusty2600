@@ -126,6 +126,25 @@ pub struct Tia {
     pub inpt: [u8; 6],
     pub current_color: u8,
     rdy_stall: bool,
+    /// One color-index byte per visible dot of the CURRENT frame, indexed
+    /// `scanline * 160 + x` (`x = color_clock - 68`). Sized for the PAL/SECAM
+    /// worst case (312 scanlines); NTSC just uses a smaller prefix.
+    ///
+    /// This exists because the CPU now drives its own ticking (see
+    /// `rusty2600-core::scheduler`'s module doc comment): a single
+    /// `System::step_instruction()` call can advance MANY color clocks at
+    /// once, so an outside caller can no longer sample `current_color` once
+    /// per individual dot the way the old per-color-clock-tick loop did. The
+    /// TIA accumulates its own dots as it renders them instead; the frontend
+    /// reads this buffer once per frame (at the `VSYNC` 1→0 edge) rather than
+    /// building it incrementally.
+    #[serde(skip)]
+    pub video_buffer: alloc::vec::Vec<u8>,
+    /// Raw mixed audio samples (0..=30) accumulated since the last frame
+    /// boundary, pushed every 114 color clocks — same reasoning as
+    /// `video_buffer`. The frontend drains this once per frame.
+    #[serde(skip)]
+    pub audio_buffer: alloc::vec::Vec<u8>,
 }
 
 impl Tia {
@@ -136,6 +155,29 @@ impl Tia {
         tia.inpt[4] = 0x80;
         tia.inpt[5] = 0x80;
         tia
+    }
+
+    /// Resolve a `RESPx`/`RESMx`/`RESBL` strobe to a position in the SAME 0..159
+    /// visible-pixel coordinate space `render_pixel`'s `x` uses (never the raw
+    /// 0..227 color-clock space, which includes the 68-clock invisible HBLANK).
+    ///
+    /// Real silicon's position counter only starts decoding "start drawing" once
+    /// the beam is actually in the visible window: a strobe during HBLANK (the
+    /// overwhelming majority of real games — `WSYNC` then `RESPx` is the standard
+    /// positioning idiom) lands the object at the LEFT EDGE of the visible
+    /// display, not at whatever tiny/negative-looking clock the strobe happened
+    /// on. Clamping to the start of the visible window before adding the
+    /// documented decode delay (`docs/tia.md` "Object positioning by write
+    /// timing") reproduces that: every object the program normally positions
+    /// during HBLANK appears near `x=0` and is then fine-tuned by `HMOVE`, exactly
+    /// like the real chip — instead of every object collapsing onto the same few
+    /// columns at the left edge of the screen (positions computed in the raw
+    /// clock space stayed numerically near the HBLANK-time write clock, which is
+    /// always < 68, so almost every object's draw window fell on or just past the
+    /// HBLANK/visible boundary).
+    fn resolve_position(&self, delay: u16) -> u8 {
+        let visible_clock = self.color_clock.max(68) - 68;
+        ((visible_clock + delay) % 160) as u8
     }
 
     pub fn write_register(&mut self, reg: u8, val: u8) {
@@ -150,7 +192,27 @@ impl Tia {
                 }
             }
             regs::VBLANK => self.objects.vblank = val,
-            regs::WSYNC => self.rdy_stall = true,
+            regs::WSYNC => {
+                // WSYNC halts the CPU until the leading edge of the next
+                // scanline's HBLANK — the TIA resets the RDY latch when the
+                // color clock wraps 228 -> 0 (see `tick_color_clock`). The
+                // scheduler advances this write's own CPU cycle (3 color
+                // clocks) BEFORE applying the write, so when a `STA WSYNC`'s
+                // final cycle lands exactly on that wrap, the beam is ALREADY
+                // at `color_clock == 0` — the start of the very scanline the
+                // WSYNC was waiting for. Arming the latch here anyway would make
+                // the next fetch spin until the *following* wrap, costing a full
+                // spurious scanline. That off-by-one is exactly Frogger's
+                // positioning-kernel jitter: its `STA WSYNC; STA HMOVE` object
+                // fine-positioning routine strobes WSYNC right at the line
+                // boundary, and the phantom extra line made the frame 263 (and
+                // wobble 262..267) where real hardware / Gopher2600 / Stella
+                // hold a rock-steady 262. Releasing at the boundary the write
+                // coincides with — not the next one — matches the reference.
+                if self.color_clock != 0 {
+                    self.rdy_stall = true;
+                }
+            }
             regs::RSYNC => self.color_clock = 0,
             regs::NUSIZ0 => self.objects.nusiz[0] = val,
             regs::NUSIZ1 => self.objects.nusiz[1] = val,
@@ -166,11 +228,11 @@ impl Tia {
             }
             regs::PF1 => self.objects.pf = (self.objects.pf & 0x000F_00FF) | (u32::from(val) << 8),
             regs::PF2 => self.objects.pf = (self.objects.pf & 0x000F_FF00) | u32::from(val),
-            regs::RESP0 => self.objects.pos[0] = ((self.color_clock + 5) % 228) as u8,
-            regs::RESP1 => self.objects.pos[1] = ((self.color_clock + 5) % 228) as u8,
-            regs::RESM0 => self.objects.pos[2] = ((self.color_clock + 4) % 228) as u8,
-            regs::RESM1 => self.objects.pos[3] = ((self.color_clock + 4) % 228) as u8,
-            regs::RESBL => self.objects.pos[4] = ((self.color_clock + 4) % 228) as u8,
+            regs::RESP0 => self.objects.pos[0] = self.resolve_position(5),
+            regs::RESP1 => self.objects.pos[1] = self.resolve_position(5),
+            regs::RESM0 => self.objects.pos[2] = self.resolve_position(4),
+            regs::RESM1 => self.objects.pos[3] = self.resolve_position(4),
+            regs::RESBL => self.objects.pos[4] = self.resolve_position(4),
             regs::AUDC0 => self.audio.channels[0].control = val,
             regs::AUDC1 => self.audio.channels[1].control = val,
             regs::AUDF0 => self.audio.channels[0].freq = val & 0x1F,
@@ -199,13 +261,16 @@ impl Tia {
             regs::RESMP0 => self.objects.resmp[0] = val & 0x02 != 0,
             regs::RESMP1 => self.objects.resmp[1] = val & 0x02 != 0,
             regs::HMOVE => {
+                // `pos` lives in the same 0..159 visible-pixel space as `resolve_position`
+                // (see its doc comment) and `render_pixel`'s `x`, never the raw 228-wide
+                // color-clock space.
                 for i in 0..5 {
                     let mut p = self.objects.pos[i] as i16;
                     p -= self.objects.hm[i] as i16;
                     if p < 0 {
-                        p += 228;
+                        p += 160;
                     }
-                    p %= 228;
+                    p %= 160;
                     self.objects.pos[i] = p as u8;
                 }
             }
@@ -252,6 +317,20 @@ impl Tia {
         }
         self.render_pixel();
         self.audio.tick();
+
+        if self.color_clock >= 68 && (self.scanline as usize) < 312 {
+            let x = (self.color_clock - 68) as usize;
+            let idx = (self.scanline as usize) * 160 + x;
+            if self.video_buffer.len() <= idx {
+                self.video_buffer.resize(312 * 160, 0);
+            }
+            self.video_buffer[idx] = self.current_color;
+        }
+        // Audio samples twice per scanline (~31.4 kHz), same cadence the dot
+        // clock has always run at — see `docs/scheduler.md`'s audio-clock row.
+        if self.color_clock == 114 || self.color_clock == 227 {
+            self.audio_buffer.push(self.audio.sample());
+        }
     }
 
     fn render_pixel(&mut self) {
@@ -303,7 +382,7 @@ impl Tia {
         // 2. Ball
         let mut bl_pixel = false;
         if self.objects.enabl {
-            let diff = (self.color_clock + 228 - self.objects.pos[4] as u16) % 228;
+            let diff = (x + 160 - self.objects.pos[4] as u16) % 160;
             let size_bl = 1 << ((self.objects.ctrlpf >> 4) & 0x03);
             if diff < size_bl {
                 bl_pixel = true;
@@ -316,8 +395,11 @@ impl Tia {
         let mut m0_pixel = false;
         let mut m1_pixel = false;
 
+        // `cc` here is the visible-window pixel coordinate (`x`), NOT the raw color
+        // clock — `pos` (set by `resolve_position`/`HMOVE`) lives in that same 0..159
+        // space, so the two must be compared in it consistently.
         let check_pm = |cc: u16, pos: u16, nusiz: u8, is_missile: bool| -> Option<u16> {
-            let diff = (cc + 228 - pos) % 228;
+            let diff = (cc + 160 - pos) % 160;
             let number_size = nusiz & 0x07;
             let copies: &[u16] = match number_size {
                 0 | 5 | 7 => &[0],
@@ -351,12 +433,8 @@ impl Tia {
             None
         };
 
-        if let Some(offset) = check_pm(
-            self.color_clock,
-            self.objects.pos[0] as u16,
-            self.objects.nusiz[0],
-            false,
-        ) {
+        if let Some(offset) = check_pm(x, self.objects.pos[0] as u16, self.objects.nusiz[0], false)
+        {
             let grp = if self.objects.vdelp[0] {
                 self.objects.old_grp[0]
             } else {
@@ -371,12 +449,8 @@ impl Tia {
                 p0_pixel = true;
             }
         }
-        if let Some(offset) = check_pm(
-            self.color_clock,
-            self.objects.pos[1] as u16,
-            self.objects.nusiz[1],
-            false,
-        ) {
+        if let Some(offset) = check_pm(x, self.objects.pos[1] as u16, self.objects.nusiz[1], false)
+        {
             let grp = if self.objects.vdelp[1] {
                 self.objects.old_grp[1]
             } else {
@@ -392,22 +466,12 @@ impl Tia {
             }
         }
         if self.objects.enam[0] && !self.objects.resmp[0] {
-            if let Some(_) = check_pm(
-                self.color_clock,
-                self.objects.pos[2] as u16,
-                self.objects.nusiz[0],
-                true,
-            ) {
+            if let Some(_) = check_pm(x, self.objects.pos[2] as u16, self.objects.nusiz[0], true) {
                 m0_pixel = true;
             }
         }
         if self.objects.enam[1] && !self.objects.resmp[1] {
-            if let Some(_) = check_pm(
-                self.color_clock,
-                self.objects.pos[3] as u16,
-                self.objects.nusiz[1],
-                true,
-            ) {
+            if let Some(_) = check_pm(x, self.objects.pos[3] as u16, self.objects.nusiz[1], true) {
                 m1_pixel = true;
             }
         }
@@ -521,11 +585,110 @@ mod tests {
     #[test]
     fn wsync_sets_and_hblank_clears_rdy() {
         let mut tia = Tia::new();
+        // Strobe WSYNC mid-line (the realistic case): the beam is not at a line
+        // boundary, so RDY must stall until the color clock wraps 228 -> 0.
+        tia.color_clock = 100;
         tia.write_register(regs::WSYNC, 0);
         assert!(tia.rdy_stall());
-        for _ in 0..228 {
+        for _ in 0..128 {
             tia.tick_color_clock();
         }
         assert!(!tia.rdy_stall());
+    }
+
+    // Regression for the Frogger positioning-kernel jitter: a `STA WSYNC` whose
+    // final CPU cycle lands the beam exactly on the 228 -> 0 wrap (color_clock
+    // already 0 when the write is applied) is already at the next scanline's
+    // start, so it must NOT arm the RDY latch — doing so would cost a phantom
+    // extra scanline (frame 263 instead of 262). See `write_register`'s WSYNC
+    // arm.
+    #[test]
+    fn wsync_at_line_boundary_does_not_stall_an_extra_line() {
+        let mut tia = Tia::new();
+        tia.color_clock = 0; // the write's own cycle just wrapped the beam here
+        tia.write_register(regs::WSYNC, 0);
+        assert!(
+            !tia.rdy_stall(),
+            "WSYNC landing exactly on the line boundary must not stall a full extra line"
+        );
+    }
+
+    // Regression coverage for the "every sprite bunches up at the left edge"
+    // bug: RESPx strobed during HBLANK (the standard `WSYNC`-then-`RESPx` idiom
+    // virtually every game uses) must clamp to the start of the VISIBLE window,
+    // not land at whatever tiny clock value the strobe happened on.
+    #[test]
+    fn resp_during_hblank_positions_player_at_left_edge() {
+        let mut tia = Tia::new();
+        tia.color_clock = 10;
+        tia.write_register(regs::RESP0, 0);
+        // visible_clock = max(10, 68) - 68 = 0; + the 5-clock delay => 5.
+        assert_eq!(tia.objects.pos[0], 5);
+    }
+
+    #[test]
+    fn resp_during_visible_window_positions_relative_to_beam() {
+        let mut tia = Tia::new();
+        tia.color_clock = 100; // x = 100 - 68 = 32
+        tia.write_register(regs::RESP0, 0);
+        assert_eq!(tia.objects.pos[0], 37); // 32 + 5
+    }
+
+    #[test]
+    fn two_resets_anywhere_in_hblank_land_at_the_same_left_edge_position() {
+        let mut a = Tia::new();
+        a.color_clock = 0;
+        a.write_register(regs::RESP0, 0);
+
+        let mut b = Tia::new();
+        b.color_clock = 67;
+        b.write_register(regs::RESP0, 0);
+
+        // Before the fix these landed at raw-clock-derived positions 5 and 72 —
+        // wildly different, and both numerically inside/just past the invisible
+        // HBLANK range rather than meaningfully placed in the visible window.
+        assert_eq!(a.objects.pos[0], b.objects.pos[0]);
+        assert_eq!(a.objects.pos[0], 5);
+    }
+
+    #[test]
+    fn hmove_wraps_within_the_160_wide_visible_range() {
+        let mut tia = Tia::new();
+        tia.objects.pos[0] = 2;
+        tia.objects.hm[0] = 7; // max positive motion: pos -= hm => 2 - 7 = -5
+        tia.write_register(regs::HMOVE, 0);
+        assert_eq!(tia.objects.pos[0], 155); // -5 + 160
+    }
+
+    #[test]
+    fn player_reset_in_hblank_renders_near_the_left_edge_not_off_screen() {
+        let mut tia = Tia::new();
+        tia.objects.grp[0] = 0xFF; // fully-lit 8px sprite
+        tia.objects.colu[0] = 0x0E;
+        tia.objects.nusiz[0] = 0; // one copy, normal size
+
+        // The standard idiom: position during HBLANK (here, clock 10).
+        tia.color_clock = 10;
+        tia.write_register(regs::RESP0, 0);
+
+        // Advance to the start of the visible window and scan for the player's
+        // first lit pixel; it must appear near the left edge, not be invisible
+        // (clipped entirely inside HBLANK) or wrapped to the far side.
+        while tia.color_clock < 67 {
+            tia.tick_color_clock();
+        }
+        let mut seen_at = None;
+        for x in 0..160u16 {
+            tia.tick_color_clock();
+            if tia.current_color == 0x0E {
+                seen_at = Some(x);
+                break;
+            }
+        }
+        let x = seen_at.expect("player pixel should be visible near the left edge");
+        assert!(
+            x < 16,
+            "player pixel rendered at x={x}, expected near the left edge"
+        );
     }
 }

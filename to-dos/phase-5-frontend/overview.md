@@ -46,11 +46,11 @@ deep post-process chain (CRT / NTSC filter / upscalers) — Phase 8.
 ## Sprints
 
 - Sprint 1 — present path + input + debugger panels → `sprint-1-shell-and-input.md`
-  (`T-51-NNN`).
+  (`T-0501-NNN`).
 - Sprint 2 — audio ring + rate control + save-state / rewind / run-ahead →
-  `sprint-2-pacing-and-state.md` (`T-52-NNN`).
+  `sprint-2-pacing-and-state.md` (`T-0502-NNN`).
 - Sprint 3 — wasm32 build + `Board: Send` / `emu-thread` → `sprint-3-wasm-thread.md`
-  (`T-53-NNN`).
+  (`T-0503-NNN`).
 
 ## Risks
 

@@ -86,7 +86,15 @@ The TIA **owns** the signal (`Tia::rdy_stall`). The scheduler reads it and
 simply skips the CPU step while it is asserted — **the color clock keeps
 running, only the CPU is frozen**. The TIA releases RDY when its color-clock
 counter wraps at the end of HBLANK (`tick_color_clock` clears `rdy_stall` on the
-228 → 0 wrap). The exact mid-instruction freeze point is `T-PS-061`.
+228 → 0 wrap). The exact mid-instruction freeze point is `T-0201-006`.
+
+Because the CPU access ticks its own cycle *before* the register write is
+applied (`write1` = tick-then-write), a `STA WSYNC` whose final cycle lands on
+the 228 → 0 wrap arrives with the beam already at `color_clock == 0`. Arming the
+stall then would over-wait a full extra scanline, so `Tia::write_register` skips
+arming `rdy_stall` at `color_clock == 0` (the strobe is already satisfied by the
+boundary it coincides with). See `docs/tia.md` §WSYNC — this was Frogger's
+positioning-kernel jitter.
 
 ## Bus design
 

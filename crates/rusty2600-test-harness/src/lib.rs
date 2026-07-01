@@ -59,7 +59,7 @@ impl GoldenLogDiffer {
     // Not `const`: the real differ pushes into a heap trace buffer.
     #[allow(clippy::missing_const_for_fn)]
     pub fn capture(&mut self, _record: TraceRecord) {
-        // TODO(T-PS-070): push into the live trace buffer.
+        // TODO(T-0601-001): push into the live trace buffer.
         self.captured += 1;
     }
 
@@ -69,7 +69,7 @@ impl GoldenLogDiffer {
     #[must_use]
     #[allow(clippy::missing_const_for_fn)]
     pub fn first_divergence(&self) -> Option<usize> {
-        // TODO(T-PS-071): bundle the Klaus functional-test golden trace and diff
+        // TODO(T-0601-002): bundle the Klaus functional-test golden trace and diff
         // it record-for-record. Stub: no golden log loaded yet ⇒ no divergence.
         None
     }
@@ -97,7 +97,7 @@ pub fn run_until_complete(system: &mut System, max_color_clocks: u64) -> RunOutc
     while clocks < max_color_clocks {
         system.tick_one_color_clock();
         clocks += 1;
-        // TODO(T-PS-072): poll the suite's result protocol (e.g. a sentinel
+        // TODO(T-0601-003): poll the suite's result protocol (e.g. a sentinel
         // address) and return `Passed` / `Failed(code)` when it fires.
     }
     RunOutcome::TimedOut
@@ -148,7 +148,7 @@ impl SnapComparator {
     /// number of differing pixels (0 ⇒ byte-identical). Stub.
     #[must_use]
     pub fn diff_pixels(&self, captured: &[u8], golden: &[u8]) -> usize {
-        // TODO(T-PS-073): tolerance-aware comparison + a `.snap` writer for the
+        // TODO(T-0601-004): tolerance-aware comparison + a `.snap` writer for the
         // bless flow. Stub: exact byte diff, length-mismatch ⇒ all differ.
         if captured.len() != golden.len() {
             return captured.len().max(golden.len());

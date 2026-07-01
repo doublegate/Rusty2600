@@ -6,7 +6,7 @@
 
 ## Related work
 
-- Ticket(s): <!-- e.g., T-21-003 -->
+- Ticket(s): <!-- e.g., T-0201-003 -->
 - Docs: <!-- e.g., docs/cpu-6502.md §Addressing modes -->
 - Issue(s): <!-- e.g., #42 -->
 

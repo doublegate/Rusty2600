@@ -35,7 +35,7 @@ Out: any real chip engine (Phases 1–3), real bus decode (Phase 2), board bread
 ## Sprints
 
 - Sprint 1 — workspace + substrate + CI → `sprint-1-workspace-substrate.md`
-  (`T-01-NNN`).
+  (`T-0001-NNN`).
 
 ## Risks
 

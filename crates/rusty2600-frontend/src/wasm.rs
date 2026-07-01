@@ -107,23 +107,29 @@ fn start_raf_loop(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
         EMU.with(|emu| {
             let mut emu = emu.borrow_mut();
             if let Some(ref mut system) = emu.system {
-                // Drive one frame
-                let clocks = 262 * 228;
+                // Drive one frame by running instructions until the VSYNC 1->0
+                // edge (the CPU drives its own ticking now — see
+                // `rusty2600-core::scheduler`'s module doc comment; this can no
+                // longer sample one dot per color clock from a fixed-iteration
+                // loop, so it reads the TIA's own accumulated video buffer
+                // once the frame boundary is reached).
+                let mut old_vsync = system.bus.tia.objects.vsync;
+                for _ in 0..200_000u32 {
+                    system.step_instruction();
+                    let vsync = system.bus.tia.objects.vsync;
+                    if (old_vsync & 0x02 != 0) && (vsync & 0x02 == 0) {
+                        break;
+                    }
+                    old_vsync = vsync;
+                }
+
                 let mut framebuffer = vec![0u8; (ATARI_W * ATARI_H * 4) as usize];
-
-                for _ in 0..clocks {
-                    system.tick_one_color_clock();
-
-                    let cc = system.bus.tia.color_clock;
-                    let sl = system.bus.tia.scanline;
-
-                    // Visible lines 68..=227, only up to active_height (192)
-                    if cc >= 68 && sl < ATARI_H as u16 {
-                        let x = (cc - 68) as usize;
-                        let y = sl as usize;
-                        let color_idx = system.bus.tia.current_color;
+                let video = &system.bus.tia.video_buffer;
+                for y in 0..ATARI_H as usize {
+                    for x in 0..ATARI_W as usize {
+                        let src = y * 160 + x;
+                        let color_idx = video.get(src).copied().unwrap_or(0);
                         let rgb = crate::palette::Region::Ntsc.table()[(color_idx >> 1) as usize];
-
                         let off = (y * ATARI_W as usize + x) * 4;
                         if off + 3 < framebuffer.len() {
                             framebuffer[off] = (rgb >> 16) as u8;
@@ -133,7 +139,6 @@ fn start_raf_loop(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
                         }
                     }
                 }
-                system.bus.tia.scanline = 0;
 
                 let clamped = wasm_bindgen::Clamped(framebuffer.as_slice());
                 if let Ok(image_data) =

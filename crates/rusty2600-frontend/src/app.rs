@@ -52,6 +52,20 @@ struct Active {
     /// The running audio output stream (keeps the cpal device alive).
     #[allow(dead_code)]
     audio_out: Option<crate::audio::AudioOutput>,
+    /// Wall-clock deadline for the next emulated frame. `about_to_wait` requests a
+    /// redraw every event-loop iteration with no inherent rate limit (the display's
+    /// present-mode vsync isn't a reliable substitute — it caps to the MONITOR's
+    /// refresh rate, not the console's ~60.0988 Hz NTSC rate, and doesn't always
+    /// block the way Fifo nominally promises across platforms). Without this gate
+    /// `run_frame()` gets called once per `RedrawRequested`, which can fire far
+    /// faster than real NTSC time — the emulator visibly runs "fast." This is the
+    /// pacing the module doc comment promises ("the frontend owns pacing").
+    ///
+    /// Only meaningful on the synchronous (`not(emu-thread)`) path: when the emu
+    /// thread owns stepping, ITS run loop paces via the audio ring buffer's fill
+    /// ratio instead (see `emu_thread.rs`'s spawned closure).
+    #[cfg(not(feature = "emu-thread"))]
+    next_step_at: std::time::Instant,
 
     #[cfg(feature = "emu-thread")]
     shared_input: Arc<crate::emu_thread::SharedInput>,
@@ -102,6 +116,9 @@ impl App {
 }
 
 impl ApplicationHandler for App {
+    // Intentionally cohesive: this is the egui/winit window+device bring-up sequence; splitting
+    // it apart would scatter tightly-sequenced init steps with no real reuse benefit.
+    #[allow(clippy::too_many_lines)]
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.active.is_some() {
             return; // already initialized (e.g. resumed after suspend)
@@ -164,10 +181,10 @@ impl ApplicationHandler for App {
         };
         emu.audio_tx = audio_tx;
 
-        // `Arc<Mutex<EmuCore>>` is the right shape for the (default-off) dedicated emulation thread
-        // + the present path. It is not yet `Send + Sync` only because `rusty2600-cart`'s `Board`
-        // trait is not `Send` (the RustyNES `Mapper: Send` rule the cart phase will land); once it
-        // is, the `emu-thread` default returns and this allow goes away. TODO(T-PS-063).
+        // `Arc<Mutex<EmuCore>>` is the right shape for the dedicated `emu-thread` + the present
+        // path. `EmuCore` is `Send` (via `Bus::board`'s concrete `Cartridge` enum, not
+        // `Box<dyn Board>`) — the stale blocker this comment used to describe is resolved
+        // (`T-0503-001`, DONE); see `Cargo.toml`'s `emu-thread` feature comment for the history.
         #[allow(clippy::arc_with_non_send_sync)]
         let core = Arc::new(Mutex::new(emu));
 
@@ -188,10 +205,12 @@ impl ApplicationHandler for App {
 
                         // Pace the emulator using the audio ring buffer fill ratio.
                         // If it's over 60% full, sleep to let the audio consumer drain it.
-                        let fill = if !paused {
-                            lock.audio_tx.as_ref().map_or(0.0, |tx| tx.queue.fill_ratio())
-                        } else {
+                        let fill = if paused {
                             0.0
+                        } else {
+                            lock.audio_tx
+                                .as_ref()
+                                .map_or(0.0, crate::audio::AudioProducer::fill_ratio)
                         };
 
                         if !paused && fill < 0.6 {
@@ -220,6 +239,8 @@ impl ApplicationHandler for App {
             config: self.config.clone(),
             fullscreen: false,
             audio_out,
+            #[cfg(not(feature = "emu-thread"))]
+            next_step_at: std::time::Instant::now(),
             #[cfg(feature = "emu-thread")]
             shared_input,
             #[cfg(feature = "emu-thread")]
@@ -277,23 +298,46 @@ impl App {
     /// One render: step a frame + copy the framebuffer under a brief lock, blit, run the egui
     /// shell, present. Returns the menu actions to dispatch AFTER this pass (never dispatched
     /// mid-egui).
+    // Intentionally cohesive: this is the immediate-mode per-frame render pass (lock, step,
+    // blit, run the egui shell, present); egui UI functions are conventionally long.
+    #[allow(clippy::too_many_lines)]
     fn render(active: &mut Active) -> Vec<MenuAction> {
         #[cfg(feature = "emu-thread")]
         active.shared_input.store(active.host_input);
 
         // --- (1) Step one frame + copy the framebuffer + read-only info under a BRIEF lock. ---
         let (fb, fb_dims, info) = {
+            #[cfg(feature = "emu-thread")]
+            let emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+            #[cfg(not(feature = "emu-thread"))]
             let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
 
             #[cfg(not(feature = "emu-thread"))]
-            emu.run_frame(Some(active.host_input));
+            {
+                let now = std::time::Instant::now();
+                if now >= active.next_step_at {
+                    emu.run_frame(Some(active.host_input));
+                    let period = std::time::Duration::from_secs_f64(1.0 / emu.region.frame_rate());
+                    active.next_step_at += period;
+                    // If we fell far behind (window was minimized, the machine was
+                    // suspended, a debugger paused us, ...), don't burst-catch-up by
+                    // running a pile of frames back-to-back next time — that would
+                    // look like fast-forward. Re-anchor to "one period from now."
+                    if active.next_step_at + period < now {
+                        active.next_step_at = now + period;
+                    }
+                }
+                // Otherwise: skip stepping the emulator this pass. `framebuffer()`
+                // below still returns the last-produced frame, so the present path
+                // keeps rendering something (UI stays responsive) without the
+                // emulator racing ahead of NTSC real time.
+            }
 
             #[cfg(feature = "emu-thread")]
             let fb = active
                 .frame_rx
                 .take()
-                .map(|f| f.pixels)
-                .unwrap_or_else(|| emu.framebuffer().to_vec());
+                .map_or_else(|| emu.framebuffer().to_vec(), |f| f.pixels);
             #[cfg(not(feature = "emu-thread"))]
             let fb = emu.framebuffer().to_vec();
 

@@ -6,14 +6,16 @@
 //! "hotspot" addresses inside that window. There are DOZENS of schemes, so they
 //! are **tiered** for honesty (see [`Tier`] + ADR 0003 / `docs/cart.md`):
 //!
-//! - `2K` (mirrored `4K`), `4K` plain — `Core`.
-//! - `F8` (`8K`), `F6` (`16K`), `F4` (`32K`) Atari standard-bank hotspots —
-//!   `Core` / `Curated`.
-//! - `E0` (Parker Bros), `E7` (M-network), `FE` (Activision `SCABS`) — `Curated`.
-//! - `3F` (Tigervision), `3E` (Boulder Dash) / `3E+` — `Curated`.
-//! - Superchip (`+128 B` on-cart RAM), `CBS RAM+`, `DPC` (Pitfall II) —
-//!   `Curated` / `BestEffort`.
-//! - `DPC+`, pirate / homebrew `BMC` schemes — `BestEffort`.
+//! - `2K` (mirrored `4K`), `4K` plain — `Core` (zero board-specific hotspot
+//!   logic; every hotspot-driven scheme below is `Curated` or `BestEffort`,
+//!   never `Core`).
+//! - `CV` (Commavid), `F8`/`F6`/`F4` (Atari standard-bank), `FA`/`CBS RAM+`,
+//!   Superchip (`F8SC`/`F6SC`/`F4SC`, `+128 B` on-cart RAM) — `Curated`.
+//! - `E0` (Parker Bros), `E7` (M-network), `FE` (Activision `SCABS`), `3F`
+//!   (Tigervision), `3E` (Boulder Dash) / `3E+`, `DPC` (Pitfall II), `DPC+` /
+//!   `CDF`/`CDFJ`, and the remaining long tail — `BestEffort` until each gets
+//!   a redistributable fixture + register-decode tests (see `docs/cart.md`'s
+//!   scheme catalogue for the authoritative per-scheme tier).
 //!
 //! Part of the one-directional chip-crate graph (see `docs/architecture.md`):
 //! this crate has NO video / audio / cpu dependency (the TIA's memory bus
@@ -155,8 +157,9 @@ impl Board for Rom4K {
 }
 
 /// Atari F8: 8 KiB ROM as two 4 KiB banks, switched by accessing the hotspots
-/// `$1FF8` (select bank 0) / `$1FF9` (select bank 1). Core tier (F8 is the
-/// canonical 8 KiB scheme; the maintainer pins it Core).
+/// `$1FF8` (select bank 0) / `$1FF9` (select bank 1). Curated tier (matches
+/// `docs/cart.md` and the research-report tier split; `T-0401-008`
+/// reconciled the earlier stray `Core` placement).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BankF8 {
     #[serde(with = "serde_bytes_array")]
@@ -205,7 +208,7 @@ impl Board for BankF8 {
         self.hotspot(addr);
     }
     fn tier(&self) -> Tier {
-        Tier::Core
+        Tier::Curated
     }
 }
 
@@ -311,7 +314,7 @@ pub enum Cartridge {
     Rom2K(Rom2K),
     /// 4 KiB core mapper
     Rom4K(Rom4K),
-    /// F8 bankswitched core mapper
+    /// F8 bankswitched mapper (Curated tier)
     BankF8(BankF8),
     /// F6 bankswitched mapper
     BankF6(BankF6),
@@ -385,19 +388,20 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
         0x0800 => Rom2K::new(rom).map(Cartridge::Rom2K),
         0x1000 => Rom4K::new(rom).map(Cartridge::Rom4K),
         0x2000 => {
-            // 8 KiB: default to F8 (Core). Disambiguation from E0 (Parker Bros,
-            // Curated) / FE (Activision SCABS, Curated) / 3F-with-8K (Tigervision,
-            // Curated) needs hotspot-pattern + ROM-DB detection.
-            // TODO(T-PS-010): E0 / FE / 3F (Curated) detection for 8 KiB images.
+            // 8 KiB: default to F8 (Curated). Disambiguation from E0 (Parker Bros,
+            // BestEffort) / FE (Activision SCABS, BestEffort) / 3F-with-8K
+            // (Tigervision, BestEffort) needs hotspot-pattern + ROM-DB detection.
+            // TODO(T-0401-001): E0 / FE / 3F (BestEffort) detection for 8 KiB images.
             BankF8::new(rom).map(Cartridge::BankF8)
         }
-        // TODO(T-PS-011): 0x3000  E7 (M-network, Curated).
+        // TODO(T-0401-002): 0x3000  E7 (M-network, Curated).
         0x4000 => BankF6::new(rom).map(Cartridge::BankF6),
         0x8000 => BankF4::new(rom).map(Cartridge::BankF4),
-        // TODO(T-PS-014): Superchip variants F8SC/F6SC/F4SC (+128 B RAM, Curated).
-        // TODO(T-PS-015): 3F (Tigervision) / 3E (Boulder Dash) / 3E+ (BestEffort).
-        // TODO(T-PS-016): DPC (Pitfall II, Curated) / DPC+ (BestEffort) via tick_coprocessor.
-        // TODO(T-PS-017): pirate / homebrew BMC schemes (BestEffort).
+        // TODO(T-0401-003): Superchip variants F8SC/F6SC/F4SC (+128 B RAM, Curated).
+        // TODO(T-0401-004): 3F (Tigervision) / 3E (Boulder Dash) / 3E+ (BestEffort).
+        // TODO(T-0401-005): DPC (Pitfall II, Curated) via tick_coprocessor.
+        // TODO(T-0401-006): DPC+ (BestEffort) via tick_coprocessor.
+        // TODO(T-0401-007): pirate / homebrew BMC schemes (BestEffort).
         _ => None,
     }
 }
@@ -435,7 +439,7 @@ mod tests {
         assert_eq!(board.cpu_read(0x1000), 0x11);
         board.cpu_read(0x1FF9); // select bank 1
         assert_eq!(board.cpu_read(0x1000), 0x22);
-        assert_eq!(board.tier(), Tier::Core);
+        assert_eq!(board.tier(), Tier::Curated);
     }
 
     #[test]

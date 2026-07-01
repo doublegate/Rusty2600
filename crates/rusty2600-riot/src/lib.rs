@@ -154,7 +154,20 @@ impl Riot {
     fn set_timer(&mut self, val: u8, prescale: Prescale) {
         self.timer.value = val;
         self.timer.prescale = prescale;
-        self.timer.elapsed = 0;
+        // The cycle a TIMxT write happens on counts as the FIRST cycle of the
+        // first interval, not cycle zero of a fresh count: real 6532 silicon
+        // decrements INTIM just ONE cycle after the write, not a full
+        // `prescale` cycles later (confirmed against Stella's
+        // `M6532::setTimerRegister`, which sets `mySubTimer = myDivider - 1`
+        // on write). Starting `elapsed` at `prescale - 1` reproduces that: the
+        // very next `tick()` call reaches `target` and decrements.
+        //
+        // Getting this wrong doesn't just mis-time reads of INTIM — every
+        // TIMxT write silently costs `prescale - 1` extra cycles on its first
+        // interval, which throws off any downstream polling loop timed
+        // against it (e.g. an end-of-frame overscan wait), a real symptom we
+        // traced to visible frame-length jitter.
+        self.timer.elapsed = (prescale as u16) - 1;
         self.timer.underflow = false;
         self.timer.post_underflow = false; // Exits 1T mode
     }
@@ -205,17 +218,40 @@ mod tests {
         assert_eq!(riot.cpu_read(0x284), 0xFF);
     }
 
+    // Regression test for the "first decrement fires one cycle after the
+    // write, not a full prescale interval later" fix: verified against
+    // Stella's `M6532::setTimerRegister` (`mySubTimer = myDivider - 1`).
+    // TIM8T=1 (prescale 8): the write consumes the cycle it happens on as
+    // though 7 of the 8 sub-cycles already elapsed, so the FIRST decrement
+    // (1 -> 0) fires after just 1 tick; every decrement after that is a full
+    // 8-cycle interval apart.
+    #[test]
+    fn timer_first_decrement_fires_one_cycle_after_write() {
+        let mut riot = Riot::new();
+        riot.cpu_write(0x295, 1); // TIM8T = 1
+
+        riot.tick();
+        assert_eq!(
+            riot.cpu_read(0x284),
+            0,
+            "first decrement should fire after 1 cycle"
+        );
+    }
+
     #[test]
     fn timer_instat_and_post_underflow() {
         let mut riot = Riot::new();
-        riot.cpu_write(0x295, 0); // TIM8T = 0
+        riot.cpu_write(0x295, 1); // TIM8T = 1
+
+        riot.tick(); // 1 cycle after write: fires immediately, value -> 0.
+        assert_eq!(riot.cpu_read(0x284), 0);
 
         for _ in 0..7 {
             riot.tick();
-            // Should hold at 0 for one interval duration
+            // Holds at 0 for one full interval duration (8 cycles) before underflowing.
             assert_eq!(riot.cpu_read(0x284), 0);
         }
-        riot.tick(); // tick 8: underflows
+        riot.tick(); // The 8th tick since hitting 0: underflows.
 
         // Check INSTAT without clearing the flag
         assert_eq!(riot.cpu_read(0x285) & 0xC0, 0xC0);

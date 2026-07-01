@@ -55,6 +55,21 @@ impl Status {
 pub trait CpuBus {
     fn read(&mut self, addr: u16) -> u8;
     fn write(&mut self, addr: u16, val: u8);
+
+    /// Advance the rest of the system (TIA/RIOT/cart) by exactly one CPU
+    /// cycle's worth of real time. Called once per bus access the CPU makes,
+    /// so a multi-cycle instruction advances the world cycle-by-cycle instead
+    /// of all at once — this is what keeps the CPU's notion of elapsed time in
+    /// lockstep with the TIA's color clock. Default no-op for buses that don't
+    /// model timing (flat-RAM test harnesses, the Klaus functional-test bus).
+    fn tick_cycle(&mut self) {}
+
+    /// Whether the bus is holding RDY low (the WSYNC beam-stall). The CPU
+    /// spins on [`Self::tick_cycle`] while this is true instead of performing
+    /// its next access. Default false for buses with no such concept.
+    fn rdy_stall(&self) -> bool {
+        false
+    }
 }
 
 const STACK_BASE: u16 = 0x0100;
@@ -126,6 +141,17 @@ impl Cpu {
         self.pc = addr;
     }
 
+    /// Execute one full instruction and return its cycle count.
+    ///
+    /// This looks like it runs "all at once," but it doesn't advance the rest
+    /// of the system atomically: every bus access (and every dummy/idle cycle)
+    /// inside `dispatch` funnels through [`Self::idle_tick`], which calls
+    /// [`CpuBus::tick_cycle`] once per CPU cycle as it goes — so by the time
+    /// this function returns, the TIA/RIOT/cart have been advanced
+    /// cycle-by-cycle in step with the CPU, not all at the end. A `STA WSYNC`
+    /// mid-instruction therefore takes effect at the exact color clock it's
+    /// written on, and any subsequent access within the SAME instruction (rare,
+    /// but possible for multi-cycle ops) sees the up-to-date world state.
     pub fn step<B: CpuBus>(&mut self, bus: &mut B) -> u8 {
         if self.jammed {
             return 0;
@@ -142,7 +168,10 @@ impl Cpu {
         cycles
     }
 
-    // Stub tick() function to maintain compatibility if anyone calls it
+    /// Run exactly one instruction. The caller (the scheduler's
+    /// `step_instruction`) drives the outer loop; this no longer represents a
+    /// single CPU cycle — see [`Self::step`]'s doc comment for how cycle-level
+    /// timing is actually achieved.
     pub fn tick<B: CpuBus>(&mut self, bus: &mut B) {
         self.step(bus);
     }
@@ -187,7 +216,22 @@ impl Cpu {
         u16::from(lo) | (u16::from(hi) << 8)
     }
 
-    fn idle_tick<B: CpuBus>(&mut self, _bus: &mut B) {
+    /// The single choke-point every bus access (and every dummy/idle cycle)
+    /// goes through. This is what keeps the CPU's cycle count in lockstep with
+    /// the TIA color clock: each call advances the rest of the system by
+    /// exactly one CPU cycle via [`CpuBus::tick_cycle`] BEFORE the cycle's own
+    /// counters move, so a multi-cycle instruction advances real time
+    /// cycle-by-cycle instead of all at once when it finally returns.
+    ///
+    /// While [`CpuBus::rdy_stall`] is asserted (the WSYNC beam-stall), the CPU
+    /// spins here — ticking the rest of the system without advancing its own
+    /// cycle count — exactly matching real hardware: RDY held low freezes the
+    /// CPU, but the color clock (and RIOT/cart) keep running.
+    fn idle_tick<B: CpuBus>(&mut self, bus: &mut B) {
+        while bus.rdy_stall() {
+            bus.tick_cycle();
+        }
+        bus.tick_cycle();
         self.cycles_emitted = self.cycles_emitted.saturating_add(1);
         self.cycles = self.cycles.wrapping_add(1);
     }
@@ -234,6 +278,15 @@ impl Cpu {
 
     fn addr_zp_x<B: CpuBus>(&mut self, bus: &mut B) -> Operand {
         let base = self.fetch_pc(bus);
+        // Zero-page-indexed addressing ALWAYS spends a cycle on a dummy read
+        // at the UNINDEXED base address before the index add — unlike
+        // absolute,X/Y, where the dummy read only happens on a page cross
+        // (there's no "high byte to fix" here; the ALU just needs a cycle to
+        // wrap the addition within the zero page). Skipping this cycle was a
+        // real, systematic bug affecting every zp,X/zp,Y/(zp,X)/(zp),Y
+        // opcode — confirmed against the SingleStepTests 65x02 cycle-exact
+        // corpus (`crates/rusty2600-cpu/tests/singlestep_test.rs`).
+        let _ = self.read1(bus, u16::from(base));
         Operand {
             addr: u16::from(base.wrapping_add(self.x)),
             page_crossed: false,
@@ -242,6 +295,8 @@ impl Cpu {
 
     fn addr_zp_y<B: CpuBus>(&mut self, bus: &mut B) -> Operand {
         let base = self.fetch_pc(bus);
+        // See `addr_zp_x` for the unconditional dummy-read rationale.
+        let _ = self.read1(bus, u16::from(base));
         Operand {
             addr: u16::from(base.wrapping_add(self.y)),
             page_crossed: false,
@@ -314,6 +369,9 @@ impl Cpu {
 
     fn addr_ind_x<B: CpuBus>(&mut self, bus: &mut B) -> Operand {
         let base = self.fetch_pc(bus);
+        // Same unconditional dummy read as `addr_zp_x` — the X add onto the
+        // zero-page pointer costs a cycle before the pointer is dereferenced.
+        let _ = self.read1(bus, u16::from(base));
         let ptr = base.wrapping_add(self.x);
         let lo = self.read1(bus, u16::from(ptr));
         let hi = self.read1(bus, u16::from(ptr.wrapping_add(1)));
@@ -338,6 +396,21 @@ impl Cpu {
             let _ = self.read1(bus, dummy);
         }
         Operand { addr, page_crossed }
+    }
+
+    // (zp),Y operand for read-modify-write opcodes (the unofficial
+    // SLO/RLA/SRE/RRA/DCP/ISC). Same reasoning as `addr_abs_x_rmw`: the
+    // dummy read at the unfixed address is UNCONDITIONAL, not just on page
+    // cross, because these opcodes always take the extra cycle regardless.
+    fn addr_ind_y_rmw<B: CpuBus>(&mut self, bus: &mut B) -> u16 {
+        let ptr = self.fetch_pc(bus);
+        let lo = self.read1(bus, u16::from(ptr));
+        let hi = self.read1(bus, u16::from(ptr.wrapping_add(1)));
+        let base = u16::from(lo) | (u16::from(hi) << 8);
+        let addr = base.wrapping_add(u16::from(self.y));
+        let dummy = (base & 0xFF00) | (addr & 0x00FF);
+        let _ = self.read1(bus, dummy);
+        addr
     }
 
     // ------------------------------------------------------------------
@@ -1375,10 +1448,16 @@ impl Cpu {
                 *cycles = 5 + u8::from(o.page_crossed);
             }
             0xAB => {
+                // LXA / LAX #imm / ATX: A = X = (A | const) & operand — the
+                // same unstable floating-bus constant as ANE/XAA ($8B) above;
+                // 0xEE matches the SingleStepTests corpus 100%.
                 let v = self.fetch_pc(bus);
-                self.lax(v);
+                let r = (self.a | 0xEE) & v;
+                self.a = r;
+                self.x = r;
+                self.p.set_nz(r);
                 *cycles = 2;
-            } // LAX immediate (often listed as ATX). We follow nestest behavior.
+            }
 
             0x87 => {
                 let o = self.addr_zp(bus);
@@ -1433,8 +1512,8 @@ impl Cpu {
                 *cycles = 8;
             }
             0xD3 => {
-                let o = self.addr_ind_y(bus);
-                self.dcp_addr(bus, o.addr);
+                let addr = self.addr_ind_y_rmw(bus);
+                self.dcp_addr(bus, addr);
                 *cycles = 8;
             }
 
@@ -1470,8 +1549,8 @@ impl Cpu {
                 *cycles = 8;
             }
             0xF3 => {
-                let o = self.addr_ind_y(bus);
-                self.isc_addr(bus, o.addr);
+                let addr = self.addr_ind_y_rmw(bus);
+                self.isc_addr(bus, addr);
                 *cycles = 8;
             }
 
@@ -1507,8 +1586,8 @@ impl Cpu {
                 *cycles = 8;
             }
             0x13 => {
-                let o = self.addr_ind_y(bus);
-                self.slo_addr(bus, o.addr);
+                let addr = self.addr_ind_y_rmw(bus);
+                self.slo_addr(bus, addr);
                 *cycles = 8;
             }
 
@@ -1544,8 +1623,8 @@ impl Cpu {
                 *cycles = 8;
             }
             0x33 => {
-                let o = self.addr_ind_y(bus);
-                self.rla_addr(bus, o.addr);
+                let addr = self.addr_ind_y_rmw(bus);
+                self.rla_addr(bus, addr);
                 *cycles = 8;
             }
 
@@ -1581,8 +1660,8 @@ impl Cpu {
                 *cycles = 8;
             }
             0x53 => {
-                let o = self.addr_ind_y(bus);
-                self.sre_addr(bus, o.addr);
+                let addr = self.addr_ind_y_rmw(bus);
+                self.sre_addr(bus, addr);
                 *cycles = 8;
             }
 
@@ -1618,8 +1697,8 @@ impl Cpu {
                 *cycles = 8;
             }
             0x73 => {
-                let o = self.addr_ind_y(bus);
-                self.rra_addr(bus, o.addr);
+                let addr = self.addr_ind_y_rmw(bus);
+                self.rra_addr(bus, addr);
                 *cycles = 8;
             }
 
@@ -1641,15 +1720,37 @@ impl Cpu {
                 *cycles = 2;
             }
             0x6B => {
+                // ARR: A = (A & operand), rotated right through carry. N/Z/V
+                // are read off the ROR result BEFORE any decimal correction;
+                // in decimal mode C and the final accumulator get an
+                // additional BCD adjustment N/Z/V do NOT see — a famous NMOS
+                // undocumented-opcode quirk, reverse-engineered against the
+                // SingleStepTests 65x02 corpus
+                // (`crates/rusty2600-cpu/tests/singlestep_test.rs`).
                 let v = self.fetch_pc(bus);
-                self.a &= v;
-                let carry_in = self.p.contains(Status::CARRY);
-                self.a = (self.a >> 1) | (u8::from(carry_in) << 7);
-                self.p.set_nz(self.a);
-                let bit6 = self.a & 0x40 != 0;
-                let bit5 = self.a & 0x20 != 0;
-                self.p.set(Status::CARRY, bit6);
+                let t = self.a & v;
+                let carry_in = u8::from(self.p.contains(Status::CARRY));
+                let ror = (t >> 1) | (carry_in << 7);
+                self.p.set_nz(ror);
+                let bit6 = ror & 0x40 != 0;
+                let bit5 = ror & 0x20 != 0;
                 self.p.set(Status::OVERFLOW, bit6 ^ bit5);
+
+                if self.p.contains(Status::DECIMAL) {
+                    let mut result = ror;
+                    if (t & 0x0F) + (t & 0x01) > 0x05 {
+                        result = (result & 0xF0) | ((result.wrapping_add(6)) & 0x0F);
+                    }
+                    let carry = (t & 0xF0) + (t & 0x10) > 0x50;
+                    if carry {
+                        result = result.wrapping_add(0x60);
+                    }
+                    self.p.set(Status::CARRY, carry);
+                    self.a = result;
+                } else {
+                    self.p.set(Status::CARRY, bit6);
+                    self.a = ror;
+                }
                 *cycles = 2;
             }
             0xCB => {
@@ -1664,9 +1765,14 @@ impl Cpu {
 
             // === Unstable: XAA, LAS, TAS, SHA, SHX, SHY ===
             0x8B => {
-                // XAA / ANE: A = (A | const) & X & operand. nestest expects this.
+                // XAA / ANE: A = (A | const) & X & operand. The "const" is a
+                // chip-batch-dependent floating-bus effect (this instruction
+                // is famously unstable); 0xEE is the value that gives a
+                // 100%-matching result against the SingleStepTests 65x02
+                // corpus (`crates/rusty2600-cpu/tests/singlestep_test.rs`),
+                // reverse-engineered by sweeping candidate constants.
                 let v = self.fetch_pc(bus);
-                self.a = (self.a | 0xFF) & self.x & v;
+                self.a = (self.a | 0xEE) & self.x & v;
                 self.p.set_nz(self.a);
                 *cycles = 2;
             }
@@ -1718,9 +1824,27 @@ impl Cpu {
             }
 
             // === JAM / KIL / STP ===
+            //
+            // Real silicon locks up permanently: the address bus reads the
+            // PC+1 byte once (without ever advancing PC past it), then
+            // settles into the fixed sequence $FFFF, $FFFE, $FFFE, $FFFF...
+            // forever — a decode-PLA artifact identical across all 12 JAM
+            // opcodes (verified against the SingleStepTests 65x02 corpus,
+            // `crates/rusty2600-cpu/tests/singlestep_test.rs`, which samples
+            // an 11-cycle window of that infinite pattern). We reproduce
+            // that exact window so `jammed` state and its cycle trace match
+            // real hardware for however long a caller keeps stepping; there
+            // is no way out of this state short of a reset.
             0x02 | 0x12 | 0x22 | 0x32 | 0x42 | 0x52 | 0x62 | 0x72 | 0x92 | 0xB2 | 0xD2 | 0xF2 => {
+                let _ = self.read1(bus, self.pc);
+                let _ = self.read1(bus, 0xFFFF);
+                let _ = self.read1(bus, 0xFFFE);
+                let _ = self.read1(bus, 0xFFFE);
+                for _ in 0..6 {
+                    let _ = self.read1(bus, 0xFFFF);
+                }
                 self.jammed = true;
-                *cycles = 2;
+                *cycles = 11;
             }
         }
     }
@@ -1773,28 +1897,41 @@ impl Cpu {
 
     fn adc(&mut self, value: u8) {
         if self.p.contains(Status::DECIMAL) {
-            let mut al = (self.a & 0x0F) + (value & 0x0F) + (self.p.contains(Status::CARRY) as u8);
-            let mut ah = (self.a >> 4) + (value >> 4) + (if al > 0x09 { 1 } else { 0 });
+            let carry_in = u16::from(self.p.contains(Status::CARRY));
 
-            // Flags N, V, Z are set based on the binary result on NMOS 6502
-            let bin_sum =
-                (self.a as u16) + (value as u16) + (self.p.contains(Status::CARRY) as u16);
-            let bin_result = bin_sum as u8;
-            self.p.set(Status::ZERO, bin_result == 0);
-            self.p.set(Status::NEGATIVE, (bin_result & 0x80) != 0);
+            // Z uses the plain binary sum — a separate, well-documented NMOS
+            // decimal-mode quirk from N/V below.
+            let bin_sum = u16::from(self.a) + u16::from(value) + carry_in;
+            self.p.set(Status::ZERO, (bin_sum as u8) == 0);
+
+            // Low-nibble BCD digit, corrected if it overflowed a decimal digit.
+            let mut al = u16::from(self.a & 0x0F) + u16::from(value & 0x0F) + carry_in;
+            if al > 0x09 {
+                al = ((al + 0x06) & 0x0F) + 0x10;
+            }
+            // N and V are read off THIS intermediate — low nibble already BCD-
+            // corrected, high nibble NOT YET corrected — not the plain binary
+            // sum above and not the final BCD-corrected accumulator either.
+            // This is the single most-cited NMOS 6502 decimal-mode gotcha
+            // (see 6502.org "Decimal Mode"); confirmed here against the
+            // SingleStepTests 65x02 cycle-exact corpus
+            // (`crates/rusty2600-cpu/tests/singlestep_test.rs`), which is what
+            // caught it — the plain-binary-sum version we had before matches
+            // real hardware everywhere EXCEPT decimal-mode ADC/SBC.
+            let intermediate = (u16::from(self.a & 0xF0) + u16::from(value & 0xF0) + al) as u8;
+            self.p.set(Status::NEGATIVE, (intermediate & 0x80) != 0);
             self.p.set(
                 Status::OVERFLOW,
-                ((self.a ^ bin_result) & (value ^ bin_result) & 0x80) != 0,
+                ((self.a ^ intermediate) & (value ^ intermediate) & 0x80) != 0,
             );
 
-            if al > 0x09 {
-                al = al.wrapping_add(0x06);
+            // Final accumulator + carry: apply the high-nibble correction.
+            let mut result = u16::from(self.a & 0xF0) + u16::from(value & 0xF0) + al;
+            if result >= 0xA0 {
+                result += 0x60;
             }
-            if ah > 0x09 {
-                ah = ah.wrapping_add(0x06);
-            }
-            self.p.set(Status::CARRY, ah > 0x0F);
-            self.a = (ah << 4) | (al & 0x0F);
+            self.p.set(Status::CARRY, result >= 0x100);
+            self.a = result as u8;
         } else {
             let carry = u16::from(self.p.contains(Status::CARRY));
             let sum = u16::from(self.a) + u16::from(value) + carry;

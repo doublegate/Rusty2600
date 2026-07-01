@@ -38,6 +38,22 @@ Power-on register values are randomized from the **seeded** PRNG in the owning
   vector (`$FFFC/$FFFD`) still work; the IRQ/BRK vector (`$FFFE/$FFFF`) is read
   on `BRK` but never fired by hardware. The only timing mechanisms are polling
   the RIOT timer or `WSYNC`.
+
+  **Known vestige (`T-0601-006`, targeted v0.2.0):** `crates/rusty2600-cpu/src/`
+  (`cpu.rs`, `lib.rs`, `bus.rs`) still carries a substantial NES-lineage
+  IRQ/NMI service-sequence + `irq_level`/`nmi_level`/`poll_nmi`/`poll_irq`
+  surface (mapper-IRQ, APU frame-counter/DMC IRQ, PPU-driven NMI, branch-delays-
+  IRQ microcode, referencing nesdev wiki / AccuracyCoin / TriCNES / Mesen2 —
+  all NES concepts) inherited wholesale from the RustyNES port and never
+  stripped for the 6507. It is confirmed **dead, not live**: `rusty2600-core`
+  never overrides any of these trait methods, so every one resolves to the
+  crate's own default impl (`false` / no-op), and the SingleStepTests audit
+  (which doesn't exercise interrupts) already passes 100%. It costs no
+  correctness today, but it contradicts this doc, is confusing to a reader,
+  and is real removable weight — strip it in v0.2.0, keeping only the
+  behavior that's genuinely universal 6502 timing regardless of interrupts
+  (e.g. the taken-branch C3 dummy-PC read, which is real hardware behavior on
+  any 6502/6507 and has nothing to do with IRQ polling).
 - **Address mirroring is severe.** With only 13 address lines decoded, and the
   TIA/RIOT each decoding only a few low lines, the same registers appear at many
   mirror addresses, and the cart hotspots live in the same cramped map. The CPU

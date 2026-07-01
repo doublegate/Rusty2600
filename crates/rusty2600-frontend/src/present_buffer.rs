@@ -57,7 +57,7 @@ impl Frame {
     /// Write one beam dot as an RGB colour (alpha forced opaque). Out-of-range
     /// coordinates are ignored (the beam can run past the visible window).
     ///
-    /// TODO(T-PS-057): this is the per-dot accumulation the emu-thread calls;
+    /// TODO(T-0501-008): this is the per-dot accumulation the emu-thread calls;
     /// wire it to the TIA's emitted `(luma, chroma)` -> [`crate::palette`] RGB.
     pub fn put_dot(&mut self, x: usize, y: usize, rgb: u32) {
         if x >= self.width || y >= self.height {
@@ -74,7 +74,7 @@ impl Frame {
 /// The producer/consumer handoff. The emu-thread holds the [`Producer`]; the
 /// winit present holds the [`Consumer`]. Both share one most-recent slot.
 ///
-/// TODO(T-PS-058): replace the mutex slot with RustyNES's lock-free 3-slot ring
+/// TODO(T-0501-009): replace the mutex slot with RustyNES's lock-free 3-slot ring
 /// (back / ready / front + atomic index swap) so the present path never blocks
 /// the emu-thread.
 #[derive(Debug, Default)]

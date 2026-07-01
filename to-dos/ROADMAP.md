@@ -1,8 +1,9 @@
 # Rusty2600 — Roadmap
 
 Entry point for planning. Each phase links its overview; phases contain sprints;
-sprints contain tickets with stable IDs `T-PS-NNN` (`PS` = phase+sprint digits,
-e.g. `T-01-003` = phase 0, sprint 1, ticket 3). Reference them in commit
+sprints contain tickets with stable IDs `T-PPSS-NNN` (`PP` = 2-digit phase,
+`SS` = 2-digit sprint, `NNN` = 3-digit ticket sequence, all zero-padded),
+e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 

@@ -43,11 +43,11 @@ breaking the byte-identical "features-off" guarantee.
 ## Sprints
 
 - Sprint 1 — rollback netplay (UDP + WebRTC) on snapshot/restore →
-  `sprint-1-netplay.md` (`T-81-NNN`).
+  `sprint-1-netplay.md` (`T-0801-NNN`).
 - Sprint 2 — RetroAchievements + TAS movies + the TAStudio editor →
-  `sprint-2-ra-and-tas.md` (`T-82-NNN`).
+  `sprint-2-ra-and-tas.md` (`T-0802-NNN`).
 - Sprint 3 — Lua scripting + the shader / filter ecosystem + audio depth →
-  `sprint-3-lua-shaders.md` (`T-83-NNN`).
+  `sprint-3-lua-shaders.md` (`T-0803-NNN`).
 
 ## Risks
 
