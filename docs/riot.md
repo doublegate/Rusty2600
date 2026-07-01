@@ -80,6 +80,36 @@ the scheduler's ordering, not a RIOT-specific special case, so no additional
 code was needed to close it — verified by inspection of the tick_cycle →
 read/write call order rather than a new differential-oracle probe.
 
+**Reading `INTIM` reverts the post-underflow (divide-by-1) rate
+(`T-0601-008`, fixed v0.9.0).** Once the timer underflows (`value` wraps
+`0x00`→`0xFF`), real 6532 silicon decrements at a forced 1-CPU-cycle rate
+until the NEXT time a program reads `INTIM` — at that point the divider
+reverts to the originally-selected prescale, UNLESS the underflow happened
+on that exact same cycle (in which case the just-latched condition must not
+un-fire on the very access that observed it). Confirmed against Stella's
+`M6532::peek`/`updateEmulation` (`ref-proj/stella/src/emucore/M6532.cxx`):
+`myInterruptFlag`'s `TimerBit` is the SAME flag both the INSTAT-visible
+interrupt latch and the fast-vs-prescaled decrement rate are gated on, and
+`peek()`'s `case 0x04/0x06` (INTIM) clears it unless `myWrappedThisCycle`.
+Rusty2600 originally modeled these as two SEPARATE flags — `underflow`
+(INSTAT, correctly cleared on every INTIM read) and `post_underflow` (the
+actual decrement-rate gate, previously cleared ONLY by a fresh `TIMxT`
+write, never by a read) — so once a program's timer underflowed even once,
+it stayed in fast mode forever. `Timer` gained a `wrapped_this_cycle` field
+(mirroring Stella's `myWrappedThisCycle`) so `cpu_read`'s INTIM branch can
+apply the same same-cycle exception when clearing `post_underflow`.
+
+Found via a Gopher2600/Stella differential probe against Pitfall II
+(`docs/testing-strategy.md`'s differential-oracle workflow): control flow
+into the game's boot-time RIOT-timer wait loop at `$F108` was already
+confirmed byte-identical between Rusty2600 and Gopher2600, but Rusty2600
+never exited it (hundreds of thousands of instructions, vs. ~175,679
+distinct-PC transitions for Gopher2600) — because once the timer underflowed
+early in boot, it never reverted to the slow prescale rate, and the
+262,144-cycle-period fast sawtooth's phase relative to the 13-cycle poll
+loop happened to never land the loop's own `INTIM` read exactly on `$00`.
+Pinned by `intim_read_on_a_later_cycle_reverts_post_underflow_to_prescale`.
+
 ## Timing
 
 The RIOT advances on the **CPU cycle** (every third TIA color clock); the

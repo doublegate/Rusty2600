@@ -7,7 +7,7 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current release: v0.8.0 "Battery".** Phase 0 (foundation) through the
+**Current release: v0.9.0 "Hardening".** Phase 0 (foundation) through the
 full Curated-tier board set (Phase 4) are complete. Phase 7 (BestEffort
 breadth) has landed 12 of the ~15-scheme BestEffort long tail cataloged in
 `docs/cart.md` (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA, 0840, FE, SB,
@@ -35,9 +35,13 @@ honestly deferred: a genuine externally-oracled golden CPU trace log for
 `GoldenLogDiffer` and TIA-timing test-ROM fixtures for the Layer 3
 `run_until_complete` runner (`T-0602-006`/`007`). RIOT timing, TIA
 collision continuity, seeded power-on state, the full SingleStepTests
-corpus, and Klaus's decimal test landed in v0.2.0; a Gopher2600
-differential probe found and scoped a boot-timing residual in Pitfall II,
-`T-0601-008` — see `CHANGELOG.md`. See `docs/STATUS.md` for the
+corpus, and Klaus's decimal test landed in v0.2.0. **`T-0601-008` is fixed
+(v0.9.0)** — a rebuilt Gopher2600/Stella differential probe against Pitfall
+II found that Rusty2600's RIOT timer never reverted its post-underflow
+(divide-by-1) decrement rate back to the normal prescale after an `INTIM`
+read (confirmed against Stella's `M6532::peek`/`updateEmulation`); the CPU
+now correctly leaves the boot-time wait loop (previously stuck forever) —
+see `docs/riot.md` and `CHANGELOG.md`. See `docs/STATUS.md` for the
 authoritative per-suite/per-chip state.
 
 ## The phase line
@@ -81,8 +85,10 @@ Core/Curated set:
 | v0.5.0 "Inspector" | Real `debug-hooks` debugger (6507/TIA/RIOT/memory panels, breakpoints/step/continue, `Bus::peek`/`peek_range`, a standalone disassembler); performance benches populated with real Criterion baselines |
 | v0.6.0 "Catalog" | Closes 22 of the local 25-scheme catalogue (`docs/cart.md`): FE, SB, X07 land (`T-0402-006`/`011`, DONE) alongside the existing 19. 4A50 (`T-0402-014`), AR/Supercharger (`T-0402-015`), and the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family (`T-0401-006`, needs a full ARM7TDMI Thumb interpreter) are substantially larger undertakings, deliberately deferred to a v0.6.x patch train rather than rushed |
 | v0.7.0 "Cheevos" | RetroAchievements (`rusty2600-cheevos`, `T-0802-001..004`, DONE): vendors `rcheevos`, wires a safe `RaClient` into the frontend behind the off-by-default `retroachievements` feature — real per-frame achievement tracking, hardcore mode, a menu. A dedicated achievement-list/login/toast UI is deferred (`T-0802-005`) |
-| **v0.8.0 "Battery"** (current) | The accuracy battery stood up for real (`T-0602-001..005`, DONE): shared `Sentinel`/`run_cpu_until_sentinel` Layer 2 runner, a real `AccuracyScore`-gated `accuracy_battery.rs` (2/2, 100%, CI-enforced via the existing `test-roms` step — no new CI YAML needed), tolerance-aware `SnapComparator`. A genuine externally-oracled golden CPU trace log and TIA-timing test-ROM fixtures remain deferred (`T-0602-006`/`007`) |
-| v0.9.x | Battery-driven hardening, commercial-ROM regression oracle, doc sync |
+| v0.8.0 "Battery" | The accuracy battery stood up for real (`T-0602-001..005`, DONE): shared `Sentinel`/`run_cpu_until_sentinel` Layer 2 runner, a real `AccuracyScore`-gated `accuracy_battery.rs` (2/2, 100%, CI-enforced via the existing `test-roms` step — no new CI YAML needed), tolerance-aware `SnapComparator`. A genuine externally-oracled golden CPU trace log and TIA-timing test-ROM fixtures remain deferred (`T-0602-006`/`007`) |
+| **v0.9.0 "Hardening"** (current) | `T-0601-008` fixed (Pitfall II's boot-time RIOT-timer wait loop, found via a rebuilt Gopher2600/Stella differential probe): reading `INTIM` now reverts the post-underflow decrement rate to the normal prescale, confirmed against Stella's `M6532::peek`/`updateEmulation` (`docs/riot.md`). Commercial-ROM regression oracle expansion remains blocked by data availability (locally-supplied dumps only, none available); doc-sync pass done across `docs/architecture.md`/`compatibility.md` |
+| v0.9.x (further patches) | Additional battery-driven hardening as it surfaces; commercial-ROM regression oracle whenever ROM dumps become available |
+| **v1.0.0** | Accuracy battery ≥90% (100% goal), debugger + RA shipped, Stella-adjacent cart breadth, green release matrix |
 | **v1.0.0** | Accuracy battery ≥90% (100% goal), debugger + RA shipped, Stella-adjacent cart breadth, green release matrix |
 
 Explicit v1.0.0 non-requirements: netplay, TAS tooling, Lua scripting, HD

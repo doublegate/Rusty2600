@@ -6,6 +6,62 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-01 - "Hardening"
+
+Closes `T-0601-008`, the one open accuracy residual in the project: Pitfall
+II's boot-time RIOT-timer wait loop, which control-flow analysis had
+already confirmed was NOT a DPC decode bug (byte-identical against
+Gopher2600 for ~2,000 instructions) but a data-value divergence somewhere
+in the RIOT timer model.
+
+### Fixed
+
+- **RIOT timer never reverted from post-underflow (divide-by-1) mode.**
+  Once the interval timer underflowed (`INTIM` wraps `0x00`→`0xFF`), real
+  6532 silicon decrements at a forced 1-CPU-cycle rate until the NEXT time
+  a program reads `INTIM` — at that point the divider reverts to the
+  originally-selected prescale (unless the underflow happened on that
+  exact same cycle). Rusty2600 modeled this as two separate flags
+  (`underflow` for the INSTAT-visible latch, correctly cleared on every
+  read; `post_underflow` for the actual decrement-rate gate, previously
+  cleared ONLY by a fresh `TIMxT` write) — so once a timer underflowed
+  even once, it stayed in fast mode forever. Confirmed against Stella's
+  `M6532::peek`/`updateEmulation` (`ref-proj/stella/src/emucore/
+  M6532.cxx`): `myInterruptFlag`'s `TimerBit` is the SAME flag both
+  behaviors are gated on there, and `peek()`'s INTIM case clears it unless
+  `myWrappedThisCycle`. `Timer` gains a matching `wrapped_this_cycle`
+  field; `cpu_read`'s INTIM branch now applies the same same-cycle
+  exception when clearing `post_underflow`. See `docs/riot.md` for the
+  full writeup.
+- **Pitfall II now boots correctly.** Found via a rebuilt Gopher2600/Stella
+  differential probe (memory-access tracing, not just PC tracing this
+  time): the timer WAS passing through zero periodically once in fast
+  mode, but the 262,144-cycle-period sawtooth's phase relative to the
+  boot loop's 13-cycle poll rhythm happened to never land the loop's own
+  `INTIM` read exactly on `$00` — so it looked "merely slow" until this
+  investigation showed it was genuinely infinite. Confirmed fixed: the CPU
+  now leaves the `$F108` wait loop at instruction ~22,864 (previously
+  stuck past 400,000+) and reaches varied gameplay code, matching
+  Gopher2600's own behavior. `screenshots/commercial/Pitfall II - Lost
+  Caverns (USA).png` regenerated — no longer a blank blue frame.
+
+### Notes
+
+- Regression test: `intim_read_on_a_later_cycle_reverts_post_underflow_to_prescale`
+  (`crates/rusty2600-riot/src/lib.rs`) pins the fix without disturbing the
+  existing `timer_instat_and_post_underflow` test, which (correctly) covers
+  the DIFFERENT same-cycle case where the flag must NOT revert immediately.
+- Commercial-ROM regression oracle expansion remains out of scope for this
+  release: it needs locally-supplied ROM dumps this development environment
+  doesn't have (per project convention, never committed) — blocked by data
+  availability, not effort.
+- Documentation sync pass: `docs/architecture.md`'s crate map was missing
+  `rusty2600-cheevos` and still described `rusty2600-frontend` as the only
+  `std`/`unsafe` crate; `docs/compatibility.md`'s TIA-quirk section
+  referenced "v0.7.0/v0.8.x" as a now-stale target for the `LostMOTCK`
+  (Cosmic Ark) hard problem, reworded to state the real (unimplemented)
+  status instead.
+
 ## [0.8.0] - 2026-07-01 - "Battery"
 
 Stands up `rusty2600-test-harness`'s Layer 4 accuracy battery for real.

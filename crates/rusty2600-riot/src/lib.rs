@@ -31,6 +31,14 @@ pub struct Timer {
     elapsed: u16,
     underflow: bool,
     post_underflow: bool,
+    /// `true` for the one cycle on which [`Riot::tick`] just performed the
+    /// 0->0xFF wrap (set in `tick`, cleared at the start of the NEXT
+    /// `tick`). Mirrors Stella's `myWrappedThisCycle`: a read of INTIM on
+    /// this exact cycle must not immediately revert `post_underflow` (the
+    /// interrupt/fast-mode condition it just observed), matching real 6532
+    /// silicon where the flag transition and the read happen on the same
+    /// clock edge.
+    wrapped_this_cycle: bool,
 }
 
 /// The MOS 6532 RIOT chip.
@@ -70,6 +78,7 @@ impl Riot {
 
     /// Advance the RIOT by one CPU cycle.
     pub fn tick(&mut self) {
+        self.timer.wrapped_this_cycle = false;
         self.timer.elapsed = self.timer.elapsed.wrapping_add(1);
 
         let target = if self.timer.post_underflow {
@@ -85,6 +94,7 @@ impl Riot {
                 self.timer.value = 0xFF;
                 self.timer.underflow = true;
                 self.timer.post_underflow = true;
+                self.timer.wrapped_this_cycle = true;
             } else {
                 self.timer.value = self.timer.value.wrapping_sub(1);
             }
@@ -112,6 +122,18 @@ impl Riot {
                 if addr & 0x01 == 0 {
                     // A0 = 0 -> INTIM (Read Timer)
                     self.timer.underflow = false; // Reading INTIM clears timer interrupt flag
+                    // Reading INTIM also reverts the decrement rate from the
+                    // post-underflow divide-by-1 mode back to the normal
+                    // prescale interval (confirmed against Stella's
+                    // `M6532::peek`'s `myInterruptFlag &= ~TimerBit` on an
+                    // INTIM read, which is the SAME flag `updateEmulation`
+                    // gates its fast-vs-prescaled decrement on) -- UNLESS
+                    // the underflow happened on this exact cycle, matching
+                    // Stella's `!myWrappedThisCycle` guard (the flag must
+                    // not un-fire on the very access that just observed it).
+                    if !self.timer.wrapped_this_cycle {
+                        self.timer.post_underflow = false;
+                    }
                     self.timer.value
                 } else {
                     // A0 = 1 -> INSTAT (Read Timer Status)
@@ -288,8 +310,68 @@ mod tests {
         // INSTAT should now be 0
         assert_eq!(riot.cpu_read(0x285) & 0xC0, 0x00);
 
-        // Next tick should decrement by 1 because it's in post-underflow (1T mode)
+        // Next tick should decrement by 1 because it's in post-underflow (1T mode):
+        // the INTIM read above landed on the SAME cycle the underflow fired
+        // (`wrapped_this_cycle`), so it must not revert the fast decrement rate --
+        // matching Stella's `!myWrappedThisCycle` guard on its equivalent flag.
         riot.tick();
         assert_eq!(riot.cpu_read(0x284), 0xFE);
+    }
+
+    // Regression test for T-0601-008 (found via a Gopher2600/Stella
+    // differential probe against Pitfall II): a program that reads INTIM
+    // repeatedly across MANY LATER cycles -- not the one cycle the
+    // underflow itself fired on, unlike `timer_instat_and_post_underflow`
+    // above -- must see the timer revert to its normal prescale rate.
+    // Confirmed against Stella's `M6532::peek`: reading INTIM clears
+    // `myInterruptFlag`'s `TimerBit`, and `updateEmulation` gates the fast
+    // (divide-by-1) decrement on that SAME flag being set, so a read one or
+    // more FULL ticks after the wrap reverts the rate. Before this fix,
+    // Rusty2600's `post_underflow` flag only cleared on a fresh `TIMxT`
+    // write, never on a read, so the timer stayed in fast mode forever
+    // once it underflowed once -- exactly the bug that stalled Pitfall II
+    // in its boot-time RIOT-timer wait loop indefinitely.
+    #[test]
+    fn intim_read_on_a_later_cycle_reverts_post_underflow_to_prescale() {
+        let mut riot = Riot::new();
+        riot.cpu_write(0x295, 1); // TIM8T = 1
+        riot.tick(); // fires immediately: value -> 0
+        assert_eq!(riot.cpu_read(0x284), 0);
+        for _ in 0..8 {
+            riot.tick(); // underflows on the 8th of these: value -> 0xFF, post_underflow = true
+        }
+        assert_eq!(riot.cpu_read(0x284), 0xFF);
+
+        // Advance one MORE full tick (now definitely a later cycle, not the
+        // one the wrap fired on) before reading INTIM again.
+        riot.tick(); // still fast mode here: 0xFF -> 0xFE
+        assert_eq!(
+            riot.cpu_read(0x284),
+            0xFE,
+            "still in fast mode for this tick"
+        );
+
+        // Reading INTIM now (a later cycle) must revert the rate: the NEXT
+        // tick should decrement by the full TIM8T prescale (8), not by 1.
+        riot.tick();
+        assert_eq!(
+            riot.cpu_read(0x284),
+            0xFE,
+            "first tick after the reverting read should NOT decrement yet (8-cycle interval)"
+        );
+        for _ in 0..6 {
+            riot.tick();
+            assert_eq!(
+                riot.cpu_read(0x284),
+                0xFE,
+                "still within the 8-cycle interval"
+            );
+        }
+        riot.tick(); // the 8th tick since reverting: one prescaled decrement
+        assert_eq!(
+            riot.cpu_read(0x284),
+            0xFD,
+            "after 8 ticks at the reverted prescale, exactly one decrement"
+        );
     }
 }

@@ -43,7 +43,7 @@
   blanked). Requires a Gopher2600/Stella differential-oracle probe to
   confirm exact expected behavior first, and must not regress the
   already-verified RESPx/HMOVE visible-window positioning tests.
-- [ ] `T-0601-008` (found during `T-0401-005` DPC bring-up, v0.3.0):
+- [x] `T-0601-008` (found during `T-0401-005` DPC bring-up, v0.3.0; FIXED v0.9.0):
   Pitfall II boots without error (DPC decode confirmed correct — a
   Gopher2600 differential probe showed byte-identical PC control-flow
   through the first ~2,000 executed distinct instructions), but the CPU
@@ -72,6 +72,23 @@
   This makes "INTIM genuinely never reaches zero" (a real bug) more likely
   than "just slower but still bounded" — re-scope the fix investigation
   accordingly when this is picked up.
+  **2026-07-01 RESOLVED (v0.9.0):** rebuilt the Go probe (memory-access
+  tracing, not just PC) plus a Rust harness example; found the timer WAS
+  passing through zero periodically once it entered its post-underflow
+  divide-by-1 fast mode (confirmed via per-instruction INTIM sampling), but
+  Rusty2600's `post_underflow` flag was never cleared by a later `INTIM`
+  read (only by a fresh `TIMxT` write) — so it stayed in fast mode forever
+  after the first underflow, and the loop's 13-cycle poll rhythm happened
+  to never phase-align with the fast mode's 256-cycle sawtooth landing
+  exactly on `$00`. Confirmed against Stella's `M6532::peek`/
+  `updateEmulation` (the authoritative behavioral oracle): reading `INTIM`
+  reverts the decrement rate to the normal prescale unless the underflow
+  fired on that exact same cycle. Fixed in `rusty2600-riot`
+  (`docs/riot.md` has the full writeup); confirmed via the rebuilt probe
+  that Rusty2600 now leaves the `$F108` loop at instruction ~22,864 and
+  reaches varied gameplay code, matching Gopher2600's own behavior.
+  `screenshots/commercial/Pitfall II - Lost Caverns (USA).png` regenerated
+  — no longer a blank blue frame.
 
 
 ---

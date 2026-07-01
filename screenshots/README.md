@@ -58,7 +58,7 @@ correctly.
 
 ### homebrew/
 
-Current corpus: **110/110 rendered** (2026-07-01, v0.6.0).
+Current corpus: **110/110 rendered** (2026-07-01, v0.9.0).
 
 - **`Zippy the Porcupine (NTSC)`** — 64 KiB ROM; previously unsupported
   (needed one of `F0`/`EF`/`EFSC`/`X07`, none implemented as of v0.3.0).
@@ -66,7 +66,7 @@ Current corpus: **110/110 rendered** (2026-07-01, v0.6.0).
 
 ### commercial/
 
-Current corpus: **15/16 rendered** (2026-07-01, v0.6.0). See
+Current corpus: **15/16 rendered** (2026-07-01, v0.9.0). See
 `tests/roms/README.md` for the local ROM staging convention.
 
 - **`Activision Decathlon, The (USA)`** and **`Robot Tank (USA)`** — both use
@@ -86,25 +86,24 @@ Current corpus: **15/16 rendered** (2026-07-01, v0.6.0). See
   which lists "M Network" as the manufacturer), and the screenshot shows
   real gameplay. A concrete example of why same-size misdetection matters,
   not just a theoretical concern.
-- **`Pitfall II - Lost Caverns (USA)`** — now boots via the DPC (Display
-  Processor Chip) coprocessor scheme (`T-0401-005`, v0.3.0), but its
-  screenshot is a blank blue frame at every frame count tried (60/300/900/
-  5000): a Gopher2600 differential probe confirmed DPC decode / control-
-  flow are bit-exact for the first ~2,000 executed instructions, but the
-  CPU then never returns from a boot-time RIOT-timer wait loop. Since
-  `dump_frame`'s `run_frame` has a 200,000-instruction safety timeout that
-  fires every call while stuck there, higher frame counts just burn more
-  instructions in the same loop (5000 frames ≈ 1 billion instructions) —
-  not a "needs more frames" case. Tracked as `T-0601-008`; not a DPC decode
-  bug (control-flow is independently verified correct), left as-is pending
-  that investigation rather than blocking this ticket.
+- **`Pitfall II - Lost Caverns (USA)`** — boots via the DPC (Display
+  Processor Chip) coprocessor scheme (`T-0401-005`, v0.3.0). Its screenshot
+  WAS a blank blue frame at every frame count tried through v0.8.0
+  (`T-0601-008`: the CPU never returned from a boot-time RIOT-timer wait
+  loop at `$F108`, though DPC decode / control-flow were independently
+  confirmed bit-exact). **Fixed in v0.9.0** — the RIOT timer's
+  post-underflow (divide-by-1) decrement rate never reverted to the normal
+  prescale after an `INTIM` read (only a fresh `TIMxT` write cleared it),
+  so once the timer underflowed once during boot, it never used the
+  correct rate again and the poll loop's phase never landed exactly on
+  `$00`. See `docs/riot.md` for the full writeup. Regenerated — now shows
+  real gameplay (26 unique colors, not a flat blue field).
 - **`Communist Mutants from Space (USA)`** — 8,448-byte image, not one of
   the size buckets `detect()` currently resolves; needs BestEffort-tier
-  breadth work (v0.4.x) once its bankswitch scheme is identified. Expected
+  breadth work once its bankswitch scheme is identified. Expected
   `Unsupported` failure until then.
 
-Re-verified 2026-07-01 (v0.6.0): the Pitfall II blank-frame residual
-(`T-0601-008`) and the Communist Mutants detection gap are both still
-present exactly as described above — neither regressed nor improved by
-v0.4.x/v0.5.0/v0.6.0's frontend and cart-breadth work, since neither's root cause
-(the RIOT-timer wait loop / the missing size-bucket scheme) was touched.
+Re-verified 2026-07-01 (v0.9.0): the Communist Mutants detection gap is
+still present exactly as described above (untouched by this release's RIOT
+fix). The Pitfall II blank-frame residual is RESOLVED as of this release —
+see above.
