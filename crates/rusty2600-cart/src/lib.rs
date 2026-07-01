@@ -306,6 +306,140 @@ impl Board for BankF4 {
     }
 }
 
+/// CommaVid `CV`: 2 KiB ROM + 1 KiB on-cart RAM, no bank switching (a single
+/// fixed 4 KiB window). Curated tier.
+///
+/// Address map within the `$1000..=$1FFF` window (confirmed against Stella's
+/// `CartCV`/`CartEnhanced`, `RAM_HIGH_WP = true` i.e. the write port is the
+/// numerically-higher mirror):
+/// - `$1000..=$13FF` — RAM **read** port (1 KiB, mirrors the same RAM the
+///   write port below addresses).
+/// - `$1400..=$17FF` — RAM **write** port.
+/// - `$1800..=$1FFF` — 2 KiB ROM (mirrored if the source image is smaller).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BankCV {
+    #[serde(with = "serde_bytes_array")]
+    rom: [u8; 0x0800],
+    #[serde(with = "serde_bytes_array")]
+    ram: [u8; 0x0400],
+}
+
+impl BankCV {
+    /// Build from a 2 KiB ROM-only image, or a 4 KiB image whose first 2 KiB
+    /// is initial RAM content (the "MagiCard saved program listing" case
+    /// Stella's `CartCV` also supports) and second 2 KiB is the real ROM.
+    /// Returns `None` for any other size.
+    #[must_use]
+    pub fn new(image: &[u8]) -> Option<Self> {
+        match image.len() {
+            0x0800 => Some(Self {
+                rom: image.try_into().ok()?,
+                ram: [0; 0x0400],
+            }),
+            0x1000 => {
+                let mut ram = [0u8; 0x0400];
+                ram.copy_from_slice(&image[..0x0400]);
+                Some(Self {
+                    rom: image[0x0800..0x1000].try_into().ok()?,
+                    ram,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+impl Board for BankCV {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        match addr & 0x1FFF {
+            a @ 0x1000..=0x13FF => self.ram[(a & 0x03FF) as usize],
+            0x1400..=0x1FFF => {
+                let a = addr & 0x1FFF;
+                if a < 0x1800 {
+                    // The write port ($1400-$17FF) reads back open-bus-ish;
+                    // real hardware doesn't drive a defined value here, so
+                    // return 0 rather than fabricate RAM contents.
+                    0
+                } else {
+                    self.rom[(a & 0x07FF) as usize]
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+    fn cpu_write(&mut self, addr: u16, val: u8) {
+        if let 0x1400..=0x17FF = addr & 0x1FFF {
+            self.ram[(addr & 0x03FF) as usize] = val;
+        }
+    }
+    fn tier(&self) -> Tier {
+        Tier::Curated
+    }
+}
+
+/// CBS's `FA` ("RAM Plus"): 12 KiB ROM as three 4 KiB banks (`$1FF8`/`$1FF9`/
+/// `$1FFA`), plus 256 B on-cart RAM. Curated tier.
+///
+/// Confirmed against Stella's `CartFA`/`CartEnhanced` (`RAM_SIZE = 0x100`,
+/// `RAM_HIGH_WP` unset so it takes the base class default of `false` — write
+/// port is the numerically-LOWER mirror, unlike `CV`): `$1000..=$10FF` is the
+/// RAM **write** port, `$1100..=$11FF` is the RAM **read** port, both inside
+/// whichever 4 KiB bank is currently selected (the RAM overlays the low 256 B
+/// of ROM in that bank — real hardware, the ROM underneath is simply
+/// unreachable there).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BankFA {
+    #[serde(with = "serde_bytes_array")]
+    rom: [u8; 0x3000],
+    #[serde(with = "serde_bytes_array")]
+    ram: [u8; 0x100],
+    bank: u8,
+}
+
+impl BankFA {
+    const HOTSPOT_BASE: u16 = 0x1FF8;
+
+    /// Build from a 12 KiB image. Returns `None` if the slice is not 12 KiB.
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        Some(Self {
+            rom: rom.try_into().ok()?,
+            ram: [0; 0x100],
+            bank: 2,
+        })
+    }
+
+    #[allow(clippy::missing_const_for_fn)]
+    fn hotspot(&mut self, addr: u16) {
+        let a = addr & 0x1FFF;
+        if (Self::HOTSPOT_BASE..=Self::HOTSPOT_BASE + 2).contains(&a) {
+            self.bank = (a - Self::HOTSPOT_BASE) as u8;
+        }
+    }
+}
+
+impl Board for BankFA {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        self.hotspot(addr);
+        let a = addr & 0x0FFF;
+        if (0x0100..0x0200).contains(&a) {
+            self.ram[(a & 0x00FF) as usize]
+        } else {
+            self.rom[usize::from(self.bank) * 0x1000 + a as usize]
+        }
+    }
+    fn cpu_write(&mut self, addr: u16, val: u8) {
+        self.hotspot(addr);
+        let a = addr & 0x0FFF;
+        if a < 0x0100 {
+            self.ram[a as usize] = val;
+        }
+    }
+    fn tier(&self) -> Tier {
+        Tier::Curated
+    }
+}
+
 /// An enum wrapping all supported boards, enabling static dispatch and
 /// `no_std`-compatible serialization without trait objects.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -320,6 +454,10 @@ pub enum Cartridge {
     BankF6(BankF6),
     /// F4 bankswitched mapper
     BankF4(BankF4),
+    /// CommaVid CV: 2 KiB ROM + 1 KiB RAM, no bank switching (Curated tier)
+    BankCV(BankCV),
+    /// CBS FA/RAM Plus: 12 KiB ROM + 256 B RAM (Curated tier)
+    BankFA(BankFA),
 }
 
 impl Board for Cartridge {
@@ -330,6 +468,8 @@ impl Board for Cartridge {
             Self::BankF8(b) => b.cpu_read(addr),
             Self::BankF6(b) => b.cpu_read(addr),
             Self::BankF4(b) => b.cpu_read(addr),
+            Self::BankCV(b) => b.cpu_read(addr),
+            Self::BankFA(b) => b.cpu_read(addr),
         }
     }
 
@@ -340,6 +480,8 @@ impl Board for Cartridge {
             Self::BankF8(b) => b.cpu_write(addr, val),
             Self::BankF6(b) => b.cpu_write(addr, val),
             Self::BankF4(b) => b.cpu_write(addr, val),
+            Self::BankCV(b) => b.cpu_write(addr, val),
+            Self::BankFA(b) => b.cpu_write(addr, val),
         }
     }
 
@@ -347,9 +489,11 @@ impl Board for Cartridge {
         match self {
             Self::Rom2K(b) => b.tier(),
             Self::Rom4K(b) => b.tier(),
+            Self::BankCV(b) => b.tier(),
             Self::BankF8(b) => b.tier(),
             Self::BankF6(b) => b.tier(),
             Self::BankF4(b) => b.tier(),
+            Self::BankFA(b) => b.tier(),
         }
     }
 
@@ -360,6 +504,8 @@ impl Board for Cartridge {
             Self::BankF8(b) => b.tick(),
             Self::BankF6(b) => b.tick(),
             Self::BankF4(b) => b.tick(),
+            Self::BankCV(b) => b.tick(),
+            Self::BankFA(b) => b.tick(),
         }
     }
 
@@ -370,6 +516,8 @@ impl Board for Cartridge {
             Self::BankF8(b) => b.tick_coprocessor(),
             Self::BankF6(b) => b.tick_coprocessor(),
             Self::BankF4(b) => b.tick_coprocessor(),
+            Self::BankCV(b) => b.tick_coprocessor(),
+            Self::BankFA(b) => b.tick_coprocessor(),
         }
     }
 }
@@ -385,6 +533,17 @@ impl Board for Cartridge {
 #[must_use]
 pub fn detect(rom: &[u8]) -> Option<Cartridge> {
     match rom.len() {
+        // 2 KiB / 4 KiB: default to plain ROM (Core). `BankCV` (CommaVid) is
+        // the SAME two sizes (2 KiB ROM-only, or 4 KiB "2K RAM-image + 2K
+        // ROM") — real disambiguation needs a ROM-DB / hotspot-access-pattern
+        // check (CV never strobes a bankswitch hotspot at all, so there's no
+        // hotspot signature to look for; only usage — e.g. actually reading
+        // from $1000-$13FF or writing to $1400-$17FF during boot — would
+        // out it). Defaulting to plain ROM here is deliberately the SAFE
+        // choice: CommaVid only shipped 2 known titles (Magicard,
+        // Video Life), so misdetecting the overwhelmingly-more-common
+        // plain-ROM case would be far worse than the reverse.
+        // TODO(T-0401-009): ROM-DB-assisted CV detection for 2K/4K images.
         0x0800 => Rom2K::new(rom).map(Cartridge::Rom2K),
         0x1000 => Rom4K::new(rom).map(Cartridge::Rom4K),
         0x2000 => {
@@ -394,8 +553,20 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
             // TODO(T-0401-001): E0 / FE / 3F (BestEffort) detection for 8 KiB images.
             BankF8::new(rom).map(Cartridge::BankF8)
         }
-        // TODO(T-0401-002): 0x3000  E7 (M-network, Curated).
-        0x4000 => BankF6::new(rom).map(Cartridge::BankF6),
+        // 12 KiB: CBS's FA/RAM Plus (Curated) — this size is unambiguous
+        // (nothing else in the catalogue is 12 KiB), so no disambiguation
+        // needed. NOTE: an earlier version of this comment incorrectly said
+        // "E7" here — E7 is 16 KiB (docs/cart.md), not 12; fixed.
+        0x3000 => BankFA::new(rom).map(Cartridge::BankFA),
+        0x4000 => {
+            // 16 KiB: default to F6 (Curated, the far more common Atari-
+            // standard scheme — dozens of Atari-published titles). E7
+            // (M-Network, also Curated) is the SAME size and needs hotspot-
+            // pattern / ROM-DB disambiguation, same class of ambiguity as
+            // the 8 KiB F8/E0/FE/3F case above.
+            // TODO(T-0401-002): E7 detection for 16 KiB images.
+            BankF6::new(rom).map(Cartridge::BankF6)
+        }
         0x8000 => BankF4::new(rom).map(Cartridge::BankF4),
         // TODO(T-0401-003): Superchip variants F8SC/F6SC/F4SC (+128 B RAM, Curated).
         // TODO(T-0401-004): 3F (Tigervision) / 3E (Boulder Dash) / 3E+ (BestEffort).
@@ -484,5 +655,61 @@ mod tests {
         board.cpu_read(0x1FF4);
         assert_eq!(board.cpu_read(0x1FFF), 0xAA);
         assert_eq!(board.tier(), Tier::Curated);
+    }
+
+    #[test]
+    fn cv_rom_and_ram_ports() {
+        let mut img = [0u8; 0x0800];
+        img[0x07FF] = 0x55; // last byte of the 2K ROM
+        let mut board = BankCV::new(&img).unwrap();
+        // ROM lives at $1800-$1FFF.
+        assert_eq!(board.cpu_read(0x1FFF), 0x55);
+        assert_eq!(board.tier(), Tier::Curated);
+
+        // Write through the high ($1400-$17FF) port, read back through the
+        // low ($1000-$13FF) port — same underlying 1 KiB RAM.
+        board.cpu_write(0x1400, 0x42);
+        assert_eq!(board.cpu_read(0x1000), 0x42);
+
+        // The write port doesn't accept reads as RAM contents.
+        board.cpu_write(0x1401, 0x99);
+        assert_ne!(board.cpu_read(0x1401), 0x99);
+    }
+
+    #[test]
+    fn cv_4k_image_seeds_initial_ram() {
+        let mut img = [0u8; 0x1000];
+        img[0x0000] = 0xAB; // initial RAM byte 0
+        img[0x0800] = 0xCD; // first byte of the real 2K ROM half
+        let mut board = BankCV::new(&img).unwrap();
+        assert_eq!(board.cpu_read(0x1000), 0xAB);
+        assert_eq!(board.cpu_read(0x1800), 0xCD);
+    }
+
+    #[test]
+    fn fa_bank_switch_and_ram_ports() {
+        let mut img = [0u8; 0x3000];
+        img[0x1000 + 0x0FFF] = 0x11; // bank 1, last byte
+        img[0x2000 + 0x0FFF] = 0x22; // bank 2, last byte (default bank)
+        let mut board = BankFA::new(&img).unwrap();
+        assert_eq!(board.tier(), Tier::Curated);
+
+        // Default bank is 2 (reset vector convention, matching BankF4/BankF6).
+        assert_eq!(board.cpu_read(0x1FFF), 0x22);
+        board.cpu_read(0x1FF9); // select bank 1
+        assert_eq!(board.cpu_read(0x1FFF), 0x11);
+
+        // RAM: write-low ($1000-$10FF), read-high ($1100-$11FF), same 256 B.
+        board.cpu_write(0x1000, 0x77);
+        assert_eq!(board.cpu_read(0x1100), 0x77);
+    }
+
+    #[test]
+    fn detect_resolves_fa_and_e7_sized_ambiguity_defaults_to_f6() {
+        let fa = detect(&[0u8; 0x3000]).unwrap();
+        assert!(matches!(fa, Cartridge::BankFA(_)));
+        // 16 KiB defaults to F6 until E7 gets ROM-DB disambiguation.
+        let sixteen_k = detect(&[0u8; 0x4000]).unwrap();
+        assert!(matches!(sixteen_k, Cartridge::BankF6(_)));
     }
 }
