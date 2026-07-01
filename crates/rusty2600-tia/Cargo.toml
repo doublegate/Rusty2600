@@ -15,5 +15,12 @@ serde.workspace = true
 bitflags = "2"
 rusty2600-cart = { path = "../rusty2600-cart", version = "0.4.1", default-features = false }
 
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "tia_bench"
+harness = false
+
 [lints]
 workspace = true

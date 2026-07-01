@@ -21,6 +21,7 @@ repository = "https://github.com/doublegate/Rusty2600"
 
 [workspace.dependencies]
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+criterion = "0.5"
 
 [workspace.lints.rust]
 unsafe_code = "warn"

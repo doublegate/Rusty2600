@@ -34,6 +34,31 @@ Rules for the hot path:
   `-p rusty2600-tia`, etc.) so each chip is profilable in isolation (the
   one-directional crate graph, `docs/architecture.md`).
 
+## Measured baselines (v0.5.0, populated Criterion benches)
+
+Per-chip Criterion benches now exist (`crates/*/benches/*_bench.rs`, run via
+`cargo bench -p <crate>`); numbers below are from a single unoptimized
+development-machine run and are a baseline, not a performance guarantee —
+re-measure before trusting them for a real regression comparison.
+
+| Bench | What it measures | Measured |
+|---|---|---|
+| `rusty2600-cpu::cpu_step_mixed_addressing_modes` | one `Cpu::step()` against a flat-RAM bus, mixed addressing modes (immediate/zero-page/indexed/absolute/branch) | ~6.0 ns/call |
+| `rusty2600-tia::tia_tick_color_clock` | one `Tia::tick_color_clock()` | ~4.8 ns/call |
+| `rusty2600-tia::tia_full_ntsc_frame` | one full NTSC frame, 262×228 color clocks, TIA-only (no CPU/RIOT/cart) | ~899 µs/frame |
+| `rusty2600-riot::riot_tick` | one `Riot::tick()` (interval-timer prescale) | ~433 ps/call |
+| `rusty2600-riot::riot_ram_write_then_read` | one RIOT RAM write + read round-trip | ~418 ps/call |
+| `rusty2600-cart::cart_bankf8_read_write` | one `BankF8` read + write (hotspot check on every access) | ~2.5 ns/call |
+| `rusty2600-cart::cart_dpc_register_read` | one `BankDpc` data-fetcher display read (RNG clock + register decode) | ~3.3 ns/call |
+
+The TIA-only full-frame figure (~899 µs) is already well under the ≤ 2 ms/frame
+target with the full CPU+RIOT+cart overhead not yet included — comfortable
+headroom, consistent with the "far lighter than RustyNES's workload"
+expectation above. A true end-to-end frame bench (driving `System::step_instruction`
+in a loop until VSYNC, matching what `EmuCore::run_frame` does) is not yet
+part of this suite; add one if/when the ≤ 2 ms target needs real verification
+rather than a per-chip proxy.
+
 ## Determinism is not negotiable for performance
 
 No system time, thread scheduling, or OS RNG may enter the core to shave cycles —
