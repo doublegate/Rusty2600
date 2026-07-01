@@ -1,10 +1,34 @@
 [package]
 name = "rusty2600-cheevos"
-version = "0.6.0"
+description = "Native-only RetroAchievements (rcheevos) FFI wrapper for Rusty2600"
+version = "0.7.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+publish = false
 
-[lints]
-workspace = true
+# This crate vendors and links the rcheevos C library, so unsafe is required
+# (an FFI shim, per the project's own "confine unsafe to as few modules as
+# possible" convention). Cargo's lint inheritance is all-or-nothing per
+# table, so `unsafe_code` is overridden here rather than via `[lints]
+# workspace = true` + an exception; the rest of the workspace's clippy
+# lints are mirrored manually to stay in lockstep with the root Cargo.toml.
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery  = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+
+[build-dependencies]
+cc = "1"
+
+# HTTP transport is native-only. The whole crate body is gated on
+# `cfg(not(target_arch = "wasm32"))`, so a wasm workspace build sees an
+# empty crate and never pulls these in.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { version = "3", default-features = false, features = ["rustls"] }

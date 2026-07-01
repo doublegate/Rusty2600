@@ -6,6 +6,59 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-01 - "Cheevos"
+
+The RetroAchievements slice of Phase 8, pulled forward per the ROADMAP's
+v1.0.0 gate. `rusty2600-cheevos` goes from a one-line stub to a real,
+tested FFI wrapper, and `rusty2600-frontend`'s `retroachievements` feature
+goes from an inert flag to real per-frame achievement tracking.
+
+### Added
+
+- **`rusty2600-cheevos`** — a native-only, safe Rust wrapper around the
+  vendored RetroAchievements `rcheevos` C library (MIT), lifted and adapted
+  from RustyNES's own `rustynes-cheevos` (same author; rcheevos itself is
+  console-agnostic, so ~95% of the FFI bridge, event mirror, and HTTP worker
+  carry over unchanged — only the memory-address map and one console-ID
+  constant are 2600-specific):
+  - `RaClient` — owns `rc_client_t`, drives per-frame achievement processing
+    (`do_frame`/`idle`/`reset`), login/load-game, progress
+    (de)serialization, and rich presence. Deliberately `!Send`/`!Sync`.
+  - `memory::ra_addr_to_riot` — the RetroAchievements-flat -> 2600 CPU-bus
+    address map. Far simpler than most consoles: the 2600's ONLY RAM is the
+    RIOT's 128 bytes, so RA's flat space maps directly onto it (no
+    cartridge-WRAM-window split to model).
+  - An off-thread HTTP worker (`ureq`) for the RA API, and a thread-local
+    event queue draining into an owned `RaEvent` enum.
+  - The whole crate body is `#![cfg(not(target_arch = "wasm32"))]` — a wasm
+    workspace build never needs a C toolchain or links the vendored source.
+- **`rusty2600-frontend`'s `retroachievements` feature is now real**
+  (`cheevos.rs`): a `CheevosState` owning the `RaClient` on the winit/main
+  thread — NOT inside `EmuCore`, since `RaClient`'s `!Send` bound is
+  incompatible with `EmuCore`'s `Send` requirement (needed by the
+  default-on `emu-thread` feature). Pumped once per frame under the SAME
+  brief emu lock the present path and the debug snapshot already take,
+  peeking the bus via `|addr| bus.peek(addr)`. ROM load/close hooks call
+  `begin_load_game`/`unload_game`; a new Emulation -> RetroAchievements menu
+  shows game-recognition status and a hardcore-mode toggle;
+  achievement-unlock/server events surface as status-bar text.
+
+### Notes
+
+- **Deferred, deliberately:** a dedicated achievement-list panel, a login
+  dialog, and a rich-presence/unlock-toast HUD (`T-0802-005`). The backend
+  is real and events fire correctly today, surfaced as plain status-bar
+  text — this is the dedicated UI surface for them, scoped as a distinct,
+  UI-heavy follow-up rather than folded into the initial wiring.
+- Rusty2600's workspace enforces `clippy::pedantic`/`clippy::nursery`/
+  `missing_docs`, which RustyNES's own workspace does not — the lifted
+  files needed real doc comments added to every public struct field/enum
+  variant plus several mechanical clippy fixes.
+- `cargo test -p rusty2600-cheevos` runs real (not mocked) FFI calls into
+  the vendored C library, including one test that performs genuine network
+  I/O against an intentionally-invalid endpoint to verify the async
+  login-completion bridge fires exactly once on a transport error.
+
 ## [0.6.0] - 2026-07-01 - "Catalog"
 
 Closes 12 of the 15 schemes in the local BestEffort catalogue (`docs/cart.md`)

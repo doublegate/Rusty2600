@@ -7,7 +7,7 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current release: v0.6.0 "Catalog".** Phase 0 (foundation) through the
+**Current release: v0.7.0 "Cheevos".** Phase 0 (foundation) through the
 full Curated-tier board set (Phase 4) are complete. Phase 7 (BestEffort
 breadth) has landed 12 of the ~15-scheme BestEffort long tail cataloged in
 `docs/cart.md` (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA, 0840, FE, SB,
@@ -20,13 +20,17 @@ UA/0840/FE/SB/X07. **Phase 5 (frontend) is fully complete** — the real
 `debug-hooks` debugger (6507/TIA/RIOT/memory panels, breakpoints/step/
 continue, a side-effect-free `Bus::peek`/`peek_range`, a standalone
 disassembler) shipped in v0.5.0, and the four chip-crate Criterion benches
-are populated with real measured baselines (`docs/performance.md`). Phase 6
-(accuracy-to-100) is actively underway (RIOT timing, TIA collision
-continuity, seeded power-on state, the full SingleStepTests corpus, and
-Klaus's decimal test landed in v0.2.0; a Gopher2600 differential probe found
-and scoped a boot-timing residual in Pitfall II, `T-0601-008` — see
-`CHANGELOG.md`). See `docs/STATUS.md` for the authoritative
-per-suite/per-chip state.
+are populated with real measured baselines (`docs/performance.md`). The
+RetroAchievements slice of Phase 8 is now real: `rusty2600-cheevos` vendors
+the `rcheevos` C library and wires a safe `RaClient` into the frontend
+(`retroachievements`, off by default) — per-frame achievement tracking,
+hardcore mode, and a menu all work; a dedicated achievement-list/login/toast
+UI is deferred (`T-0802-005`). Phase 6 (accuracy-to-100) is actively
+underway (RIOT timing, TIA collision continuity, seeded power-on state, the
+full SingleStepTests corpus, and Klaus's decimal test landed in v0.2.0; a
+Gopher2600 differential probe found and scoped a boot-timing residual in
+Pitfall II, `T-0601-008` — see `CHANGELOG.md`). See `docs/STATUS.md` for the
+authoritative per-suite/per-chip state.
 
 ## The phase line
 
@@ -67,8 +71,8 @@ Core/Curated set:
 | v0.4.0 "Breadth" | BestEffort cart breadth toward Stella-adjacent parity (staged patch train) — Batches 1-2 done (F0/E0/3F/3E/EF/DF/BF, 7 schemes) + `Board::snoop_write` |
 | v0.4.1 | Continues the Batch 2 patch train — UA/0840 (2 more schemes) + `Board::snoop_read`; FE/SB/X07/4A50 and Batches 3-5 (DPC-family, ARM/peripheral, multicarts) target v0.4.2+ |
 | v0.5.0 "Inspector" | Real `debug-hooks` debugger (6507/TIA/RIOT/memory panels, breakpoints/step/continue, `Bus::peek`/`peek_range`, a standalone disassembler); performance benches populated with real Criterion baselines |
-| **v0.6.0 "Catalog"** (current) | Closes 22 of the local 25-scheme catalogue (`docs/cart.md`): FE, SB, X07 land (`T-0402-006`/`011`, DONE) alongside the existing 19. 4A50 (`T-0402-014`), AR/Supercharger (`T-0402-015`), and the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family (`T-0401-006`, needs a full ARM7TDMI Thumb interpreter) are substantially larger undertakings, deliberately deferred to a v0.6.x patch train rather than rushed |
-| v0.7.0 "Cheevos" | RetroAchievements (`rusty2600-cheevos`) |
+| v0.6.0 "Catalog" | Closes 22 of the local 25-scheme catalogue (`docs/cart.md`): FE, SB, X07 land (`T-0402-006`/`011`, DONE) alongside the existing 19. 4A50 (`T-0402-014`), AR/Supercharger (`T-0402-015`), and the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family (`T-0401-006`, needs a full ARM7TDMI Thumb interpreter) are substantially larger undertakings, deliberately deferred to a v0.6.x patch train rather than rushed |
+| **v0.7.0 "Cheevos"** (current) | RetroAchievements (`rusty2600-cheevos`, `T-0802-001..004`, DONE): vendors `rcheevos`, wires a safe `RaClient` into the frontend behind the off-by-default `retroachievements` feature — real per-frame achievement tracking, hardcore mode, a menu. A dedicated achievement-list/login/toast UI is deferred (`T-0802-005`) |
 | v0.8.0 "Battery" | The accuracy battery itself stood up + CI regression gate |
 | v0.9.x | Battery-driven hardening, commercial-ROM regression oracle, doc sync |
 | **v1.0.0** | Accuracy battery ≥90% (100% goal), debugger + RA shipped, Stella-adjacent cart breadth, green release matrix |

@@ -13,19 +13,21 @@ the timebase, the 6507 runs on every third clock, `WSYNC`/`RDY` beam-stalls the 
 owns everything mutable, a one-directional `no_std + alloc` chip-crate graph, a hard determinism
 contract, and test-ROM-is-spec. The frontend is pure Rust (`winit` + `wgpu` + `cpal` + `egui`).
 
-> **Status: v0.6.0 "Catalog" — real chip cores, full Curated tier + broad BestEffort coverage,
-> real debugger.** The 6507 (documented + undocumented opcodes), the TIA (beam-raced video +
-> two-channel audio), and the RIOT are implemented and tested — cycle-exact against a trimmed
-> SingleStepTests corpus (4,660 cases, 233 opcodes, 100% passing) and 135 tests passing
-> workspace-wide (137 with `--features test-roms`). All 8 Curated-tier bankswitch schemes plus 12
-> BestEffort schemes are implemented and wired into automatic detection
+> **Status: v0.7.0 "Cheevos" — real chip cores, full Curated tier + broad BestEffort coverage,
+> real debugger, real RetroAchievements backend.** The 6507 (documented + undocumented opcodes),
+> the TIA (beam-raced video + two-channel audio), and the RIOT are implemented and tested —
+> cycle-exact against a trimmed SingleStepTests corpus (4,660 cases, 233 opcodes, 100% passing)
+> and 142 tests passing workspace-wide (144 with `--features test-roms`). All 8 Curated-tier
+> bankswitch schemes plus 12 BestEffort schemes are implemented and wired into automatic detection
 > (2K/4K/F8/F6/F4/CV/FA/Superchip/DPC/E7/F0/E0/3F/3E/EF/DF/BF/UA/0840/FE/SB/X07 — 22 of 25
 > catalogued schemes). Only 4A50, AR/Supercharger, and the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family
 > remain, each deliberately deferred as a substantially larger undertaking. The frontend's
 > `debug-hooks` debugger is real (live 6507/TIA/RIOT/memory panels, breakpoints/step/continue, a
-> standalone disassembler) and default-on; RetroAchievements and HD-pack remain unwired stubs. See
-> `docs/STATUS.md` for the authoritative per-suite / per-chip state and `to-dos/ROADMAP.md` for the
-> full plan through v1.0.0.
+> standalone disassembler) and default-on. `rusty2600-cheevos` vendors the RetroAchievements
+> `rcheevos` C library and drives real per-frame achievement tracking, hardcore mode, and a
+> RetroAchievements menu (off by default; no dedicated achievement-list UI yet). HD-pack remains
+> an unwired stub. See `docs/STATUS.md` for the authoritative per-suite / per-chip state and
+> `to-dos/ROADMAP.md` for the full plan through v1.0.0.
 
 ## Crates
 
@@ -37,6 +39,7 @@ contract, and test-ROM-is-spec. The frontend is pure Rust (`winit` + `wgpu` + `c
 | `rusty2600-cart` | Tiered bankswitch catalog behind an honesty gate — all 8 Curated schemes implemented (2K/4K/F8/F6/F4/CV/FA/Superchip/DPC/E7); 12 of the 15-scheme BestEffort catalogue implemented (F0/E0/3F/3E/EF/DF/BF/UA/0840/FE/SB/X07) — only 4A50/AR/DPC+/CDF remain, see `docs/cart.md` |
 | `rusty2600-core` | the Bus + the master-clock lockstep scheduler (the tie crate) |
 | `rusty2600-frontend` | the `winit + wgpu + cpal + egui` shell (binary `rusty2600`), including the real `debug-hooks` debugger |
+| `rusty2600-cheevos` | native-only RetroAchievements integration — a safe wrapper around the vendored `rcheevos` C library |
 | `rusty2600-test-harness` | the AccuracyCoin-equivalent oracle + the bankswitch-tier honesty gate |
 
 ### Feature flags (frontend; all additive / off by default)
@@ -45,7 +48,7 @@ contract, and test-ROM-is-spec. The frontend is pure Rust (`winit` + `wgpu` + `c
 |---------|--------|
 | `debug-hooks` | the real debugger: live 6507/TIA/RIOT/memory panels, breakpoints/step/continue, a side-effect-free `Bus::peek`/`peek_range`, a standalone disassembler — **default-on** (v0.5.0) |
 | `hd-pack` | output-only TIA tile-source export for a texture-replacement loader (unwired stub) |
-| `retroachievements` | native-only RetroAchievements integration (unwired stub today; lands v0.6.0) |
+| `retroachievements` | native-only RetroAchievements integration: real per-frame achievement tracking, hardcore mode, a RetroAchievements menu (v0.7.0). Vendors `rcheevos` via `rusty2600-cheevos`; compiles to a no-op on wasm32 |
 | `emu-thread` | runs frame production on a dedicated thread, paced by the audio ring buffer's fill ratio — **default-on** |
 | `help-tui` | the ratatui terminal help browser (`rusty2600 help --interactive`) — default-on |
 

@@ -37,6 +37,10 @@
 //!   position + collisions), RIOT (timer + I/O ports), memory (peek-based hex viewer) — see
 //!   [`debugger`] (behind the `debug-hooks` feature, default-on) and [`shell`] for the overlay
 //!   window that hosts them.
+//! - **RetroAchievements.** The RIOT's 128 B of RAM is the 2600's only mutable game-state RAM, and
+//!   so the entirety of what RA conditions against — see `cheevos` (behind the off-by-default
+//!   `retroachievements` feature; a plain code span here, not an intra-doc link, since the module
+//!   doesn't exist in the default doc build).
 //!
 //! ## v-next: extract a shared `rusty-frontend-core`
 //!
@@ -91,6 +95,14 @@ pub mod gfx;
 // behind the `emu-thread` feature, but the handle types + the `EmuCore` are always present).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod emu_thread;
+
+/// RetroAchievements integration.
+///
+/// Owns the [`rusty2600_cheevos::RaClient`] on the main thread (never inside
+/// [`emu_thread::EmuCore`] — the client is deliberately `!Send`). Native-only,
+/// behind the off-by-default `retroachievements` feature.
+#[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
+pub mod cheevos;
 
 // Native CLI (clap 4) + the structured help-topic registry + the ratatui help TUI. Native-only: a
 // browser tab has no terminal.

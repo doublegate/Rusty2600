@@ -39,6 +39,9 @@ pub enum MenuAction {
     /// Debugger -> run until a breakpoint is hit or a safety step-cap fires.
     #[cfg(feature = "debug-hooks")]
     DebugContinue,
+    /// Emulation -> RetroAchievements -> toggle hardcore mode.
+    #[cfg(feature = "retroachievements")]
+    ToggleHardcore,
     /// View -> toggle fullscreen.
     ToggleFullscreen,
     /// File -> open the Settings window.
@@ -126,6 +129,12 @@ pub struct ShellInfo {
     /// no ROM is loaded.
     #[cfg(feature = "debug-hooks")]
     pub debug: Option<crate::debugger::DebugSnapshot>,
+    /// Whether RetroAchievements hardcore mode is currently enabled.
+    #[cfg(feature = "retroachievements")]
+    pub cheevos_hardcore: bool,
+    /// Whether RetroAchievements has successfully identified the loaded ROM.
+    #[cfg(feature = "retroachievements")]
+    pub cheevos_game_loaded: bool,
 }
 
 /// Which debugger panels are currently shown.
@@ -241,6 +250,23 @@ impl ShellState {
                             ui.close();
                         }
                     });
+                    #[cfg(feature = "retroachievements")]
+                    {
+                        ui.separator();
+                        ui.menu_button("RetroAchievements", |ui| {
+                            let label = if info.cheevos_game_loaded {
+                                "Game recognized"
+                            } else {
+                                "No game recognized"
+                            };
+                            ui.label(label);
+                            let mut hardcore = info.cheevos_hardcore;
+                            if ui.checkbox(&mut hardcore, "Hardcore mode").changed() {
+                                actions.push(MenuAction::ToggleHardcore);
+                                ui.close();
+                            }
+                        });
+                    }
                 });
 
                 ui.menu_button("Tools", |ui| {

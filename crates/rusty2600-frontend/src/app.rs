@@ -71,6 +71,12 @@ struct Active {
     shared_input: Arc<crate::emu_thread::SharedInput>,
     #[cfg(feature = "emu-thread")]
     frame_rx: crate::present_buffer::Consumer,
+
+    /// The RetroAchievements client. Lives here (main thread), never inside
+    /// `EmuCore` — `RaClient` is deliberately `!Send`, and `EmuCore` must stay
+    /// `Send` for the default-on `emu-thread` feature.
+    #[cfg(feature = "retroachievements")]
+    cheevos: crate::cheevos::CheevosState,
 }
 
 /// The app: holds the config + the deferred ROM path until `resumed()` builds `Active`.
@@ -161,12 +167,16 @@ impl ApplicationHandler for App {
         // Power on the emulator at the configured region.
         let mut emu = EmuCore::new(self.seed);
         emu.region = self.config.region;
+        #[cfg(feature = "retroachievements")]
+        let mut cheevos = crate::cheevos::CheevosState::default();
         if let Some(path) = self.pending_rom.take() {
             match std::fs::read(&path) {
                 Ok(bytes) => {
                     if let Err(e) = emu.load_rom(&bytes) {
                         eprintln!("rusty2600: failed to load {}: {e}", path.display());
                     }
+                    #[cfg(feature = "retroachievements")]
+                    cheevos.load_rom(&bytes);
                 }
                 Err(e) => eprintln!("rusty2600: cannot read {}: {e}", path.display()),
             }
@@ -245,6 +255,8 @@ impl ApplicationHandler for App {
             shared_input,
             #[cfg(feature = "emu-thread")]
             frame_rx,
+            #[cfg(feature = "retroachievements")]
+            cheevos,
         });
     }
 
@@ -419,6 +431,13 @@ impl App {
             #[cfg(feature = "debug-hooks")]
             let debug = (active.shell.debugger_visible && emu.rom_loaded)
                 .then(|| Self::build_debug_snapshot(&emu, active.shell.debugger.memory_base));
+            #[cfg(feature = "retroachievements")]
+            if emu.rom_loaded {
+                let events = active.cheevos.pump(&mut |addr| emu.system.bus.peek(addr));
+                if let Some(msg) = events.into_iter().next_back() {
+                    active.shell.status = msg;
+                }
+            }
             let info = ShellInfo {
                 board_tier: emu.board_tier().map(str::to_string),
                 region: emu.region,
@@ -426,6 +445,10 @@ impl App {
                 rom_loaded: emu.rom_loaded,
                 #[cfg(feature = "debug-hooks")]
                 debug,
+                #[cfg(feature = "retroachievements")]
+                cheevos_hardcore: active.cheevos.hardcore_enabled(),
+                #[cfg(feature = "retroachievements")]
+                cheevos_game_loaded: active.cheevos.game_loaded(),
             };
             drop(emu); // release the brief lock BEFORE the wgpu upload + egui pass
             (fb, dims, info)
@@ -537,6 +560,9 @@ impl App {
                                 } else {
                                     active.shell.status = format!("Loaded {}", path.display());
                                 }
+                                drop(emu);
+                                #[cfg(feature = "retroachievements")]
+                                active.cheevos.load_rom(&bytes);
                             }
                             Err(e) => active.shell.status = format!("read failed: {e}"),
                         }
@@ -548,7 +574,16 @@ impl App {
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .close_rom();
+                    #[cfg(feature = "retroachievements")]
+                    active.cheevos.close_rom();
                     active.shell.status = "ROM closed".into();
+                }
+                #[cfg(feature = "retroachievements")]
+                MenuAction::ToggleHardcore => {
+                    let enabled = !active.cheevos.hardcore_enabled();
+                    active.cheevos.set_hardcore_enabled(enabled);
+                    active.shell.status =
+                        format!("Hardcore mode: {}", if enabled { "on" } else { "off" });
                 }
                 MenuAction::SetRegion(region) => {
                     active.config.region = region;

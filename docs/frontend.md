@@ -72,6 +72,34 @@ per byte), which is the difference between one clone per frame and one
 clone per displayed byte for a 256-byte memory panel or a multi-instruction
 disassembly window.
 
+## RetroAchievements (`retroachievements`, v0.7.0)
+
+`rusty2600-cheevos` vendors the RetroAchievements `rcheevos` C library (MIT)
+and wraps it in a safe `RaClient`, native-only and off by default. Owned by
+`crate::cheevos::CheevosState` on the winit/main thread — deliberately NOT
+inside `EmuCore`: `RaClient` is `!Send`/`!Sync`, incompatible with
+`EmuCore`'s `Send` requirement (needed by the default-on `emu-thread`
+feature). Pumped once per frame under the same brief emu lock the present
+path and the debug snapshot already take, peeking the bus via
+`|addr| bus.peek(addr)` rather than holding the lock any longer.
+
+- **Memory map.** The 2600's only mutable game-state RAM is the RIOT's 128
+  bytes — RA's flat address space maps directly onto it
+  (`rusty2600_cheevos::memory::ra_addr_to_riot`: RA `0x00..=0x7F` -> CPU bus
+  `$0080..=$00FF`), far simpler than a typical console's split RAM/WRAM map.
+- **Game identification.** ROM bytes hash via rcheevos' own generic
+  whole-buffer MD5 path (`RC_CONSOLE_ATARI_2600`; no console-specific hash
+  case exists for the 2600 in the vendored source, since it needs none of
+  the header/region disambiguation some consoles do).
+- **What's wired today:** client construction, ROM load/close ->
+  `begin_load_game`/`unload_game`, per-frame `do_frame`/`idle` pumping,
+  hardcore mode (Emulation -> RetroAchievements menu), and achievement-
+  unlock/server events surfaced as status-bar text.
+- **What's deferred:** a dedicated achievement-list panel, a login dialog,
+  and a rich-presence/unlock-toast HUD — the backend fires real events
+  today; these are the dedicated UI surfaces for them
+  (`to-dos/phase-8-reach/sprint-2-ra-and-tas.md`, `T-0802-005`).
+
 ## 2600-specific input
 
 - **Joystick** — the standard CX40: 4 directions + 1 fire, fed into RIOT `SWCHA`
