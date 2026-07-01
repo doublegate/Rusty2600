@@ -72,6 +72,14 @@ Current corpus: **109/110 rendered** (2026-07-01, v0.3.0 in progress).
 Current corpus: **15/16 rendered** (2026-07-01, v0.3.0 in progress). See
 `tests/roms/README.md` for the local ROM staging convention.
 
+- **`BurgerTime (USA)`** — regenerated after `T-0401-009`'s ROM-DB
+  disambiguation landed. Previously misdetected as plain F6 (16 KiB
+  defaulted to F6 before E7 detection existed), rendering an all-black
+  frame; the hotspot-pattern heuristic (`is_probably_e7`) now correctly
+  identifies it as E7 (confirmed against Stella's own properties database,
+  which lists "M Network" as the manufacturer), and the screenshot shows
+  real gameplay. A concrete example of why same-size misdetection matters,
+  not just a theoretical concern.
 - **`Pitfall II - Lost Caverns (USA)`** — now boots via the DPC (Display
   Processor Chip) coprocessor scheme (`T-0401-005`, v0.3.0), but its
   screenshot is a blank blue frame at every frame count tried (60/300/900/

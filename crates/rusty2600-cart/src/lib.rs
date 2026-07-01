@@ -949,36 +949,91 @@ impl Board for Cartridge {
     }
 }
 
+/// Returns `true` if `needle` occurs anywhere in `haystack`. Naive scan —
+/// ROM images are at most a few hundred KiB and this runs once at load time,
+/// so there's no need for a smarter substring-search algorithm.
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Port of Stella's `CartDetector::isProbablySC`: a Superchip cart's ROM
+/// image repeats each 4 KiB bank's first 128 bytes into the next 128 bytes
+/// (the RAM-shadow region, electrically unreachable on real Superchip
+/// hardware — but the assembler/burner still wrote data there, since it
+/// didn't know the target board would be Superchip). Checked per-4 KiB-bank
+/// across the whole image, matching Stella exactly (`rom.len()` must already
+/// be a multiple of 4 KiB — true for all of F8SC/F6SC/F4SC's sizes).
+fn is_probably_superchip(rom: &[u8]) -> bool {
+    rom.chunks_exact(0x1000)
+        .all(|bank| bank[0x00..0x80] == bank[0x80..0x100])
+}
+
+/// Port of Stella's `CartDetector::isProbablyCV`: search for either known
+/// CommaVid RAM-access opcode signature (attributed to the MESS project).
+/// Only two commercial CV titles ever shipped (Magicard, Video Life), so
+/// this is a small, exact signature list rather than a general heuristic.
+fn is_probably_cv(rom: &[u8]) -> bool {
+    const STA_F3FF_X: [u8; 3] = [0x9D, 0xFF, 0xF3]; // STA $F3FF,X (Magicard)
+    const STA_F400_Y: [u8; 3] = [0x99, 0x00, 0xF4]; // STA $F400,Y (Video Life)
+    contains_bytes(rom, &STA_F3FF_X) || contains_bytes(rom, &STA_F400_Y)
+}
+
+/// Port of Stella's `CartDetector::isProbablyE7` (the 8-bank / 16 KiB
+/// configuration `BankE7` implements): search for known bankswitch-hotspot
+/// opcode encodings targeting `$FE0..=$FE7` — both the `$1FEx` and mirrored
+/// `$FFEx` absolute-addressing forms, since the assembler could encode
+/// either (attributed to the MESS project via Stella).
+fn is_probably_e7(rom: &[u8]) -> bool {
+    const SIGNATURES: [[u8; 3]; 7] = [
+        [0xAD, 0xE2, 0xFF], // LDA $FFE2
+        [0xAD, 0xE5, 0xFF], // LDA $FFE5
+        [0xAD, 0xE5, 0x1F], // LDA $1FE5
+        [0xAD, 0xE7, 0x1F], // LDA $1FE7
+        [0x0C, 0xE7, 0x1F], // NOP $1FE7
+        [0x8D, 0xE7, 0xFF], // STA $FFE7
+        [0x8D, 0xE7, 0x1F], // STA $1FE7
+    ];
+    SIGNATURES.iter().any(|sig| contains_bytes(rom, sig))
+}
+
 /// Detect the bankswitch scheme from a ROM image and build the board.
 ///
-/// Today this only resolves the Core-tier sized boards by length; the full
-/// scheme catalogue (hotspot-pattern + DB-assisted detection) lands later. Each
-/// unimplemented branch is annotated with its INTENDED tier so the honesty gate
-/// stays truthful as boards land.
+/// Same-size same-catalogue collisions (CV vs plain 2K/4K, Superchip vs
+/// plain F8/F6/F4, E7 vs plain F6) are resolved with hotspot-pattern
+/// heuristics ported from Stella's `CartDetector` (`T-0401-009`) — checked
+/// BEFORE falling back to the more common plain scheme, so a real CV/
+/// Superchip/E7 image is never silently misdetected. Schemes Rusty2600
+/// hasn't implemented yet (E0/FE/3F at 8 KiB, DPC+/BMC, etc.) still return
+/// `None`, keeping the honesty gate truthful — see each `TODO` below.
 ///
 /// Returns `None` for an unrecognized size / scheme.
 #[must_use]
 pub fn detect(rom: &[u8]) -> Option<Cartridge> {
     match rom.len() {
-        // 2 KiB / 4 KiB: default to plain ROM (Core). `BankCV` (CommaVid) is
-        // the SAME two sizes (2 KiB ROM-only, or 4 KiB "2K RAM-image + 2K
-        // ROM") — real disambiguation needs a ROM-DB / hotspot-access-pattern
-        // check (CV never strobes a bankswitch hotspot at all, so there's no
-        // hotspot signature to look for; only usage — e.g. actually reading
-        // from $1000-$13FF or writing to $1400-$17FF during boot — would
-        // out it). Defaulting to plain ROM here is deliberately the SAFE
-        // choice: CommaVid only shipped 2 known titles (Magicard,
-        // Video Life), so misdetecting the overwhelmingly-more-common
-        // plain-ROM case would be far worse than the reverse.
-        // TODO(T-0401-009): ROM-DB-assisted CV detection for 2K/4K images.
+        // 2 KiB / 4 KiB: `BankCV` (CommaVid) is the SAME two sizes (2 KiB
+        // ROM-only, or 4 KiB "2K RAM-image + 2K ROM"); checked first via its
+        // hotspot-pattern signature, falling back to plain ROM (Core) —
+        // CommaVid only shipped 2 known titles (Magicard, Video Life), so
+        // this ordering is deliberately safe either way.
+        0x0800 if is_probably_cv(rom) => BankCV::new(rom).map(Cartridge::BankCV),
         0x0800 => Rom2K::new(rom).map(Cartridge::Rom2K),
+        0x1000 if is_probably_cv(rom) => BankCV::new(rom).map(Cartridge::BankCV),
         0x1000 => Rom4K::new(rom).map(Cartridge::Rom4K),
         0x2000 => {
-            // 8 KiB: default to F8 (Curated). Disambiguation from E0 (Parker Bros,
-            // BestEffort) / FE (Activision SCABS, BestEffort) / 3F-with-8K
-            // (Tigervision, BestEffort) needs hotspot-pattern + ROM-DB detection.
+            // 8 KiB: Superchip (F8SC) checked first via its RAM-shadow
+            // signature, falling back to plain F8 (Curated). Disambiguation
+            // from E0 (Parker Bros, BestEffort) / FE (Activision SCABS,
+            // BestEffort) / 3F-with-8K (Tigervision, BestEffort) still needs
+            // hotspot-pattern + ROM-DB detection — those schemes aren't
+            // implemented yet, so this only ever resolves F8/F8SC.
             // TODO(T-0401-001): E0 / FE / 3F (BestEffort) detection for 8 KiB images.
-            BankF8::new(rom).map(Cartridge::BankF8)
+            if is_probably_superchip(rom) {
+                BankF8::new(rom)
+                    .map(BankF8::with_superchip)
+                    .map(Cartridge::BankF8)
+            } else {
+                BankF8::new(rom).map(Cartridge::BankF8)
+            }
         }
         // 10 KiB (+ up to 256 B of tolerated trailing dump garbage, see
         // BankDpc's doc comment): DPC (Pitfall II, Curated). Unambiguous —
@@ -990,21 +1045,34 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
         // "E7" here — E7 is 16 KiB (docs/cart.md), not 12; fixed.
         0x3000 => BankFA::new(rom).map(Cartridge::BankFA),
         0x4000 => {
-            // 16 KiB: default to F6 (Curated, the far more common Atari-
-            // standard scheme — dozens of Atari-published titles). E7
-            // (M-Network, implemented as BankE7, also Curated) is the SAME
-            // size and needs hotspot-pattern / ROM-DB disambiguation before
-            // it can be dispatched automatically here — same class of
-            // ambiguity as the 8 KiB F8/E0/FE/3F case above and Superchip's
-            // size collision with plain F8/F6/F4. `BankE7::new()` is public
-            // for direct/future ROM-DB-assisted construction.
-            // TODO(T-0401-009): ROM-DB-assisted E7 vs F6 disambiguation.
-            BankF6::new(rom).map(Cartridge::BankF6)
+            // 16 KiB: E7 (M-Network, Curated) checked first via its
+            // bankswitch-hotspot signature; Superchip (F6SC) checked next
+            // via its RAM-shadow signature; falls back to plain F6
+            // (Curated, the far more common Atari-standard scheme — dozens
+            // of Atari-published titles).
+            if is_probably_e7(rom) {
+                BankE7::new(rom).map(Cartridge::BankE7)
+            } else if is_probably_superchip(rom) {
+                BankF6::new(rom)
+                    .map(BankF6::with_superchip)
+                    .map(Cartridge::BankF6)
+            } else {
+                BankF6::new(rom).map(Cartridge::BankF6)
+            }
         }
-        0x8000 => BankF4::new(rom).map(Cartridge::BankF4),
-        // T-0401-003 (DONE): Superchip variants F8SC/F6SC/F4SC — see
-        // BankF8/BankF6/BankF4::with_superchip(); not size-dispatched here
-        // since they're byte-identical to their plain counterparts.
+        0x8000 => {
+            // 32 KiB: Superchip (F4SC) checked first via its RAM-shadow
+            // signature, falling back to plain F4 (Curated).
+            if is_probably_superchip(rom) {
+                BankF4::new(rom)
+                    .map(BankF4::with_superchip)
+                    .map(Cartridge::BankF4)
+            } else {
+                BankF4::new(rom).map(Cartridge::BankF4)
+            }
+        }
+        // T-0401-003 (DONE): Superchip variants F8SC/F6SC/F4SC — dispatched
+        // above via is_probably_superchip().
         // TODO(T-0401-004): 3F (Tigervision) / 3E (Boulder Dash) / 3E+ (BestEffort).
         // T-0401-005 (DONE): DPC (Pitfall II, Curated) — see the 0x2800..=0x2900 arm above.
         // TODO(T-0401-006): DPC+ (BestEffort) via tick_coprocessor.
@@ -1179,12 +1247,74 @@ mod tests {
     }
 
     #[test]
-    fn detect_resolves_fa_and_e7_sized_ambiguity_defaults_to_f6() {
+    fn detect_resolves_fa_size_unambiguously() {
         let fa = detect(&[0u8; 0x3000]).unwrap();
         assert!(matches!(fa, Cartridge::BankFA(_)));
-        // 16 KiB defaults to F6 until E7 gets ROM-DB disambiguation.
-        let sixteen_k = detect(&[0u8; 0x4000]).unwrap();
-        assert!(matches!(sixteen_k, Cartridge::BankF6(_)));
+    }
+
+    #[test]
+    fn detect_resolves_cv_via_hotspot_signature_else_plain_rom() {
+        let mut img = [0u8; 0x0800];
+        img[0x0100] = 0x99; // STA $F400,Y (Video Life's CV signature)
+        img[0x0101] = 0x00;
+        img[0x0102] = 0xF4;
+        assert!(matches!(detect(&img).unwrap(), Cartridge::BankCV(_)));
+
+        // Without the signature, the same size resolves to plain ROM.
+        assert!(matches!(
+            detect(&[0u8; 0x0800]).unwrap(),
+            Cartridge::Rom2K(_)
+        ));
+    }
+
+    #[test]
+    fn detect_engages_superchip_only_when_the_ram_shadow_signature_matches() {
+        // 8 KiB, both 4 KiB banks exhibit the Superchip signature (each
+        // bank's first 128 bytes duplicated into its next 128).
+        let mut sc_img = [0u8; 0x2000];
+        for i in 0..0x80 {
+            sc_img[i] = (i as u8).wrapping_add(1);
+            sc_img[0x80 + i] = sc_img[i];
+            sc_img[0x1000 + i] = (i as u8).wrapping_add(7);
+            sc_img[0x1000 + 0x80 + i] = sc_img[0x1000 + i];
+        }
+        let mut sc_cart = detect(&sc_img).unwrap();
+        assert!(matches!(sc_cart, Cartridge::BankF8(_)));
+        sc_cart.cpu_write(0x1000, 0x42);
+        assert_eq!(
+            sc_cart.cpu_read(0x1080),
+            0x42,
+            "superchip RAM must be engaged"
+        );
+
+        // Same size, but the shadow bytes deliberately DON'T match --
+        // must fall back to plain (non-superchip) F8.
+        let mut plain_img = [0u8; 0x2000];
+        plain_img[0x00] = 0x11;
+        plain_img[0x80] = 0x22;
+        let mut plain_cart = detect(&plain_img).unwrap();
+        assert!(matches!(plain_cart, Cartridge::BankF8(_)));
+        plain_cart.cpu_write(0x1000, 0x99);
+        assert_eq!(
+            plain_cart.cpu_read(0x1080),
+            0x00,
+            "plain F8 RAM writes are no-ops"
+        );
+    }
+
+    #[test]
+    fn detect_resolves_e7_via_hotspot_signature_else_plain_f6() {
+        let mut img = [0u8; 0x4000];
+        img[0x0100] = 0xAD; // LDA $1FE7 (an E7 bankswitch-hotspot access)
+        img[0x0101] = 0xE7;
+        img[0x0102] = 0x1F;
+        assert!(matches!(detect(&img).unwrap(), Cartridge::BankE7(_)));
+
+        // Without an E7 or Superchip signature, 16 KiB falls back to F6.
+        let mut plain_img = [0u8; 0x4000];
+        plain_img[0x00] = 0x11;
+        plain_img[0x80] = 0x22; // deliberately mismatched -> not Superchip
+        assert!(matches!(detect(&plain_img).unwrap(), Cartridge::BankF6(_)));
     }
 
     #[test]

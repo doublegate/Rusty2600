@@ -118,12 +118,22 @@ Per ref-docs/research-report.md §8.2.
 
 ## Detection
 
-`detect()` resolves the sized boards by length now (2K → `Rom2K`, 4K → `Rom4K`,
-8K → `BankF8` Curated, 16K → `BankF6` Curated, 32K → `BankF4` Curated). The
-full scheme set needs hotspot-pattern + ROM-DB-assisted detection (8 KiB alone
-is ambiguous between F8, E0, FE, and 3F). The tiered TODOs (`T-0401-001..007`)
-track each board family; the honesty gate's oracle set must be extended in
-lockstep so the pass-rate stays truthful as boards land.
+`detect()` resolves size-unambiguous schemes purely by length (2K → `Rom2K`,
+4K → `Rom4K`, 10K → `BankDpc`, 12K → `BankFA`). For sizes with a real
+same-catalogue collision — 2K/4K (`BankCV`), 8K/16K/32K (Superchip vs plain
+F8/F6/F4), and 16K (`BankE7` vs plain `BankF6`) — `detect()` runs a
+hotspot-pattern heuristic first (`is_probably_cv`/`is_probably_superchip`/
+`is_probably_e7`, ported from Stella's `CartDetector.cxx`) and only falls
+back to the more common plain scheme if it doesn't match (`T-0401-009`).
+
+The one remaining gap is 8 KiB ambiguity between the IMPLEMENTED `BankF8`
+and three NOT-YET-implemented BestEffort schemes (E0, FE, 3F) — since those
+have no board to dispatch to yet, `detect()` still just returns `BankF8`
+for any 8 KiB image, which is a real (if BestEffort-tier, so not accuracy-
+gated) misdetection risk until those schemes land (`T-0401-001`). The
+tiered TODOs (`T-0401-004`/`006`/`007`) track the remaining board families;
+the honesty gate's oracle set must be extended in lockstep so the pass-rate
+stays truthful as boards land.
 
 
 ---

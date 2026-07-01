@@ -46,14 +46,24 @@
   reserved for the two schemes needing zero board-specific hotspot logic: 2K,
   4K). Pinned by `mapper_tier_honesty.rs`'s
   `core_tier_is_reserved_for_unbanked_schemes` test.
-- [ ] `T-0401-009`: ROM-DB-assisted disambiguation umbrella — several
-  implemented schemes are byte-size-identical to another implemented scheme
-  and so can't be wired into `detect()`'s automatic size-based dispatch yet:
-  CV vs plain 2K/4K, Superchip (F8SC/F6SC/F4SC) vs plain F8/F6/F4, and E7 vs
-  F6 (both 16 KiB). All have public constructors (`BankCV::new`,
-  `BankF8::with_superchip`/etc., `BankE7::new`) ready for a future ROM-DB
-  (MD5 lookup, matching Stella's own approach) or hotspot-access-pattern
-  probe to select the right one at load time.
+- [x] `T-0401-009` (DONE): ROM-DB-assisted disambiguation umbrella — CV vs
+  plain 2K/4K, Superchip (F8SC/F6SC/F4SC) vs plain F8/F6/F4, and E7 vs plain
+  F6 (both 16 KiB) were all same-size collisions blocking `detect()`'s
+  automatic dispatch. Resolved with hotspot-pattern heuristics ported
+  directly from Stella's `CartDetector.cxx` (`is_probably_cv`,
+  `is_probably_superchip`, `is_probably_e7` in
+  `crates/rusty2600-cart/src/lib.rs`) rather than an MD5 database — each
+  checked before falling back to the more common plain scheme, so a real
+  CV/Superchip/E7 image is never silently misdetected while a plain image
+  still resolves correctly. Validated against a REAL commercial ROM, not
+  just synthetic fixtures: `BurgerTime (USA).a26` (16 KiB) was previously
+  misdetected as plain F6 (rendering an all-black `screenshots/commercial/`
+  frame) and is now correctly identified as E7 — cross-checked against
+  Stella's own `stella.pro` properties database, which lists "M Network" as
+  the manufacturer. 6 new `detect()`-level unit tests (signature-present vs
+  signature-absent for each of the three schemes, plus a positive RAM-write
+  check confirming Superchip mode actually engages, not just that the right
+  enum variant comes back).
 
 
 ---
