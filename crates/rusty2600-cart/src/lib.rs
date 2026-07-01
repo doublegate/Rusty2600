@@ -165,6 +165,12 @@ pub struct BankF8 {
     #[serde(with = "serde_bytes_array")]
     rom: [u8; 0x2000],
     bank: u8,
+    /// Superchip 128 B on-cart RAM (F8SC), enabled via [`Self::with_superchip`].
+    /// Always allocated (128 B is negligible) so `Option<[u8; N]>` never needs
+    /// its own serde impl; `superchip` gates whether it's actually addressed.
+    #[serde(with = "serde_bytes_array")]
+    ram: [u8; 0x80],
+    superchip: bool,
 }
 
 impl BankF8 {
@@ -181,7 +187,19 @@ impl BankF8 {
         Some(Self {
             rom: bytes,
             bank: 1,
+            ram: [0; 0x80],
+            superchip: false,
         })
+    }
+
+    /// Enable the F8SC Superchip 128 B RAM overlay (confirmed against
+    /// Stella's `CartF8`/`CartEnhanced`: write-low `$1000..=$107F`, read-high
+    /// `$1080..=$10FF`, inside whichever bank is selected — same
+    /// write-low/read-high convention as `BankFA`, half its RAM size).
+    #[must_use]
+    pub const fn with_superchip(mut self) -> Self {
+        self.superchip = true;
+        self
     }
 
     /// Apply a hotspot if `addr` is one of the bank-select addresses. Both reads
@@ -201,11 +219,21 @@ impl BankF8 {
 impl Board for BankF8 {
     fn cpu_read(&mut self, addr: u16) -> u8 {
         self.hotspot(addr);
-        let off = usize::from(self.bank) * 0x1000 + (addr & 0x0FFF) as usize;
+        let a = addr & 0x0FFF;
+        if self.superchip && (0x0080..0x0100).contains(&a) {
+            return self.ram[(a & 0x007F) as usize];
+        }
+        let off = usize::from(self.bank) * 0x1000 + a as usize;
         self.rom[off]
     }
-    fn cpu_write(&mut self, addr: u16, _val: u8) {
+    fn cpu_write(&mut self, addr: u16, val: u8) {
         self.hotspot(addr);
+        if self.superchip {
+            let a = addr & 0x0FFF;
+            if a < 0x0080 {
+                self.ram[a as usize] = val;
+            }
+        }
     }
     fn tier(&self) -> Tier {
         Tier::Curated
@@ -219,6 +247,11 @@ pub struct BankF6 {
     #[serde(with = "serde_bytes_array")]
     rom: [u8; 0x4000],
     bank: u8,
+    /// F6SC Superchip 128 B RAM overlay; see [`BankF8`]'s field of the same
+    /// name for the write-low/read-high convention this follows.
+    #[serde(with = "serde_bytes_array")]
+    ram: [u8; 0x80],
+    superchip: bool,
 }
 
 impl BankF6 {
@@ -228,7 +261,16 @@ impl BankF6 {
         Some(Self {
             rom: bytes,
             bank: 3,
+            ram: [0; 0x80],
+            superchip: false,
         })
+    }
+
+    /// Enable the F6SC Superchip 128 B RAM overlay (see [`BankF8::with_superchip`]).
+    #[must_use]
+    pub const fn with_superchip(mut self) -> Self {
+        self.superchip = true;
+        self
     }
 
     #[allow(clippy::missing_const_for_fn)]
@@ -246,11 +288,21 @@ impl BankF6 {
 impl Board for BankF6 {
     fn cpu_read(&mut self, addr: u16) -> u8 {
         self.hotspot(addr);
-        let off = usize::from(self.bank) * 0x1000 + (addr & 0x0FFF) as usize;
+        let a = addr & 0x0FFF;
+        if self.superchip && (0x0080..0x0100).contains(&a) {
+            return self.ram[(a & 0x007F) as usize];
+        }
+        let off = usize::from(self.bank) * 0x1000 + a as usize;
         self.rom[off]
     }
-    fn cpu_write(&mut self, addr: u16, _val: u8) {
+    fn cpu_write(&mut self, addr: u16, val: u8) {
         self.hotspot(addr);
+        if self.superchip {
+            let a = addr & 0x0FFF;
+            if a < 0x0080 {
+                self.ram[a as usize] = val;
+            }
+        }
     }
     fn tier(&self) -> Tier {
         Tier::Curated
@@ -264,6 +316,11 @@ pub struct BankF4 {
     #[serde(with = "serde_bytes_array")]
     rom: [u8; 0x8000],
     bank: u8,
+    /// F4SC Superchip 128 B RAM overlay; see [`BankF8`]'s field of the same
+    /// name for the write-low/read-high convention this follows.
+    #[serde(with = "serde_bytes_array")]
+    ram: [u8; 0x80],
+    superchip: bool,
 }
 
 impl BankF4 {
@@ -273,7 +330,16 @@ impl BankF4 {
         Some(Self {
             rom: bytes,
             bank: 7,
+            ram: [0; 0x80],
+            superchip: false,
         })
+    }
+
+    /// Enable the F4SC Superchip 128 B RAM overlay (see [`BankF8::with_superchip`]).
+    #[must_use]
+    pub const fn with_superchip(mut self) -> Self {
+        self.superchip = true;
+        self
     }
 
     #[allow(clippy::missing_const_for_fn)]
@@ -295,11 +361,21 @@ impl BankF4 {
 impl Board for BankF4 {
     fn cpu_read(&mut self, addr: u16) -> u8 {
         self.hotspot(addr);
-        let off = usize::from(self.bank) * 0x1000 + (addr & 0x0FFF) as usize;
+        let a = addr & 0x0FFF;
+        if self.superchip && (0x0080..0x0100).contains(&a) {
+            return self.ram[(a & 0x007F) as usize];
+        }
+        let off = usize::from(self.bank) * 0x1000 + a as usize;
         self.rom[off]
     }
-    fn cpu_write(&mut self, addr: u16, _val: u8) {
+    fn cpu_write(&mut self, addr: u16, val: u8) {
         self.hotspot(addr);
+        if self.superchip {
+            let a = addr & 0x0FFF;
+            if a < 0x0080 {
+                self.ram[a as usize] = val;
+            }
+        }
     }
     fn tier(&self) -> Tier {
         Tier::Curated
@@ -702,6 +778,44 @@ mod tests {
         // RAM: write-low ($1000-$10FF), read-high ($1100-$11FF), same 256 B.
         board.cpu_write(0x1000, 0x77);
         assert_eq!(board.cpu_read(0x1100), 0x77);
+    }
+
+    #[test]
+    fn f8sc_superchip_ram_write_low_read_high() {
+        let mut img = [0u8; 0x2000];
+        img[0x1000 + 0x0090] = 0x99; // bank 1, RAM-window ROM byte must NOT surface once superchip is on
+        let mut board = BankF8::new(&img).unwrap().with_superchip();
+        assert_eq!(board.tier(), Tier::Curated);
+        board.cpu_write(0x1000, 0x42); // write-low $1000-$107F
+        assert_eq!(board.cpu_read(0x1080), 0x42); // read-high $1080-$10FF, same 128 B
+        // Outside the RAM window, ROM still reads through normally.
+        assert_eq!(board.cpu_read(0x1200), 0x00);
+    }
+
+    #[test]
+    fn f8_without_superchip_ignores_ram_window() {
+        // Plain (non-SC) F8 must not accidentally expose a RAM overlay.
+        let mut img = [0u8; 0x2000];
+        img[0x1000 + 0x0080] = 0x55;
+        let mut board = BankF8::new(&img).unwrap();
+        board.cpu_write(0x1000, 0xFF); // would corrupt RAM if superchip leaked through
+        assert_eq!(board.cpu_read(0x1080), 0x55); // still plain ROM read
+    }
+
+    #[test]
+    fn f6sc_superchip_ram_write_low_read_high() {
+        let img = [0u8; 0x4000];
+        let mut board = BankF6::new(&img).unwrap().with_superchip();
+        board.cpu_write(0x1010, 0x33);
+        assert_eq!(board.cpu_read(0x1090), 0x33);
+    }
+
+    #[test]
+    fn f4sc_superchip_ram_write_low_read_high() {
+        let img = [0u8; 0x8000];
+        let mut board = BankF4::new(&img).unwrap().with_superchip();
+        board.cpu_write(0x1020, 0x64);
+        assert_eq!(board.cpu_read(0x10A0), 0x64);
     }
 
     #[test]

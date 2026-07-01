@@ -9,8 +9,14 @@
   BestEffort) so an 8 KiB image isn't silently mis-detected. See
   `crates/rusty2600-cart/src/lib.rs::detect`.
 - [ ] `T-0401-002`: Implement the E7 (M-Network) scheme in `detect()`.
-- [ ] `T-0401-003`: Implement the Superchip variants (F8SC/F6SC/F4SC, +128 B
-  RAM) in `detect()`.
+- [x] `T-0401-003` (DONE): Implement the Superchip variants (F8SC/F6SC/F4SC,
+  +128 B RAM overlay, write-low `$1000-$107F` / read-high `$1080-$10FF` per
+  Stella's `CartF8`/`CartEnhanced`). Added `with_superchip()` builders on
+  `BankF8`/`BankF6`/`BankF4` rather than new types (SC variants are ROM-size-
+  identical to their plain counterparts, so Stella itself can't tell them
+  apart by size either — only ROM-DB/MD5 lookup can). **Not wired into
+  `detect()`** for the same reason; that's `T-0401-009`, tracked alongside the
+  8 KiB F8/E0/FE/3F ambiguity ROM-DB ticket.
 - [ ] `T-0401-004`: Disambiguate 3F (Tigervision) / 3E (Boulder Dash) / 3E+
   from the other 8 KiB+ schemes in `detect()`.
 - [ ] `T-0401-005`: Implement the DPC (Pitfall II) custom Display Processor
