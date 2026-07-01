@@ -121,44 +121,51 @@ Per ref-docs/research-report.md §8.2.
 `detect()` resolves size-unambiguous schemes purely by length (2K → `Rom2K`,
 4K → `Rom4K`, 10K → `BankDpc`, 12K → `BankFA`). For sizes with a real
 same-catalogue collision — 2K/4K (`BankCV`), 8K/16K/32K (Superchip vs plain
-F8/F6/F4), 8K (`BankE0`/`Bank3E`/`Bank3F`/`BankUA`/`Bank0840` vs plain F8),
-16K (`BankE7` vs plain `BankF6`), 32K (`Bank3E`/`Bank3F` vs plain F4), 64K
-(`Bank3E`/`Bank3F`/`BankEF` vs `BankF0`), 128K (`Bank3E`/`BankDF`/`Bank3F`),
-and 256K (`Bank3E`/`BankBF`/`Bank3F`) — `detect()` runs hotspot-pattern
-heuristics first (`is_probably_cv`/`is_probably_superchip`/
-`is_probably_e7`/`is_probably_e0`/`is_probably_3e`/`is_probably_3f`/
-`is_probably_ua`/`is_probably_0840`, ported from Stella's
+F8/F6/F4), 8K (`BankE0`/`Bank3E`/`Bank3F`/`BankUA`/`BankFe`/`Bank0840` vs
+plain F8), 16K (`BankE7` vs plain `BankF6`), 32K (`Bank3E`/`Bank3F` vs plain
+F4), 64K (`Bank3E`/`Bank3F`/`BankEF`/`BankX07` vs `BankF0`), 128K
+(`Bank3E`/`BankDF`/`Bank3F` vs `BankSb`), and 256K (`Bank3E`/`BankBF`/`Bank3F`
+vs `BankSb`) — `detect()` runs hotspot-pattern heuristics first
+(`is_probably_cv`/`is_probably_superchip`/`is_probably_e7`/`is_probably_e0`/
+`is_probably_3e`/`is_probably_3f`/`is_probably_ua`/`is_probably_fe`/
+`is_probably_0840`/`is_probably_x07`, ported from Stella's
 `CartDetector.cxx`, plus `ef_family_tail_signature`/
 `is_probably_ef_by_opcode` for the EF/DF/BF "CPUWIZ" family, checked in the
 same priority order Stella itself uses at each size) and only falls back to
-the more common plain scheme if none match — or to `None` at 128K/256K,
-where the only remaining fallback (SB) isn't implemented yet, so guessing
-would be dishonest (`T-0401-009`, `T-0402-001..004`, `T-0402-006`,
-`T-0402-008..010`).
+the more common plain scheme if none match — or, at 128K/256K, to `BankSb`
+(Superbank), matching Stella's own chain, which defaults straight to SB at
+these two sizes once 3E/DF/3F are ruled out (`T-0401-009`, `T-0402-001..004`,
+`T-0402-006`, `T-0402-008..011`, all DONE).
 
-The one remaining 8 KiB gap is FE (Activision SCABS) — it isn't implemented
-yet, since (unlike E0/3E/3F/UA/0840) it needs the snooped VALUE, not just
-the address, to pick a bank (see `Board::snoop_read` below — the hook
-already supports this, FE's own register-decode logic is just unwritten).
-Until FE lands, an FE image at 8 KiB still resolves to `BankF8`, a real (if
-BestEffort-tier, so not accuracy-gated) misdetection risk (`T-0402-006`).
-SB/X07/4A50 likely only need `snoop_read` too (not implemented yet,
-`T-0402-011`). The tiered TODOs (`T-0402-006`/`007`/`011`, plus
-`T-0401-006`/`007`) track the remaining board families; the honesty gate's
-oracle set must be extended in lockstep so the pass-rate stays truthful as
-boards land.
+FE (Activision SCABS/Decathlon/Robot Tank/Space Shuttle/Thwocker) is now
+implemented (`BankFe`, `T-0402-006`) via `Board::snoop_read`/`snoop_write`'s
+`val` parameter — unlike E0/3E/3F/UA/0840 (which only need the ACCESS
+ADDRESS), FE needs the snooped VALUE too, since the bank is derived from the
+value written to `$01FE`'s companion stack-frame byte, not the address
+itself. SB and X07 (`T-0402-011`, DONE) are also address/value-snoop-based;
+4A50 remains unimplemented (`T-0402-014`) — it needs three independently
+relocatable ROM/RAM windows plus a previous-access-dependent hotspot
+(Stella's `Cartridge4A50::checkBankSwitch`), substantially more state than
+the other snoop-based schemes here. AR/Supercharger (`T-0402-015`) and
+DPC+/CDF/CDFJ/CDFJ+ (`T-0401-006`, needing a full ARM7TDMI Thumb
+interpreter) remain unimplemented and are architecturally unlike everything
+else in this catalogue — both are scoped as separate, larger undertakings,
+not quick additions. The tiered TODOs above track the remaining board
+families; the honesty gate's oracle set must be extended in lockstep so the
+pass-rate stays truthful as boards land.
 
 ### `Board::snoop_write`/`snoop_read` — bankswitching outside the cart window
 
 Several classic schemes bankswitch on accesses the CONSOLE thinks are plain
 TIA/RIOT traffic, not cart accesses: 3F/3E (Tigervision) trigger on any
 WRITE whose low byte is `$3F`/`$3E` (e.g. a zero-page `STA $3F`); UA on
-`$220`/`$240` and 0840 on `$800`/`$840` trigger on either a READ or a WRITE;
-FE on `$01FE` needs the value read there too — all deep in TIA/RIOT-mirrored
-space (`$0000..=$0FFF`), not `$1000+`. This matches real hardware: a
-cartridge's edge connector is wired to every address line, and what the
-console's own decode logic thinks an address means has no bearing on what
-the cart chooses to react to.
+`$220`/`$240`, 0840 on `$800`/`$840`, and X07 on its two hotspot patterns all
+trigger on either a READ or a WRITE; FE on `$01FE` and SB on `$0800..=$0FFF`
+both need the accessed VALUE (FE) or the address's own low bits (SB) too —
+all deep in TIA/RIOT-mirrored space (`$0000..=$0FFF`), not `$1000+`. This
+matches real hardware: a cartridge's edge connector is wired to every
+address line, and what the console's own decode logic thinks an address
+means has no bearing on what the cart chooses to react to.
 
 `Board::snoop_write(addr, val)` and `Board::snoop_read(addr, val)` (both
 default no-op) give boards a look at every access the Bus routes to
@@ -166,10 +173,10 @@ TIA/RIOT space, called from `Bus::cpu_write`/`Bus::cpu_read`
 (`crates/rusty2600-core/src/bus.rs`) — `snoop_write` before the console
 handles the write, `snoop_read` after the console computes the value it
 would return (passed as `val`). Neither hook lets the board REDIRECT the
-access; `Bank3F`/`Bank3E` only need `snoop_write`, `BankUA`/`Bank0840` use
-both (their Stella originals bankswitch identically whether the access is a
-peek or a poke), and FE will use `snoop_read`'s `val` parameter once
-implemented.
+access; `Bank3F`/`Bank3E` only need `snoop_write`, `BankUA`/`Bank0840`/
+`BankX07`/`BankSb` use both (their Stella originals bankswitch identically
+whether the access is a peek or a poke), and `BankFe` uses `snoop_read`'s
+`val` parameter to pick the bank from the JSR stack-frame byte's value.
 
 
 ---

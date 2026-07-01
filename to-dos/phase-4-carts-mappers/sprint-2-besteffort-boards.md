@@ -1,9 +1,11 @@
 # Sprint 4.2 — BestEffort Boards
 
-**Context:** Part of Phase 4 — Carts / Mappers. Targets v0.4.0 "Breadth"
-(`to-dos/ROADMAP.md`): the ~50-scheme BestEffort long tail, staged as a
-patch train batched by family (mirrors Stella's own `Cart*.cxx` grouping).
-Every scheme here is BestEffort tier per ADR 0003 — register-decode +
+**Context:** Part of Phase 4 — Carts / Mappers. Spans v0.4.0 "Breadth"
+through v0.6.0 "Catalog" (`to-dos/ROADMAP.md`): the local 15-scheme
+BestEffort catalogue (`docs/cart.md`), staged as a patch train batched by
+family (mirrors Stella's own `Cart*.cxx` grouping) — 12 of 15 now land
+(only 4A50/AR/DPC-family remain, `T-0402-014`/`015`/`T-0401-006`). Every
+scheme here is BestEffort tier per ADR 0003 — register-decode +
 boot-smoke tested only, never accuracy-oracle-gated.
 
 ## Batch 1 (classic homebrew) — `T-0402-NNN`
@@ -40,7 +42,7 @@ boot-smoke tested only, never accuracy-oracle-gated.
   matching real hardware, where the cartridge edge connector is wired to
   every address line, not just A12. This unblocks 3F/3E now and UA/0840/FE
   later (`T-0402-006`).
-- [x] `T-0402-006` (DONE for UA/0840; FE deferred): Extended `Board` with a
+- [x] `T-0402-006` (DONE — UA/0840 v0.4.1, FE v0.6.0): Extended `Board` with a
   `snoop_read(addr, val)` hook (default no-op) and wired `Bus::cpu_read`
   (`crates/rusty2600-core/src/bus.rs`) to call it AFTER computing the value
   TIA/RIOT would return for a non-cart-window address. Turned out simpler
@@ -53,12 +55,15 @@ boot-smoke tested only, never accuracy-oracle-gated.
   `$220`/`$240`, plus the Digivision `$2C0`/`$FB0` variant) and `Bank0840`
   (8 KiB, 2×4K banks, hotspots `$800`/`$840`) on top of it; both wired into
   `detect()` at 8 KiB via `is_probably_ua`/`is_probably_0840` (ported from
-  Stella), checked after 3E/3F and before falling back to plain F8. FE
-  remains deferred: it additionally needs the snooped VALUE (the JSR
-  return-address byte sitting at `$01FE` mid-stack-push) to pick the bank,
-  which `snoop_read`'s existing `val` parameter actually already supports
-  — FE's remaining work is just its own register-decode logic, not a
-  further interface change.
+  Stella), checked after 3E/3F and before falling back to plain F8.
+  `BankFe` (v0.6.0) closes the deferred half: 8 KiB, 2×4K banks, selected by
+  the value written to `$01FD` (the low byte of a JSR's stack-pushed return
+  address) the access immediately AFTER a touch to `$01FE` (the high byte) —
+  `(val >> 5) ^ 0b111`, masked to the 2 available banks, matching Stella's
+  `CartridgeFE::checkSwitchBank` exactly. Detected via
+  `is_probably_fe` (5 known-title boot signatures, ported from Stella),
+  guarded by `!is_probably_f8_signature` so a real F8 image is never
+  misdetected, checked after UA and before 0840 at 8 KiB.
 - [x] `T-0402-007` (DONE): Found a `clippy::large_stack_frames` failure
   while adding `BankF0`'s 64 KiB array inline in the `Cartridge` enum (an
   enum is sized to its largest variant, so a 64 KiB variant inflates every
@@ -94,25 +99,51 @@ boot-smoke tested only, never accuracy-oracle-gated.
   `ef_family_write`/`ef_family_hotspot`) rather than three near-duplicate
   copies, since the three schemes differ only in size/bank-count/hotspot
   base.
-- [ ] `T-0402-011` (deferred, `snoop_read` now exists — this is just
-  unstarted, not blocked): SB (Superbank), X07, and 4A50 — the remaining
-  Batch 2 schemes. SB's and X07's own `checkSwitchBank` logic (re-read
-  after `T-0402-006`) picks the bank purely from the ACCESS ADDRESS, same
-  shape as `BankUA`/`Bank0840` — likely straightforward now that
-  `snoop_read` exists. 4A50 installs a full TIA/RIOT "delegate" covering
-  `$0000-$0FFF`, a bigger scope worth checking separately. `detect()`
-  currently returns `None` (not a guess) for any 128/256 KiB image without
-  a 3E/3F/DF/BF signature, rather than silently misdetecting an SB image.
+- [x] `T-0402-011` (DONE — v0.6.0): SB (Superbank) and X07, the address-only
+  half of the remaining Batch 2 schemes. `BankSb` (128/256 KiB, 32/64×4K
+  banks): any read OR write to `$0800..=$0FFF` selects the bank from the
+  LOW BITS of the accessed address itself (`address & (bank_count - 1)`),
+  not a fixed hotspot value — matches Stella's `CartridgeSB::
+  checkSwitchBank` (modulo its outer address-mirroring pre-mask, an
+  implementation detail of Stella's own paged-address model this crate's
+  fully-decoded `Bus` has no equivalent for). Wired into `detect()` as the
+  DEFAULT fallback at 128/256 KiB once 3E/DF/3F are ruled out, matching
+  Stella's own chain exactly (it defaults straight to SB at these sizes).
+  `BankX07` (64 KiB, 16×4K banks): a direct select (`address & 0x180F ==
+  0x080D` picks address bits 4-7 as the bank) plus a secondary toggle
+  active only while the current bank is 14 or 15 (`address & 0x1880 == 0`
+  flips the bank's low bit via address bit 6) — matches Stella's
+  `CartridgeX07::checkSwitchBank` exactly. Detected via `is_probably_x07`
+  (6 known opcode encodings, ported from Stella), checked after EF and
+  before falling back to `BankF0` at 64 KiB.
+- [ ] `T-0402-014` (not started): 4A50 — up to 128 KiB, three independently
+  relocatable ROM/RAM windows (`$1000-$17FF`, `$1800-$1DFF`, `$1E00-$1EFF`)
+  plus a hotspot whose behavior depends on the PREVIOUS access's address
+  AND value (Stella's `Cartridge4A50::checkBankSwitch` tracks `myLastData`/
+  `myLastAddress` across calls). Substantially more state than SB/X07/FE;
+  scoped as its own ticket rather than folded into the "quick" schemes
+  above.
+- [ ] `T-0402-015` (not started): AR (Supercharger) — 6 KiB RAM loaded from
+  a tape/audio-encoded multiload format (Stella supports both a raw binary
+  multiload format and an actual WAV waveform decoder), 3×2 KiB RAM banks.
+  Architecturally unlike every other scheme in this catalogue (no fixed ROM
+  image to bankswitch at all); needs its own loader path, not just a new
+  `Board` impl.
 
 ## Batch 3 (DPC-family / fractional datafetchers) — not yet scheduled
 
 DPC+, CDF/CDFJ, BUS — watch for the `DFxFRACINC` non-reinitialization
-jitter bug Stella's changelog documents.
+jitter bug Stella's changelog documents. All four need a full ARM7TDMI
+Thumb interpreter (`T-0401-006`; Gopher2600's `arm.go`/`thumb.go`/
+`thumb2*.go` is the reference implementation to study) before any of them
+can be implemented — deliberately not attempted piecemeal.
 
 ## Batch 4 (ARM/peripheral-integrated) — not yet scheduled
 
-ELF (ARM7TDMI Thumb bus-stuffing — Gopher2600's `arm.go`/`thumb.go` is the
-reference), PlusROM, Movie Cart, Supercharger/AR, CompuMate, GameLine.
+ELF (ARM7TDMI Thumb bus-stuffing — same ARM interpreter dependency as
+Batch 3 above), PlusROM (network-connected carts), Movie Cart, CompuMate,
+GameLine. Supercharger/AR moved to `T-0402-015` above (tractable without an
+ARM interpreter, just a different loader path).
 
 ## Batch 5 (multicarts / remaining) — not yet scheduled
 

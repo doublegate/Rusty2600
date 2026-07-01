@@ -1,7 +1,7 @@
 [package]
 name = "rusty2600-frontend"
 description = "Rusty2600: cross-platform Atari 2600 / VCS emulator binary (winit + wgpu + cpal + egui)"
-version = "0.5.0"
+version = "0.6.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -55,8 +55,8 @@ hd-pack = []
 retroachievements = []
 
 [dependencies]
-rusty2600-core = { path = "../rusty2600-core", version = "0.5.0" }
-rusty2600-cart = { path = "../rusty2600-cart", version = "0.5.0" }
+rusty2600-core = { path = "../rusty2600-core", version = "0.6.0" }
+rusty2600-cart = { path = "../rusty2600-cart", version = "0.6.0" }
 
 # === The always-on egui shell stack ==========================================
 # v0.1 scaffold note: these are intentionally pinned to the exact versions the

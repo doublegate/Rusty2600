@@ -6,6 +6,49 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-01 - "Catalog"
+
+Closes 12 of the 15 schemes in the local BestEffort catalogue (`docs/cart.md`)
+— 22 of 25 catalogued schemes total, up from 19. Also regenerates the full
+screenshot corpus against the current frontend/cart state.
+
+### Added
+
+- **FE (Activision — Decathlon, Robot Tank, Space Shuttle, Thwocker):** 8 KiB
+  ROM, 2×4K banks, selected by a hardware trick rather than a fixed hotspot
+  address. The bank-switch routine's `JSR` pushes its return address's high
+  byte to `$01FE` (a RIOT-RAM mirror, watched via `Board::snoop_read`/
+  `snoop_write`) immediately followed by the low byte to `$01FD`; the value
+  of THAT second access picks the bank (`(value >> 5) ^ 0b111`, masked to 2
+  banks) — matches Stella's `CartridgeFE::checkSwitchBank` exactly. Detected
+  via 5 known-title boot signatures, guarded against misdetecting a real F8
+  image.
+- **SB (Superbank):** 128/256 KiB ROM, 32/64×4K banks. Any read OR write to
+  `$0800..=$0FFF` selects the bank from the LOW BITS of the accessed
+  address itself, not a fixed hotspot value. Now the default fallback at
+  128/256 KiB once 3E/DF/3F are ruled out, matching Stella's own detection
+  chain, which defaults straight to SB at these two sizes.
+- **X07 (AtariAge homebrew multicart scheme):** 64 KiB ROM, 16×4K banks. A
+  direct select (address bits 4-7 pick the bank) plus a secondary toggle
+  active only while the current bank is 14 or 15 (address bit 6 flips
+  between them) — matches Stella's `CartridgeX07::checkSwitchBank` exactly.
+- Regenerated all 126 screenshots (`screenshots/homebrew/`,
+  `screenshots/commercial/`) against the current build. `Zippy the
+  Porcupine` now renders (F0 landed in v0.4.0); homebrew goes to 110/110.
+
+### Notes
+
+- **4A50, AR/Supercharger, and DPC+/CDF/CDFJ/CDFJ+ remain unimplemented,
+  deliberately.** 4A50 needs three independently relocatable ROM/RAM windows
+  plus a previous-access-dependent hotspot — substantially more state than
+  the schemes above. AR needs a tape/audio-based loader, architecturally
+  unlike every other scheme here. The DPC+ family needs a full ARM7TDMI
+  Thumb interpreter. All three are scoped as separate, larger undertakings
+  for a follow-up release, not rushed additions here.
+- Pitfall II's blank-frame residual (`T-0601-008`) and Communist Mutants
+  from Space's detection gap are unchanged by this release, as expected —
+  neither's root cause was touched.
+
 ## [0.5.0] - 2026-07-01 - "Inspector"
 
 Closes Phase 5 (frontend): the `debug-hooks` feature goes from an unwired

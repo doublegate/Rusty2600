@@ -58,7 +58,7 @@ correctly.
 
 ### homebrew/
 
-Current corpus: **110/110 rendered** (2026-07-01, v0.5.0).
+Current corpus: **110/110 rendered** (2026-07-01, v0.6.0).
 
 - **`Zippy the Porcupine (NTSC)`** — 64 KiB ROM; previously unsupported
   (needed one of `F0`/`EF`/`EFSC`/`X07`, none implemented as of v0.3.0).
@@ -66,9 +66,18 @@ Current corpus: **110/110 rendered** (2026-07-01, v0.5.0).
 
 ### commercial/
 
-Current corpus: **15/16 rendered** (2026-07-01, v0.5.0). See
+Current corpus: **15/16 rendered** (2026-07-01, v0.6.0). See
 `tests/roms/README.md` for the local ROM staging convention.
 
+- **`Activision Decathlon, The (USA)`** and **`Robot Tank (USA)`** — both use
+  the FE (Activision) bankswitch scheme, previously unimplemented (`detect()`
+  fell back to plain F8, a real misdetection). `BankFe` (v0.6.0) closes this;
+  both screenshots regenerated and now show real gameplay instead of the
+  F8-misdetected frame. Confirmed via pixel-diff against the prior
+  screenshots: these are the ONLY 2 of 126 total screenshots that actually
+  changed content in this regeneration pass (everything else is byte-
+  identical pixel data, just PNG re-encoding noise from re-running the
+  ImageMagick conversion).
 - **`BurgerTime (USA)`** — regenerated after `T-0401-009`'s ROM-DB
   disambiguation landed. Previously misdetected as plain F6 (16 KiB
   defaulted to F6 before E7 detection existed), rendering an all-black
@@ -94,8 +103,8 @@ Current corpus: **15/16 rendered** (2026-07-01, v0.5.0). See
   breadth work (v0.4.x) once its bankswitch scheme is identified. Expected
   `Unsupported` failure until then.
 
-Re-verified 2026-07-01 (v0.5.0): the Pitfall II blank-frame residual
+Re-verified 2026-07-01 (v0.6.0): the Pitfall II blank-frame residual
 (`T-0601-008`) and the Communist Mutants detection gap are both still
 present exactly as described above — neither regressed nor improved by
-v0.4.x/v0.5.0's frontend and cart-breadth work, since neither's root cause
+v0.4.x/v0.5.0/v0.6.0's frontend and cart-breadth work, since neither's root cause
 (the RIOT-timer wait loop / the missing size-bucket scheme) was touched.
