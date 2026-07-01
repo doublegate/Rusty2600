@@ -11,8 +11,9 @@ boot-smoke tested only, never accuracy-oracle-gated.
 - [x] `T-0402-001` (DONE): Implement F0 (Dynacom Megaboy) — 64 KiB ROM,
   16×4K banks, sequential-advance hotspot at `$1FF0` (wraps 15 -> 0; unlike
   every other F-series scheme the game can't jump to an arbitrary bank).
-  Wired into `detect()` at 64 KiB (unambiguous — EF/EFSC/X07, also 64 KiB
-  per `docs/cart.md`, aren't implemented yet).
+  Wired into `detect()` at 64 KiB as the LAST-RESORT default (matching
+  Stella's own priority order at this size), now that EF also collides
+  there (`T-0402-008`).
 - [x] `T-0402-002` (DONE): Implement E0 (Parker Bros) — 8 KiB ROM, four
   1 KiB segments; the first three are each independently selectable among
   8 banks (`$1FE0-$1FE7`/`$1FE8-$1FEF`/`$1FF0-$1FF7`), the fourth
@@ -50,21 +51,47 @@ boot-smoke tested only, never accuracy-oracle-gated.
   hotspots overlap real RIOT RAM / TIA registers) — a bigger interface
   question than the write-only case `T-0402-005` solved cleanly. Scoped as
   its own ticket rather than rushed.
-- [ ] `T-0402-007`: Found a `clippy::large_stack_frames` failure while
-  adding `BankF0`'s 64 KiB array inline in the `Cartridge` enum (an enum is
-  sized to its largest variant, so a 64 KiB variant inflates every stack
-  frame that moves a `Cartridge`/`Bus`/`System` by value). Fixed for
+- [x] `T-0402-007` (DONE): Found a `clippy::large_stack_frames` failure
+  while adding `BankF0`'s 64 KiB array inline in the `Cartridge` enum (an
+  enum is sized to its largest variant, so a 64 KiB variant inflates every
+  stack frame that moves a `Cartridge`/`Bus`/`System` by value). Fixed for
   `BankF0`/`Bank3F`/`Bank3E` by storing their ROM as `Vec<u8>` instead of a
   fixed array (this crate `forbid`s `unsafe`, so there's no zero-copy way
   to keep a large compile-time-sized array off the stack during
-  construction either). **Apply the same pattern to every future
-  BestEffort board whose ROM can be large** (EF/BF/DF/X07/4A50 in later
-  batches, some up to 256 KiB) — don't reintroduce the failure per-scheme.
+  construction either); applied the same pattern to `BankEF`/`BankDF`/
+  `BankBF` (Batch 2) from the start.
 
-## Batch 2 (SuperChip-RAM BestEffort variants) — not yet scheduled
+## Batch 2 (SuperChip-RAM BestEffort variants) — `T-0402-NNN` (continued)
 
-EF/EFSC, BF/BFSC, DF/DFSC, SB, X07, 4A50 — see `to-dos/ROADMAP.md`'s v0.4.x
-batch plan.
+- [x] `T-0402-008` (DONE): Implement EF/EFSC (CPUWIZ) — 64 KiB ROM, 16×4K
+  banks, direct-select hotspots `$1FE0-$1FEF` (unlike `BankF0`'s
+  sequential-advance at the same size); EFSC adds the standard 128 B
+  Superchip RAM overlay. Detected via a shared tail-signature check
+  (`ef_family_tail_signature`, ported from Stella's `isProbablyEF`/`BF`/
+  `DF`: newer carts store `"EFEF"`/`"EFSC"` in the last 8 bytes), with an
+  opcode-pattern fallback (`is_probably_ef_by_opcode`) for older EF carts
+  that predate the marker convention. Checked at 64 KiB after 3E/3F and
+  before falling back to `BankF0` — matches Stella's relative priority
+  among the schemes implemented here.
+- [x] `T-0402-009` (DONE): Implement DF/DFSC (CPUWIZ) — 128 KiB ROM, 32×4K
+  banks, direct-select hotspots `$1FC0-$1FDF`. Same tail-signature
+  detection pattern as EF (`"DFDF"`/`"DFSC"`), checked after 3E and before
+  3F at 128 KiB (matching Stella). No opcode fallback — DF is a newer
+  format that Stella itself only detects via the tail signature.
+- [x] `T-0402-010` (DONE): Implement BF/BFSC (CPUWIZ) — 256 KiB ROM, 64×4K
+  banks, direct-select hotspots `$1F80-$1FBF`. Same tail-signature
+  detection pattern as EF/DF (`"BFBF"`/`"BFSC"`), checked after 3E and
+  before 3F at 256 KiB (matching Stella). `BankEF`/`BankDF`/`BankBF` share
+  their read/write/hotspot logic via free functions (`ef_family_read`/
+  `ef_family_write`/`ef_family_hotspot`) rather than three near-duplicate
+  copies, since the three schemes differ only in size/bank-count/hotspot
+  base.
+- [ ] `T-0402-011` (deferred, same `snoop_read` blocker as `T-0402-006`):
+  SB (Superbank), X07, and 4A50 — the remaining Batch 2 schemes — all
+  snoop CPU READS of TIA/RIOT-mirrored addresses (`$0800-$0FFF` for SB,
+  almost all of `$0000-$0FFF` for X07/4A50), not just writes. `detect()`
+  currently returns `None` (not a guess) for any 128/256 KiB image without
+  a 3E/3F/DF/BF signature, rather than silently misdetecting an SB image.
 
 ## Batch 3 (DPC-family / fractional datafetchers) — not yet scheduled
 

@@ -887,6 +887,196 @@ impl Board for Bank3E {
     }
 }
 
+/// Shared write/read logic for the "CPUWIZ" homebrew F-series-successor
+/// family (EF/BF/DF): a direct-select hotspot range (unlike F0's
+/// sequential-advance) plus an optional 128 B Superchip RAM overlay at the
+/// SAME `$1000..=$107F` window Superchip always uses. `bank_count`,
+/// `hotspot_base`, and total ROM size differ per scheme; the mechanics are
+/// otherwise identical, so this one function backs all three boards below
+/// rather than three near-duplicate copies.
+fn ef_family_read(rom: &[u8], ram: &[u8; 0x80], superchip: bool, bank: u8, addr: u16) -> u8 {
+    let a = addr & 0x0FFF;
+    if superchip && (0x0080..0x0100).contains(&a) {
+        return ram[(a & 0x007F) as usize];
+    }
+    rom[usize::from(bank) * 0x1000 + a as usize]
+}
+
+fn ef_family_write(ram: &mut [u8; 0x80], superchip: bool, addr: u16, val: u8) {
+    if superchip {
+        let a = addr & 0x0FFF;
+        if a < 0x0080 {
+            ram[a as usize] = val;
+        }
+    }
+}
+
+fn ef_family_hotspot(bank: &mut u8, hotspot_base: u16, bank_count: u8, addr: u16) {
+    let a = addr & 0x1FFF;
+    if (hotspot_base..hotspot_base + u16::from(bank_count)).contains(&a) {
+        *bank = (a - hotspot_base) as u8;
+    }
+}
+
+/// EF (CPUWIZ): 64 KiB ROM as sixteen 4 KiB banks, direct-select hotspots
+/// `$1FE0..=$1FEF` (unlike [`BankF0`]'s sequential-advance single hotspot at
+/// the same size). EFSC adds the standard 128 B Superchip RAM overlay via
+/// [`Self::with_superchip`]. Default start bank is 0 (Stella's
+/// `CartridgeEnhanced` default — EF/BF/DF don't override it the way the
+/// classic F-series boards override to the last bank). BestEffort tier.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BankEF {
+    rom: alloc::vec::Vec<u8>,
+    bank: u8,
+    #[serde(with = "serde_bytes_array")]
+    ram: [u8; 0x80],
+    superchip: bool,
+}
+
+impl BankEF {
+    const HOTSPOT_BASE: u16 = 0x1FE0;
+    const BANK_COUNT: u8 = 16;
+
+    /// Build from a 64 KiB image. Returns `None` if the slice is not 64 KiB.
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        if rom.len() != 0x10000 {
+            return None;
+        }
+        Some(Self {
+            rom: rom.to_vec(),
+            bank: 0,
+            ram: [0; 0x80],
+            superchip: false,
+        })
+    }
+
+    /// Enable the EFSC Superchip 128 B RAM overlay.
+    #[must_use]
+    pub const fn with_superchip(mut self) -> Self {
+        self.superchip = true;
+        self
+    }
+}
+
+impl Board for BankEF {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        ef_family_hotspot(&mut self.bank, Self::HOTSPOT_BASE, Self::BANK_COUNT, addr);
+        ef_family_read(&self.rom, &self.ram, self.superchip, self.bank, addr)
+    }
+    fn cpu_write(&mut self, addr: u16, val: u8) {
+        ef_family_hotspot(&mut self.bank, Self::HOTSPOT_BASE, Self::BANK_COUNT, addr);
+        ef_family_write(&mut self.ram, self.superchip, addr, val);
+    }
+    fn tier(&self) -> Tier {
+        Tier::BestEffort
+    }
+}
+
+/// DF (CPUWIZ): 128 KiB ROM as thirty-two 4 KiB banks, direct-select
+/// hotspots `$1FC0..=$1FDF`. DFSC adds the 128 B Superchip RAM overlay.
+/// BestEffort tier. See [`BankEF`] for the shared mechanics.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BankDF {
+    rom: alloc::vec::Vec<u8>,
+    bank: u8,
+    #[serde(with = "serde_bytes_array")]
+    ram: [u8; 0x80],
+    superchip: bool,
+}
+
+impl BankDF {
+    const HOTSPOT_BASE: u16 = 0x1FC0;
+    const BANK_COUNT: u8 = 32;
+
+    /// Build from a 128 KiB image. Returns `None` if the slice is not 128 KiB.
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        if rom.len() != 0x20000 {
+            return None;
+        }
+        Some(Self {
+            rom: rom.to_vec(),
+            bank: 0,
+            ram: [0; 0x80],
+            superchip: false,
+        })
+    }
+
+    /// Enable the DFSC Superchip 128 B RAM overlay.
+    #[must_use]
+    pub const fn with_superchip(mut self) -> Self {
+        self.superchip = true;
+        self
+    }
+}
+
+impl Board for BankDF {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        ef_family_hotspot(&mut self.bank, Self::HOTSPOT_BASE, Self::BANK_COUNT, addr);
+        ef_family_read(&self.rom, &self.ram, self.superchip, self.bank, addr)
+    }
+    fn cpu_write(&mut self, addr: u16, val: u8) {
+        ef_family_hotspot(&mut self.bank, Self::HOTSPOT_BASE, Self::BANK_COUNT, addr);
+        ef_family_write(&mut self.ram, self.superchip, addr, val);
+    }
+    fn tier(&self) -> Tier {
+        Tier::BestEffort
+    }
+}
+
+/// BF (CPUWIZ): 256 KiB ROM as sixty-four 4 KiB banks, direct-select
+/// hotspots `$1F80..=$1FBF`. BFSC adds the 128 B Superchip RAM overlay.
+/// BestEffort tier. See [`BankEF`] for the shared mechanics.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BankBF {
+    rom: alloc::vec::Vec<u8>,
+    bank: u8,
+    #[serde(with = "serde_bytes_array")]
+    ram: [u8; 0x80],
+    superchip: bool,
+}
+
+impl BankBF {
+    const HOTSPOT_BASE: u16 = 0x1F80;
+    const BANK_COUNT: u8 = 64;
+
+    /// Build from a 256 KiB image. Returns `None` if the slice is not 256 KiB.
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        if rom.len() != 0x40000 {
+            return None;
+        }
+        Some(Self {
+            rom: rom.to_vec(),
+            bank: 0,
+            ram: [0; 0x80],
+            superchip: false,
+        })
+    }
+
+    /// Enable the BFSC Superchip 128 B RAM overlay.
+    #[must_use]
+    pub const fn with_superchip(mut self) -> Self {
+        self.superchip = true;
+        self
+    }
+}
+
+impl Board for BankBF {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        ef_family_hotspot(&mut self.bank, Self::HOTSPOT_BASE, Self::BANK_COUNT, addr);
+        ef_family_read(&self.rom, &self.ram, self.superchip, self.bank, addr)
+    }
+    fn cpu_write(&mut self, addr: u16, val: u8) {
+        ef_family_hotspot(&mut self.bank, Self::HOTSPOT_BASE, Self::BANK_COUNT, addr);
+        ef_family_write(&mut self.ram, self.superchip, addr, val);
+    }
+    fn tier(&self) -> Tier {
+        Tier::BestEffort
+    }
+}
+
 /// DPC (Pitfall II's "Display Processor Chip"): 8 KiB program ROM as two
 /// 4 KiB F8-style banks (`$1FF8`/`$1FF9` hotspots, same convention as
 /// [`BankF8`]) + a 2 KiB fixed display-data ROM + 8 hardware "data fetchers"
@@ -1156,6 +1346,15 @@ pub enum Cartridge {
     /// 3E (Tigervision + RAM): `Bank3F` plus a `$3E` RAM-bank-select hotspot
     /// (BestEffort tier)
     Bank3E(Bank3E),
+    /// EF (CPUWIZ): 64 KiB ROM, 16x4K banks, direct-select hotspots
+    /// (BestEffort tier)
+    BankEF(BankEF),
+    /// DF (CPUWIZ): 128 KiB ROM, 32x4K banks, direct-select hotspots
+    /// (BestEffort tier)
+    BankDF(BankDF),
+    /// BF (CPUWIZ): 256 KiB ROM, 64x4K banks, direct-select hotspots
+    /// (BestEffort tier)
+    BankBF(BankBF),
 }
 
 impl Board for Cartridge {
@@ -1174,6 +1373,9 @@ impl Board for Cartridge {
             Self::BankE0(b) => b.cpu_read(addr),
             Self::Bank3F(b) => b.cpu_read(addr),
             Self::Bank3E(b) => b.cpu_read(addr),
+            Self::BankEF(b) => b.cpu_read(addr),
+            Self::BankDF(b) => b.cpu_read(addr),
+            Self::BankBF(b) => b.cpu_read(addr),
         }
     }
 
@@ -1192,6 +1394,9 @@ impl Board for Cartridge {
             Self::BankE0(b) => b.cpu_write(addr, val),
             Self::Bank3F(b) => b.cpu_write(addr, val),
             Self::Bank3E(b) => b.cpu_write(addr, val),
+            Self::BankEF(b) => b.cpu_write(addr, val),
+            Self::BankDF(b) => b.cpu_write(addr, val),
+            Self::BankBF(b) => b.cpu_write(addr, val),
         }
     }
 
@@ -1210,6 +1415,9 @@ impl Board for Cartridge {
             Self::BankE0(b) => b.tier(),
             Self::Bank3F(b) => b.tier(),
             Self::Bank3E(b) => b.tier(),
+            Self::BankEF(b) => b.tier(),
+            Self::BankDF(b) => b.tier(),
+            Self::BankBF(b) => b.tier(),
         }
     }
 
@@ -1228,6 +1436,9 @@ impl Board for Cartridge {
             Self::BankE0(b) => b.tick(),
             Self::Bank3F(b) => b.tick(),
             Self::Bank3E(b) => b.tick(),
+            Self::BankEF(b) => b.tick(),
+            Self::BankDF(b) => b.tick(),
+            Self::BankBF(b) => b.tick(),
         }
     }
 
@@ -1246,6 +1457,9 @@ impl Board for Cartridge {
             Self::BankE0(b) => b.tick_coprocessor(),
             Self::Bank3F(b) => b.tick_coprocessor(),
             Self::Bank3E(b) => b.tick_coprocessor(),
+            Self::BankEF(b) => b.tick_coprocessor(),
+            Self::BankDF(b) => b.tick_coprocessor(),
+            Self::BankBF(b) => b.tick_coprocessor(),
         }
     }
 
@@ -1264,6 +1478,9 @@ impl Board for Cartridge {
             Self::BankE0(b) => b.snoop_write(addr, val),
             Self::Bank3F(b) => b.snoop_write(addr, val),
             Self::Bank3E(b) => b.snoop_write(addr, val),
+            Self::BankEF(b) => b.snoop_write(addr, val),
+            Self::BankDF(b) => b.snoop_write(addr, val),
+            Self::BankBF(b) => b.snoop_write(addr, val),
         }
     }
 }
@@ -1370,6 +1587,37 @@ fn is_probably_3e(rom: &[u8]) -> bool {
     count_bytes_at_least(rom, &[0x85, 0x3E], 1) && count_bytes_at_least(rom, &[0x85, 0x3F], 2)
 }
 
+/// Shared tail-signature check for the CPUWIZ EF/BF/DF family: newer carts
+/// of these types (per AtariAge's "RevEng") store a 4-byte marker in the
+/// last 8 bytes of the image — `"xFxF"` for plain, `"xFSC"` for the
+/// Superchip variant (`x` = the scheme letter: `E`/`B`/`D`). Returns
+/// `Some(true)` for a Superchip match, `Some(false)` for plain, `None` if
+/// neither marker is present (ported from Stella's `isProbablyEF`/`BF`/`DF`).
+fn ef_family_tail_signature(rom: &[u8], letter: u8) -> Option<bool> {
+    let tail = &rom[rom.len().saturating_sub(8)..];
+    if count_bytes_at_least(tail, &[letter, b'F', letter, b'F'], 1) {
+        Some(false)
+    } else if count_bytes_at_least(tail, &[letter, b'F', b'S', b'C'], 1) {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+/// Port of Stella's `CartDetector::isProbablyEF`'s opcode fallback (used
+/// when the tail signature isn't present — older EF carts predate the
+/// marker convention): EF's bankswitching switches banks by accessing
+/// `$FE0..=$FEF`, usually via a NOP or LDA to bank 0.
+fn is_probably_ef_by_opcode(rom: &[u8]) -> bool {
+    const SIGNATURES: [[u8; 3]; 4] = [
+        [0x0C, 0xE0, 0xFF], // NOP $FFE0
+        [0xAD, 0xE0, 0xFF], // LDA $FFE0
+        [0x0C, 0xE0, 0x1F], // NOP $1FE0
+        [0xAD, 0xE0, 0x1F], // LDA $1FE0
+    ];
+    SIGNATURES.iter().any(|sig| contains_bytes(rom, sig))
+}
+
 /// Detect the bankswitch scheme from a ROM image and build the board.
 ///
 /// Same-size same-catalogue collisions (CV vs plain 2K/4K, Superchip vs
@@ -1460,18 +1708,65 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
                 BankF4::new(rom).map(Cartridge::BankF4)
             }
         }
-        // 64 KiB: F0 (Dynacom Megaboy, BestEffort) — the only scheme at this
-        // size implemented so far; EF/EFSC and X07 (also 64 KiB per
-        // docs/cart.md) aren't implemented yet, so this defaults here the
-        // same way 8/16/32 KiB defaulted to their single implemented scheme
-        // before this crate had any disambiguation heuristics.
-        // TODO(T-0402-xxx): EF/EFSC / X07 detection for 64 KiB images.
-        0x10000 => BankF0::new(rom).map(Cartridge::BankF0),
+        // 64 KiB: checked in the same relative priority Stella's own
+        // CartDetector uses at this size among the schemes implemented here
+        // (3E, 3F, EF, then default F0) — EFF/CDF/4A50/X07 (also possible at
+        // 64 KiB per Stella) aren't implemented yet.
+        // TODO(T-0402-xxx): EFF / CDF / 4A50 / X07 detection for 64 KiB images.
+        0x10000 => {
+            if is_probably_3e(rom) {
+                Bank3E::new(rom, 32).map(Cartridge::Bank3E)
+            } else if is_probably_3f(rom) {
+                Bank3F::new(rom).map(Cartridge::Bank3F)
+            } else if let Some(sc) = ef_family_tail_signature(rom, b'E') {
+                let ef = BankEF::new(rom)?;
+                Some(Cartridge::BankEF(if sc { ef.with_superchip() } else { ef }))
+            } else if is_probably_ef_by_opcode(rom) {
+                BankEF::new(rom).map(Cartridge::BankEF)
+            } else {
+                BankF0::new(rom).map(Cartridge::BankF0)
+            }
+        }
+        // 128 KiB: 3E / 3F (Tigervision) checked first — matching Stella's
+        // own priority order at this size — then DF (CPUWIZ) via its tail
+        // signature; falls back to `None` (BestEffort SB / 4A50, not yet
+        // implemented — SB needs read-side snooping, `T-0402-006`) rather
+        // than guessing wrong.
+        0x20000 => {
+            if is_probably_3e(rom) {
+                Bank3E::new(rom, 32).map(Cartridge::Bank3E)
+            } else if let Some(sc) = ef_family_tail_signature(rom, b'D') {
+                let df = BankDF::new(rom)?;
+                Some(Cartridge::BankDF(if sc { df.with_superchip() } else { df }))
+            } else if is_probably_3f(rom) {
+                Bank3F::new(rom).map(Cartridge::Bank3F)
+            } else {
+                None
+            }
+        }
+        // 256 KiB: 3E checked first, then BF (CPUWIZ) via its tail
+        // signature, then 3F — matching Stella's own priority order at this
+        // size. Falls back to `None` (BestEffort SB, not yet implemented).
+        0x40000 => {
+            if is_probably_3e(rom) {
+                Bank3E::new(rom, 32).map(Cartridge::Bank3E)
+            } else if let Some(sc) = ef_family_tail_signature(rom, b'B') {
+                let bf = BankBF::new(rom)?;
+                Some(Cartridge::BankBF(if sc { bf.with_superchip() } else { bf }))
+            } else if is_probably_3f(rom) {
+                Bank3F::new(rom).map(Cartridge::Bank3F)
+            } else {
+                None
+            }
+        }
         // T-0401-003 (DONE): Superchip variants F8SC/F6SC/F4SC — dispatched
         // above via is_probably_superchip().
         // T-0401-004 (DONE): 3F (Tigervision) / 3E (Boulder Dash) — dispatched
-        // above at 8/32 KiB via is_probably_3f()/is_probably_3e(). 3E+ (an
-        // ARM-assisted successor) still unimplemented.
+        // above at 8/32/64/128/256 KiB via is_probably_3f()/is_probably_3e().
+        // 3E+ (an ARM-assisted successor) still unimplemented.
+        // T-0402-008/009/010 (DONE): EF/EFSC, DF/DFSC, BF/BFSC — dispatched
+        // above at 64/128/256 KiB via ef_family_tail_signature() (and EF's
+        // opcode fallback for pre-marker-convention images).
         // T-0401-005 (DONE): DPC (Pitfall II, Curated) — see the 0x2800..=0x2900 arm above.
         // TODO(T-0401-006): DPC+ (BestEffort) via tick_coprocessor.
         // TODO(T-0401-007): pirate / homebrew BMC schemes (BestEffort).
@@ -1981,5 +2276,87 @@ mod tests {
             detect(&[0u8; 0x10000]).unwrap(),
             Cartridge::BankF0(_)
         ));
+    }
+
+    #[test]
+    fn bank_ef_direct_select_hotspot_and_superchip() {
+        let mut img = alloc::vec![0u8; 0x10000];
+        img[3 * 0x1000] = 0x33; // bank 3 marker
+        let mut board = BankEF::new(&img).unwrap().with_superchip();
+        assert_eq!(board.tier(), Tier::BestEffort);
+        board.cpu_read(0x1FE3); // direct-select bank 3 (not sequential, unlike F0)
+        assert_eq!(board.cpu_read(0x1000), 0x33);
+        board.cpu_write(0x1000, 0x42); // superchip write-low
+        assert_eq!(board.cpu_read(0x1080), 0x42); // read-high
+    }
+
+    #[test]
+    fn bank_df_direct_select_hotspot() {
+        let mut img = alloc::vec![0u8; 0x20000];
+        img[5 * 0x1000] = 0x55;
+        let mut board = BankDF::new(&img).unwrap();
+        assert_eq!(board.tier(), Tier::BestEffort);
+        board.cpu_read(0x1FC5); // select bank 5
+        assert_eq!(board.cpu_read(0x1000), 0x55);
+    }
+
+    #[test]
+    fn bank_bf_direct_select_hotspot() {
+        let mut img = alloc::vec![0u8; 0x40000];
+        img[40 * 0x1000] = 0x28;
+        let mut board = BankBF::new(&img).unwrap();
+        assert_eq!(board.tier(), Tier::BestEffort);
+        board.cpu_read(0x1F80 + 40); // select bank 40
+        assert_eq!(board.cpu_read(0x1000), 0x28);
+    }
+
+    #[test]
+    fn detect_resolves_ef_via_tail_signature_plain_and_superchip() {
+        let mut img = alloc::vec![0u8; 0x10000];
+        let len = img.len();
+        img[len - 8..len - 4].copy_from_slice(b"EFEF");
+        assert!(matches!(detect(&img).unwrap(), Cartridge::BankEF(_)));
+
+        let mut img_sc = alloc::vec![0u8; 0x10000];
+        let len = img_sc.len();
+        img_sc[len - 8..len - 4].copy_from_slice(b"EFSC");
+        let mut board = detect(&img_sc).unwrap();
+        assert!(matches!(board, Cartridge::BankEF(_)));
+        board.cpu_write(0x1000, 0x11); // only persists if Superchip actually engaged
+        assert_eq!(board.cpu_read(0x1080), 0x11);
+    }
+
+    #[test]
+    fn detect_resolves_ef_via_opcode_fallback_when_no_tail_signature() {
+        let mut img = alloc::vec![0u8; 0x10000];
+        img[0x100] = 0xAD; // LDA $1FE0
+        img[0x101] = 0xE0;
+        img[0x102] = 0x1F;
+        assert!(matches!(detect(&img).unwrap(), Cartridge::BankEF(_)));
+    }
+
+    #[test]
+    fn detect_resolves_df_via_tail_signature() {
+        let mut img = alloc::vec![0u8; 0x20000];
+        let len = img.len();
+        img[len - 8..len - 4].copy_from_slice(b"DFDF");
+        assert!(matches!(detect(&img).unwrap(), Cartridge::BankDF(_)));
+    }
+
+    #[test]
+    fn detect_resolves_bf_via_tail_signature() {
+        let mut img = alloc::vec![0u8; 0x40000];
+        let len = img.len();
+        img[len - 8..len - 4].copy_from_slice(b"BFBF");
+        assert!(matches!(detect(&img).unwrap(), Cartridge::BankBF(_)));
+    }
+
+    #[test]
+    fn detect_128kib_and_256kib_without_signature_return_none() {
+        // No 3E/3F/DF/BF signature present -- SB/4A50 (the only other
+        // schemes at these sizes) aren't implemented, so this must not
+        // silently guess wrong; `None` is the honest answer.
+        assert!(detect(&alloc::vec![0u8; 0x20000]).is_none());
+        assert!(detect(&alloc::vec![0u8; 0x40000]).is_none());
     }
 }

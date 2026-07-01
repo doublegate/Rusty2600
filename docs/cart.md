@@ -119,26 +119,31 @@ Per ref-docs/research-report.md §8.2.
 ## Detection
 
 `detect()` resolves size-unambiguous schemes purely by length (2K → `Rom2K`,
-4K → `Rom4K`, 10K → `BankDpc`, 12K → `BankFA`, 64K → `BankF0`). For sizes
-with a real same-catalogue collision — 2K/4K (`BankCV`), 8K/16K/32K
-(Superchip vs plain F8/F6/F4), 8K (`BankE0`/`Bank3E`/`Bank3F` vs plain F8),
-16K (`BankE7` vs plain `BankF6`), and 32K (`Bank3E`/`Bank3F` vs plain F4) —
-`detect()` runs hotspot-pattern heuristics first (`is_probably_cv`/
-`is_probably_superchip`/`is_probably_e7`/`is_probably_e0`/`is_probably_3e`/
-`is_probably_3f`, all ported from Stella's `CartDetector.cxx`, checked in
-the same priority order Stella itself uses at each size) and only falls
-back to the more common plain scheme if none match (`T-0401-009`,
-`T-0402-001..004`).
+4K → `Rom4K`, 10K → `BankDpc`, 12K → `BankFA`). For sizes with a real
+same-catalogue collision — 2K/4K (`BankCV`), 8K/16K/32K (Superchip vs plain
+F8/F6/F4), 8K (`BankE0`/`Bank3E`/`Bank3F` vs plain F8), 16K (`BankE7` vs
+plain `BankF6`), 32K (`Bank3E`/`Bank3F` vs plain F4), 64K (`Bank3E`/`Bank3F`/
+`BankEF` vs `BankF0`), 128K (`Bank3E`/`BankDF`/`Bank3F`), and 256K
+(`Bank3E`/`BankBF`/`Bank3F`) — `detect()` runs hotspot-pattern heuristics
+first (`is_probably_cv`/`is_probably_superchip`/`is_probably_e7`/
+`is_probably_e0`/`is_probably_3e`/`is_probably_3f`, ported from Stella's
+`CartDetector.cxx`, plus `ef_family_tail_signature`/
+`is_probably_ef_by_opcode` for the EF/DF/BF "CPUWIZ" family, checked in the
+same priority order Stella itself uses at each size) and only falls back to
+the more common plain scheme if none match — or to `None` at 128K/256K,
+where the only remaining fallback (SB) isn't implemented yet, so guessing
+would be dishonest (`T-0401-009`, `T-0402-001..004`, `T-0402-008..010`).
 
 The one remaining 8 KiB gap is FE (Activision SCABS) — it isn't implemented
 yet, since (unlike E0/3E/3F) it needs to snoop CPU *reads* of TIA/RIOT-space
 addresses, not just writes (see `Board::snoop_write` below), and use the
 snooped VALUE to pick the bank. Until FE lands, an FE image at 8 KiB still
 resolves to `BankF8`, a real (if BestEffort-tier, so not accuracy-gated)
-misdetection risk (`T-0402-006`). The tiered TODOs (`T-0402-006`/`007`, plus
-`T-0401-006`/`007`) track the remaining board families; the honesty gate's
-oracle set must be extended in lockstep so the pass-rate stays truthful as
-boards land.
+misdetection risk (`T-0402-006`). SB/X07/4A50 have the same read-snooping
+need at 128K/256K/64K (`T-0402-011`). The tiered TODOs (`T-0402-006`/`007`/
+`011`, plus `T-0401-006`/`007`) track the remaining board families; the
+honesty gate's oracle set must be extended in lockstep so the pass-rate
+stays truthful as boards land.
 
 ### `Board::snoop_write` — bankswitching outside the cart window
 
