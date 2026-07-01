@@ -6,6 +6,33 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-01
+
+Patch release, primarily to ship a working release build: v0.1.1's
+tag-triggered release build silently failed on Linux (missing system deps,
+same class of bug fmt-fixing surfaced in ci.yml/pages.yml) and — independent
+of that — never uploaded a release asset on any platform, including the leg
+that did succeed. Also includes one small, already-tested accuracy item that
+landed in the same commit range (v0.2.0 work proper starts after this tag).
+
+### Fixed
+
+- `release.yml`: added the same Linux system-dependency install step as
+  `ci.yml`/`pages.yml` (ALSA/udev/xkbcommon/Wayland/X11), and added the
+  packaging + `gh release upload` steps that were missing entirely — each
+  platform leg now actually attaches a real archive (tar.gz for Linux/macOS,
+  zip for Windows; binary + README + both licenses) to the release.
+
+### Added
+
+- **RIOT (`T-0601-005`):** explicitly pinned the DirtyHairy/Stella
+  read-after-write timer model — `INTIM` read one cycle after a `TIMxT`
+  write already reads back as `written_value - 1`, for every prescale — and
+  documented why the read/write-at-the-exact-underflow-cycle question needs
+  no separate fix (it resolves structurally from the scheduler's existing
+  tick-then-access ordering, the same one validated for TIA's `WSYNC`
+  line-boundary case).
+
 ## [0.1.1] - 2026-06-30 - "Foundation"
 
 The first tagged release. Two earlier `[Unreleased]` entries in this file
