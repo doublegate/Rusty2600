@@ -55,8 +55,30 @@ because the 6507 has no interrupt lines, **the timer cannot fire an IRQ; softwar
 polls `INTIM`**. Per ref-docs/research-report.md §7.
 
 The `Prescale` enum (`By1` / `By8` / `By64` / `By1024`) and the `Timer` struct
-(`value` = INTIM, `prescale`, accumulated `elapsed`) model this. The
-`INSTAT` underflow flag + the post-underflow 1-cycle mode are `T-0601-005`.
+(`value` = INTIM, `prescale`, accumulated `elapsed`) model this.
+
+**Read-after-write (`T-0601-005`, verified v0.2.0).** The DirtyHairy/Stella
+model: the earliest a program can read `INTIM` after a `TIMxT` write is one
+CPU cycle later (a write and a subsequent read are always separate
+instructions), and at that first opportunity `INTIM` already reads back as
+`written_value - 1`, for every prescale — `set_timer` achieves this by
+starting `elapsed` at `prescale - 1` so the very next `tick()` reaches the
+decrement threshold. Pinned explicitly by
+`read_after_write_is_value_minus_one_for_every_prescale` (all four
+prescales) and `timer_first_decrement_fires_one_cycle_after_write`.
+
+**Read/write exactly at the underflow cycle.** `Riot::tick()` runs once per
+CPU cycle from `CpuView::tick_cycle` (`rusty2600-core::scheduler`), which
+always advances RIOT/TIA/cart state *before* the CPU's own `read`/`write`
+call for that cycle executes (the same tick-then-access ordering already
+established and validated for the TIA's `WSYNC` line-boundary case — see
+`docs/tia.md`). This means a bus access landing on the exact cycle the timer
+would underflow already observes the post-underflow state, matching real
+6532 silicon (the internal counter advances synchronously with the bus
+clock edge a read/write is decoded on). This is a structural consequence of
+the scheduler's ordering, not a RIOT-specific special case, so no additional
+code was needed to close it — verified by inspection of the tick_cycle →
+read/write call order rather than a new differential-oracle probe.
 
 ## Timing
 

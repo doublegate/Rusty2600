@@ -18,9 +18,12 @@
   comparison mode and a `.snap` writer for the bless flow (currently an exact
   byte diff only). Backs the Phase 2 scanline-buffer golden harness
   (`T-0201-005`).
-- [ ] `T-0601-005`: Verify the RIOT `INSTAT` underflow flag and the
+- [x] `T-0601-005`: Verify the RIOT `INSTAT` underflow flag and the
   post-underflow 1-cycle mode against the DirtyHairy/Stella reference model
-  (`docs/riot.md`).
+  (`docs/riot.md`). Done (v0.2.0): explicit read-after-write-minus-one test
+  across all four prescales, plus confirmed the underflow-cycle read/write
+  question resolves structurally from the scheduler's existing tick-then-
+  access ordering (no RIOT-specific fix needed).
 - [ ] `T-0601-006`: Strip the NES-lineage IRQ/NMI service-sequence +
   `irq_level`/`nmi_level`/`poll_nmi`/`poll_irq` surface from
   `crates/rusty2600-cpu/src/{cpu,lib,bus}.rs` (mapper-IRQ, APU frame-counter/

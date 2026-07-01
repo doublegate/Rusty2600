@@ -238,6 +238,32 @@ mod tests {
         );
     }
 
+    // The DirtyHairy/Stella RIOT model this project targets (docs/riot.md,
+    // ref-docs open questions): the earliest a program can ever read INTIM
+    // after a TIMxT write is one CPU cycle later (a write and a subsequent
+    // read are always different instructions), and at that first opportunity
+    // INTIM already reads back as `written_value - 1`, for every prescale —
+    // not just the By1 case `timer_first_decrement_fires_one_cycle_after_write`
+    // already covers. Pin all four prescales explicitly.
+    #[test]
+    fn read_after_write_is_value_minus_one_for_every_prescale() {
+        for (addr, prescale_name) in [
+            (0x294, "TIM1T"),
+            (0x295, "TIM8T"),
+            (0x296, "TIM64T"),
+            (0x297, "T1024T"),
+        ] {
+            let mut riot = Riot::new();
+            riot.cpu_write(addr, 10);
+            riot.tick();
+            assert_eq!(
+                riot.cpu_read(0x284),
+                9,
+                "{prescale_name}: INTIM one cycle after writing 10 should read 9"
+            );
+        }
+    }
+
     #[test]
     fn timer_instat_and_post_underflow() {
         let mut riot = Riot::new();
