@@ -41,10 +41,14 @@ Out-of-scope for the initial cut (BestEffort or deferred): ARM-coprocessor carts
 
 ## TIA revisions
 
-Multiple TIA revisions (TIA-1A etc.) introduce subtle playfield/HMOVE/colour edge
-cases; Gopher2600 models several. The default revision and whether to
-parameterize is an open design decision (research report §14, item 3) — pin
-against Stella + a test ROM when an edge case surfaces.
+**Resolved by `docs/adr/0005`** (research report §14, item 3): rather than a
+coarse revision enum, TIA variation is modeled as independent, named,
+individually-toggleable hardware quirk flags (mirroring Gopher2600's eight —
+`LateVDELGRP0`/`LateVDELGRP1`/`LateRESPx`/`EarlyScancounter`/`LatePFx`/
+`LateColor`/`LostMOTCK`/`RESPxHBLANK`), default all-off (the idealized/
+most-common behavior). `LostMOTCK` is the Cosmic Ark starfield bug already
+tracked as a hard problem for v0.7.0/v0.8.x; the rest are implemented
+per-quirk as their own tickets, not as a batch.
 
 
 ---
