@@ -51,6 +51,9 @@ deep post-process chain (CRT / NTSC filter / upscalers) — Phase 8.
   `sprint-2-pacing-and-state.md` (`T-0502-NNN`).
 - Sprint 3 — wasm32 build + `Board: Send` / `emu-thread` → `sprint-3-wasm-thread.md`
   (`T-0503-NNN`).
+- Sprint 4 — the real debugger (v0.5.0 "Inspector"): live 6507/TIA/RIOT panels,
+  a side-effect-free memory viewer + disassembler, breakpoints/step/continue,
+  populated Criterion benches → `sprint-4-debugger.md` (`T-0504-NNN`).
 
 ## Risks
 

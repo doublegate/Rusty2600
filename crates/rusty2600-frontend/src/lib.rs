@@ -33,8 +33,10 @@
 //! - **Input.** Joystick (SWCHA + INPT4/5), paddles (INPT0-3, analog), and the console switches on
 //!   SWCHB (Select / Reset / Color-B&W / Left & Right Difficulty) — see [`input`]. This differs
 //!   from the NES d-pad.
-//! - **Debugger panels.** 6507 (A/X/Y/SP/PC/P), TIA (object regs + beam position), RIOT (timer +
-//!   I/O ports), memory — see [`shell`].
+//! - **Debugger panels.** 6507 (A/X/Y/SP/PC/P, breakpoints, disassembly), TIA (object regs + beam
+//!   position + collisions), RIOT (timer + I/O ports), memory (peek-based hex viewer) — see
+//!   [`debugger`] (behind the `debug-hooks` feature, default-on) and [`shell`] for the overlay
+//!   window that hosts them.
 //!
 //! ## v-next: extract a shared `rusty-frontend-core`
 //!
@@ -67,6 +69,14 @@ pub mod palette;
 pub mod present_buffer;
 pub mod resampler;
 pub mod shell;
+
+/// The debugger's persistent state, structured chip snapshots, and panel
+/// renderers (6507/TIA/RIOT/memory + a standalone disassembler).
+///
+/// Gated behind `debug-hooks` (default-on, like `emu-thread`) so a minimal
+/// build can still opt it out entirely.
+#[cfg(feature = "debug-hooks")]
+pub mod debugger;
 
 // The always-on egui App shell + the wgpu blit + the run loop. Native only — wasm routes through
 // `wasm::start`.

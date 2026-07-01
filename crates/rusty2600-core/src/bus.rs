@@ -35,6 +35,37 @@ impl Bus {
         Self::default()
     }
 
+    /// Side-effect-free read, for debugger/tooling use only: a real
+    /// `cpu_read` can trigger bankswitch hotspots, RIOT's INTIM
+    /// read-clears-underflow-flag behavior, and cart `snoop_read` side
+    /// effects, none of which a memory-viewer peek should ever cause. Reads
+    /// via a full clone of `self` (cheap relative to a UI refresh cadence,
+    /// and correctly avoids the `unsafe`-free crate's inability to alias a
+    /// `&mut` for a "no-op" read) so the real system state is untouched.
+    ///
+    /// For more than a byte or two, prefer [`Self::peek_range`] — it clones
+    /// `self` ONCE and reads every byte from that one clone, instead of
+    /// paying a full `Bus` clone (TIA + RIOT + the cart's ROM/RAM) per byte.
+    #[must_use]
+    pub fn peek(&self, addr: u16) -> u8 {
+        self.clone().cpu_read(addr)
+    }
+
+    /// Side-effect-free read of `len` consecutive addresses starting at
+    /// `base` (wrapping at 16 bits), for a debugger memory viewer or a
+    /// disassembly window. Clones `self` once, then reads every byte from
+    /// that single clone — any bankswitch hotspot triggered by reading byte
+    /// N is visible to byte N+1's read (an honest reflection of "whatever
+    /// the bank state currently is," same caveat any bank-switched-system
+    /// memory viewer has), but the REAL system is never touched.
+    #[must_use]
+    pub fn peek_range(&self, base: u16, len: u16) -> alloc::vec::Vec<u8> {
+        let mut clone = self.clone();
+        (0..len)
+            .map(|i| clone.cpu_read(base.wrapping_add(i)))
+            .collect()
+    }
+
     pub fn cpu_read(&mut self, addr: u16) -> u8 {
         let addr = addr & 0x1FFF;
 
@@ -126,5 +157,36 @@ pub trait AudioBus {
 impl AudioBus for Bus {
     fn audio_sample(&self) -> u8 {
         self.tia.audio.sample()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peek_does_not_mutate_riot_ram() {
+        let mut bus = Bus::new();
+        bus.cpu_write(0x0080, 0x42);
+        let before = bus.riot.ram;
+        assert_eq!(bus.peek(0x0080), 0x42);
+        assert_eq!(bus.riot.ram, before, "peek must not mutate RIOT RAM");
+    }
+
+    #[test]
+    fn peek_does_not_advance_cart_bank_state() {
+        // Plain F8 (8 KiB, 2x4K banks); default bank is 1 (the last bank).
+        let mut rom = [0u8; 0x2000];
+        rom[0x0000] = 0x11; // bank 0, offset 0
+        rom[0x1000] = 0x22; // bank 1, offset 0
+        let mut bus = Bus::new();
+        bus.board = rusty2600_cart::detect(&rom);
+        assert_eq!(bus.peek(0x1000), 0x22, "starts on bank 1 (the default)");
+        bus.peek(0x1FF8); // would select bank 0 if peek had side effects
+        assert_eq!(
+            bus.peek(0x1000),
+            0x22,
+            "peek must not trigger bankswitch hotspots"
+        );
     }
 }

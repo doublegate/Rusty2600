@@ -33,6 +33,12 @@ pub enum MenuAction {
     ConsoleSwitch(ConsoleSwitchAction),
     /// Debug -> toggle the debugger overlay (the `` ` `` key).
     ToggleDebugger,
+    /// Debugger -> execute exactly one CPU instruction.
+    #[cfg(feature = "debug-hooks")]
+    DebugStep,
+    /// Debugger -> run until a breakpoint is hit or a safety step-cap fires.
+    #[cfg(feature = "debug-hooks")]
+    DebugContinue,
     /// View -> toggle fullscreen.
     ToggleFullscreen,
     /// File -> open the Settings window.
@@ -86,6 +92,10 @@ pub struct ShellState {
     pub paused: bool,
     /// Which debugger panels are open (per-chip toggles).
     pub panels: PanelVisibility,
+    /// Breakpoints, the memory-viewer cursor, and other persistent debugger
+    /// UI state (`crate::debugger::DebuggerState`).
+    #[cfg(feature = "debug-hooks")]
+    pub debugger: crate::debugger::DebuggerState,
 }
 
 impl ShellState {
@@ -110,12 +120,12 @@ pub struct ShellInfo {
     pub fps: f32,
     /// Whether a ROM is loaded.
     pub rom_loaded: bool,
-    /// CPU debug string.
-    pub cpu_info: String,
-    /// TIA debug string.
-    pub tia_info: String,
-    /// RIOT debug string.
-    pub riot_info: String,
+    /// The live debugger snapshot (registers/TIA/RIOT/disassembly), built
+    /// under the brief emu lock only while the debugger overlay is open.
+    /// `None` when the overlay is closed (no point paying the copy cost) or
+    /// no ROM is loaded.
+    #[cfg(feature = "debug-hooks")]
+    pub debug: Option<crate::debugger::DebugSnapshot>,
 }
 
 /// Which debugger panels are currently shown.
@@ -290,7 +300,7 @@ impl ShellState {
             self.render_settings(&ctx, cfg);
         }
         if self.debugger_visible {
-            self.render_debugger(&ctx, info);
+            self.render_debugger(&ctx, info, &mut actions);
         }
 
         actions
@@ -340,8 +350,16 @@ impl ShellState {
         self.settings_open = open;
     }
 
-    /// The debugger overlay: a panel selector + the 2600 chip-panel stubs.
-    fn render_debugger(&mut self, ctx: &egui::Context, info: &ShellInfo) {
+    /// The debugger overlay: a panel selector + the live 6507/TIA/RIOT/memory
+    /// panels (`crate::debugger`, behind the `debug-hooks` feature).
+    fn render_debugger(
+        &mut self,
+        ctx: &egui::Context,
+        info: &ShellInfo,
+        #[cfg_attr(not(feature = "debug-hooks"), allow(unused_variables))] actions: &mut Vec<
+            MenuAction,
+        >,
+    ) {
         let mut open = self.debugger_visible;
         egui::Window::new("Debugger")
             .open(&mut open)
@@ -354,30 +372,43 @@ impl ShellState {
                     ui.selectable_value(&mut self.panel, DebugPanel::Memory, "Memory");
                 });
                 ui.separator();
-                match self.panel {
-                    // TODO(impl-phase): each panel reads the live chip state (copied out under the
-                    // brief emu lock, never read inside this egui closure) and renders the register
-                    // grid / disassembly / viewers.
-                    DebugPanel::Cpu => {
-                        ui.label("6507 — registers (A/X/Y/SP/PC/P), disassembly, breakpoints.");
-                        ui.label(info.cpu_info.clone());
+
+                #[cfg(feature = "debug-hooks")]
+                {
+                    let Some(snap) = info.debug.as_ref() else {
+                        ui.label("(no ROM loaded)");
+                        return;
+                    };
+                    let mut debug_actions = Vec::new();
+                    match self.panel {
+                        DebugPanel::Cpu => crate::debugger::render_cpu_panel(
+                            ui,
+                            &snap.cpu,
+                            &snap.disassembly_at_pc,
+                            &mut self.debugger,
+                            &mut debug_actions,
+                        ),
+                        DebugPanel::Tia => crate::debugger::render_tia_panel(ui, &snap.tia),
+                        DebugPanel::Riot => crate::debugger::render_riot_panel(ui, &snap.riot),
+                        DebugPanel::Memory => crate::debugger::render_memory_panel(
+                            ui,
+                            &mut self.debugger,
+                            &snap.memory_view,
+                        ),
                     }
-                    DebugPanel::Tia => {
-                        ui.label(
-                            "TIA — object regs (P0/P1/M0/M1/BL), the playfield, the beam position",
-                        );
-                        ui.label(info.tia_info.clone());
+                    for action in debug_actions {
+                        actions.push(match action {
+                            crate::debugger::DebugAction::Step => MenuAction::DebugStep,
+                            crate::debugger::DebugAction::Continue => MenuAction::DebugContinue,
+                        });
                     }
-                    DebugPanel::Riot => {
-                        ui.label(
-                            "RIOT — the interval timer (INTIM/INSTAT), the SWCHA/SWCHB ports,",
-                        );
-                        ui.label(info.riot_info.clone());
-                    }
-                    DebugPanel::Memory => {
-                        ui.label("Memory — the RIOT's 128 bytes of RAM + the cart window view +");
-                        ui.label("the bankswitch board's current mapping. TODO(impl-phase).");
-                    }
+                }
+
+                #[cfg(not(feature = "debug-hooks"))]
+                {
+                    let _ = self.panel;
+                    let _ = info;
+                    ui.label("Debugger disabled — build with `--features debug-hooks`.");
                 }
             });
         self.debugger_visible = open;

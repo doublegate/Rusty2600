@@ -33,6 +33,45 @@ UI + present. This is the only `std`/`unsafe`-carrying crate.
 - **Frame line budget.** NTSC 262 lines / PAL 312 lines drives the present cadence
   (≈60 Hz NTSC, ≈50 Hz PAL).
 
+## The debugger (`debug-hooks`, v0.5.0)
+
+Real as of v0.5.0 — `crates/rusty2600-frontend/src/debugger/` (default-on
+feature, same precedent as `emu-thread`: turn it off with `--no-default-
+features --features wasm-winit,help-tui,emu-thread` for a debugger-free
+build). Structure mirrors the shell's non-negotiable rule: nothing under
+`debugger/` ever touches the emu lock. `app.rs` builds a `DebugSnapshot`
+(registers, TIA/RIOT state, disassembly, a memory-window byte slice) once
+per frame **only while the overlay is open and a ROM is loaded**, under the
+same brief lock the present path already takes; the panel-render functions
+in `debugger/mod.rs` are pure functions over that snapshot.
+
+- **6507 panel** — A/X/Y/S/PC/P register grid, Step (`step_instruction()`
+  once) and Continue (run to a breakpoint or a 1,000,000-instruction safety
+  cap) buttons, a breakpoint add/remove list, and a scrolling disassembly
+  window starting at PC (`>` marks the current PC, `*` marks a breakpoint).
+- **TIA panel** — beam position (scanline/color clock), P0/P1/M0/M1/BL
+  positions + colors, the playfield/background colors, and the 15 pairwise
+  collision latches.
+- **RIOT panel** — `INTIM` + its prescale divisor, `SWCHA`/`SWCHB` pin state
+  + DDRs.
+- **Memory panel** — a 256-byte hex+ASCII viewer with quick-jump buttons for
+  RIOT RAM (`$0080`) and the cart window (`$1000`), backed by
+  `Bus::peek_range` (see below).
+- **Disassembler** (`debugger/disasm.rs`) — a standalone, display-only 6502
+  mnemonic table, independent of the CPU crate's private opcode dispatch.
+  Undocumented opcodes render as `.byte $xx` rather than inventing a
+  mnemonic.
+
+**Side-effect-free reads.** A real `Bus::cpu_read` can trigger bankswitch
+hotspots, RIOT's INTIM read-clears-underflow behavior, and cart
+`snoop_read` side effects — none of which a debugger peek should ever
+cause. `Bus::peek`/`Bus::peek_range` (`rusty2600-core::bus`) solve this by
+reading from a full clone of the bus rather than the live one; `peek_range`
+clones once and reads every requested byte from that single clone (not once
+per byte), which is the difference between one clone per frame and one
+clone per displayed byte for a 256-byte memory panel or a multi-instruction
+disassembly window.
+
 ## 2600-specific input
 
 - **Joystick** — the standard CX40: 4 directions + 1 fire, fed into RIOT `SWCHA`

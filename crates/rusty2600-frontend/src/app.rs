@@ -282,6 +282,80 @@ impl ApplicationHandler for App {
 }
 
 impl App {
+    /// Build a side-effect-free [`crate::debugger::DebugSnapshot`] from the live
+    /// system state, using [`rusty2600_core::Bus::peek_range`] (never the mutating
+    /// `cpu_read`) for the disassembly + memory views so opening the debugger can
+    /// never itself perturb bankswitch state or RIOT timer/read latches.
+    #[cfg(feature = "debug-hooks")]
+    fn build_debug_snapshot(emu: &EmuCore, memory_base: u16) -> crate::debugger::DebugSnapshot {
+        use crate::debugger::{CpuSnapshot, RiotSnapshot, TiaSnapshot};
+
+        let cpu = CpuSnapshot {
+            a: emu.system.cpu.a,
+            x: emu.system.cpu.x,
+            y: emu.system.cpu.y,
+            s: emu.system.cpu.s,
+            pc: emu.system.cpu.pc,
+            p: format!("{:?}", emu.system.cpu.p),
+        };
+
+        let objects = &emu.system.bus.tia.objects;
+        let c = &emu.system.bus.tia.collisions;
+        let tia = TiaSnapshot {
+            scanline: emu.system.bus.tia.scanline,
+            color_clock: emu.system.bus.tia.color_clock,
+            pos: objects.pos,
+            colu: objects.colu,
+            collisions: format!(
+                "CXM0P:{:02X} CXM1P:{:02X} CXP0FB:{:02X} CXP1FB:{:02X} CXM0FB:{:02X} CXM1FB:{:02X} CXBLPF:{:02X} CXPPMM:{:02X}",
+                c.cxm0p, c.cxm1p, c.cxp0fb, c.cxp1fb, c.cxm0fb, c.cxm1fb, c.cxblpf, c.cxppmm
+            ),
+        };
+
+        let riot_chip = &emu.system.bus.riot;
+        let riot = RiotSnapshot {
+            timer_value: riot_chip.timer.value,
+            timer_prescale: format!("{:?}", riot_chip.timer.prescale),
+            ports: riot_chip.ports,
+            ddr: riot_chip.ddr,
+        };
+
+        // One bulk peek_range covers a generous worst case (16 instructions x 3
+        // bytes) so the disassembly loop never needs a peek per instruction.
+        let disasm_base = emu.system.cpu.pc;
+        let disasm_bytes = emu.system.bus.peek_range(disasm_base, 48);
+        let mut disassembly_at_pc = Vec::new();
+        let mut offset: u16 = 0;
+        for _ in 0..16 {
+            if usize::from(offset) >= disasm_bytes.len() {
+                break;
+            }
+            let addr = disasm_base.wrapping_add(offset);
+            let inst = crate::debugger::disasm::disassemble_one(
+                |a| {
+                    let idx = usize::from(a.wrapping_sub(disasm_base));
+                    disasm_bytes.get(idx).copied().unwrap_or(0)
+                },
+                addr,
+            );
+            offset = offset.wrapping_add(inst.len);
+            disassembly_at_pc.push((addr, inst.text));
+        }
+
+        let memory_view = emu
+            .system
+            .bus
+            .peek_range(memory_base, crate::debugger::MEMORY_VIEW_LEN);
+
+        crate::debugger::DebugSnapshot {
+            cpu,
+            tia,
+            riot,
+            disassembly_at_pc,
+            memory_view,
+        }
+    }
+
     /// Late-latch a key event into the host-input accumulation (per the config binding table).
     fn latch_key(active: &mut Active, key: &winit::event::KeyEvent) {
         let pressed = key.state.is_pressed();
@@ -342,32 +416,16 @@ impl App {
             let fb = emu.framebuffer().to_vec();
 
             let dims = emu.fb_dims();
+            #[cfg(feature = "debug-hooks")]
+            let debug = (active.shell.debugger_visible && emu.rom_loaded)
+                .then(|| Self::build_debug_snapshot(&emu, active.shell.debugger.memory_base));
             let info = ShellInfo {
                 board_tier: emu.board_tier().map(str::to_string),
                 region: emu.region,
                 fps: 0.0, // TODO(impl-phase): wire the pacer's smoothed FPS estimate.
                 rom_loaded: emu.rom_loaded,
-                cpu_info: format!(
-                    "A: {:02X}, X: {:02X}, Y: {:02X}, SP: {:02X}, PC: {:04X}, P: {:?}",
-                    emu.system.cpu.a,
-                    emu.system.cpu.x,
-                    emu.system.cpu.y,
-                    emu.system.cpu.s,
-                    emu.system.cpu.pc,
-                    emu.system.cpu.p
-                ),
-                tia_info: format!(
-                    "Color Clock: {}, Scanline: {}",
-                    emu.system.bus.tia.color_clock, emu.system.bus.tia.scanline
-                ),
-                riot_info: format!(
-                    "Pins: {:02X} {:02X}, DDR: {:02X} {:02X}, INTIM: {:02X}",
-                    emu.system.bus.riot.pins[0],
-                    emu.system.bus.riot.pins[1],
-                    emu.system.bus.riot.ddr[0],
-                    emu.system.bus.riot.ddr[1],
-                    emu.system.bus.riot.timer.value
-                ),
+                #[cfg(feature = "debug-hooks")]
+                debug,
             };
             drop(emu); // release the brief lock BEFORE the wgpu upload + egui pass
             (fb, dims, info)
@@ -510,6 +568,32 @@ impl App {
                 }
                 MenuAction::ToggleDebugger => {
                     active.shell.debugger_visible = !active.shell.debugger_visible;
+                }
+                #[cfg(feature = "debug-hooks")]
+                MenuAction::DebugStep => {
+                    let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                    emu.paused = true;
+                    active.shell.paused = true;
+                    emu.system.step_instruction();
+                }
+                #[cfg(feature = "debug-hooks")]
+                MenuAction::DebugContinue => {
+                    // Safety cap: never spin forever if no breakpoint is ever hit.
+                    const MAX_STEPS: u32 = 1_000_000;
+                    let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                    emu.paused = true;
+                    active.shell.paused = true;
+                    for _ in 0..MAX_STEPS {
+                        emu.system.step_instruction();
+                        if active
+                            .shell
+                            .debugger
+                            .breakpoints
+                            .contains(&emu.system.cpu.pc)
+                        {
+                            break;
+                        }
+                    }
                 }
                 MenuAction::ToggleFullscreen => {
                     active.fullscreen = !active.fullscreen;

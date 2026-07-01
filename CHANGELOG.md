@@ -6,6 +6,62 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-01 - "Inspector"
+
+Closes Phase 5 (frontend): the `debug-hooks` feature goes from an unwired
+forward placeholder to a real debugger, and the four chip-crate Criterion
+benches go from empty stubs to populated, measured baselines.
+
+### Added
+
+- **The real debugger** (`crates/rusty2600-frontend/src/debugger/`),
+  replacing `shell.rs`'s literal `TODO(impl-phase)` panel bodies:
+  - **6507 panel** — A/X/Y/S/PC/P register grid, Step (one
+    `step_instruction()`) and Continue (run to a breakpoint or a
+    1,000,000-instruction safety cap) buttons, a breakpoint add/remove list,
+    and a scrolling disassembly window starting at PC.
+  - **TIA panel** — beam position, P0/P1/M0/M1/BL positions + colors, the
+    playfield/background colors, and the 15 pairwise collision latches.
+  - **RIOT panel** — `INTIM` + prescale, `SWCHA`/`SWCHB` pin state + DDRs.
+  - **Memory panel** — a 256-byte hex+ASCII viewer with RIOT-RAM (`$0080`)
+    and cart-window (`$1000`) quick-jump buttons.
+  - **A standalone 6502 disassembler** (`debugger/disasm.rs`), independent
+    of the CPU crate's private opcode dispatch — covers the full documented
+    NMOS instruction set; undocumented opcodes render as `.byte $xx` rather
+    than inventing a mnemonic.
+- **`Bus::peek`/`Bus::peek_range`** (`rusty2600-core::bus`): side-effect-free
+  reads for debugger/tooling use. A real `cpu_read` can trigger bankswitch
+  hotspots, RIOT's INTIM read-clears-underflow behavior, and cart
+  `snoop_read` side effects — none of which a memory-viewer peek should
+  ever cause. `peek_range` clones the bus ONCE and reads every requested
+  byte from that single clone, instead of paying a full `Bus` clone per
+  displayed byte (the difference between one clone per frame and one clone
+  per byte for a 256-byte memory panel).
+- **Populated Criterion benches** for all four chip crates
+  (`cpu_bench.rs`/`tia_bench.rs`/`riot_bench.rs`/`cart_bench.rs`), previously
+  empty `fn main() { /* TODO */ }` stubs. Real measured baselines recorded
+  in `docs/performance.md` (e.g. `tia_full_ntsc_frame` ~899µs, comfortably
+  under the ≤2ms/frame target).
+
+### Changed
+
+- `debug-hooks` moves from an unwired forward placeholder into
+  `rusty2600-frontend`'s `default` feature list (`default = ["wasm-winit",
+  "help-tui", "emu-thread", "debug-hooks"]`), the same precedent as
+  `emu-thread`'s own placeholder-to-default-on transition. A debugger-free
+  build remains available via `--no-default-features --features
+  wasm-winit,help-tui,emu-thread`.
+
+### Notes
+
+- Not visually screenshot-tested in this development environment: the
+  native `winit + wgpu` debugger window requires a live display, and this
+  session's sandbox had no safe way to pop a window without disrupting the
+  user's desktop. Verified instead via unit tests (disassembler + bus-peek
+  side-effect tests), a clean `cargo clippy --workspace --all-targets -- -D
+  warnings`, and successful compiles for native (`debug-hooks` on and off)
+  and `wasm32-unknown-unknown`.
+
 ## [0.4.1] - 2026-07-01
 
 Continues the v0.4.x BestEffort patch train with two more Batch 2 schemes

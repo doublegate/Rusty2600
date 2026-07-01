@@ -5,9 +5,9 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v0.4.0 "Breadth" (Batches 1-2) (see `to-dos/ROADMAP.md`
+**Current release:** v0.5.0 "Inspector" (see `to-dos/ROADMAP.md`
 for the full v0.1.1→v1.0.0 version-to-phase plan and `CHANGELOG.md`'s
-`[0.4.0]` entry for the complete list) — the full 8-scheme Curated cart tier
+`[0.5.0]` entry for the complete list) — the full 8-scheme Curated cart tier
 (v0.3.0) plus 9 BestEffort schemes (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC,
 BF/BFSC, UA, 0840) are implemented and wired into automatic `detect()`.
 Two new `Board` hooks, `snoop_write` and `snoop_read`, let bankswitch
@@ -15,10 +15,13 @@ schemes react to accesses the console routes to TIA/RIOT space (not just
 the `$1000+` cart window) — see
 `to-dos/phase-4-carts-mappers/sprint-2-besteffort-boards.md` for the full
 per-scheme breakdown and what's still deferred (FE, SB, X07, 4A50, and the
-ARM-driven DPC+/CDF/BUS family). Phase 5 Frontend (rendering, pacing, input,
-WASM/thread support) has a working synchronous AND dedicated emu-thread path
-(`emu-thread` default-on); its debugger panels are still TODO stubs
-(targeted for v0.5.0).
+ARM-driven DPC+/CDF/BUS family). Phase 5 Frontend is now **fully complete**:
+rendering, audio, pacing, input, WASM/thread support, AND the real
+`debug-hooks` debugger (live 6507/TIA/RIOT/memory panels, breakpoints/step/
+continue, a side-effect-free `Bus::peek`/`peek_range`, a standalone
+disassembler — `to-dos/phase-5-frontend/sprint-4-debugger.md`), plus
+populated Criterion benches with real measured baselines
+(`docs/performance.md`).
 
 ## Subsystem progress
 
@@ -29,7 +32,7 @@ WASM/thread support) has a working synchronous AND dedicated emu-thread path
 | `rusty2600-riot` | MOS 6532 RIOT | RAM/DDR ports/timer implemented and unit-tested (prescale, underflow, INSTAT). Read-after-write `INTIM` edge case still needs verification against the DirtyHairy/Stella model (v0.2.0). |
 | `rusty2600-cart` | Bankswitch boards | All 8 Curated schemes (2K, 4K, F8, F6, F4, CV, FA/CBS-RAM, Superchip, DPC, E7) implemented and wired into `detect()` (v0.3.0). BestEffort Batches 1-2 (v0.4.0): F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA, 0840 implemented and wired (19 of 25 catalogued schemes total). Two new hooks, `Board::snoop_write`/`snoop_read` (`crates/rusty2600-core/src/bus.rs`), let boards react to accesses the console routes to TIA/RIOT space — needed for 3F/3E's `$3E`/`$3F` write hotspots and UA/0840's `$220`/`$240`/`$800`/`$840` read+write hotspots, none of which are in the cart window at all. FE additionally needs the snooped value (not just the address) to pick a bank — `snoop_read`'s signature already supports this, FE just isn't implemented yet (`T-0402-006`). SB/X07/4A50 likely also just need `snoop_read` (not a further interface change) but aren't implemented yet either (`T-0402-011`). The remaining ~30-scheme BestEffort long tail (Batches 3-5) targets the rest of v0.4.x. |
 | `rusty2600-core` | Bus + scheduler | lockstep loop + seeded phase live; bus decode complete |
-| `rusty2600-frontend` | egui shell | Rendering, audio, pacing, input, WASM support, and the emu-thread path all real and tested. Debugger (`debug-hooks`), HD-pack, and RetroAchievements feature flags remain unwired stubs — v0.5.0 (debugger) and v0.6.0 (RA) respectively. |
+| `rusty2600-frontend` | egui shell | Rendering, audio, pacing, input, WASM support, the emu-thread path, and now the real debugger (`debug-hooks`, default-on: live 6507/TIA/RIOT/memory panels, breakpoints/step/continue, `Bus::peek`/`peek_range`, a standalone disassembler) all real and tested (v0.5.0). HD-pack and RetroAchievements feature flags remain unwired stubs — targeted v0.6.0+. |
 | `rusty2600-test-harness` | accuracy oracle | Shapes present (`GoldenLogDiffer`/`run_until_complete`/`AccuracyScore`/`SnapComparator`); Klaus functional golden-log passes; the full AccuracyCoin-style battery (live trace buffer, suite result-protocol polling, tolerance-aware snap compare) is still TODO — v0.7.0. |
 
 ## Accuracy (per-suite pass counts)
