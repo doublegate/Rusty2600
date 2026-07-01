@@ -5,9 +5,11 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v0.9.0 "Hardening" (see `to-dos/ROADMAP.md`
-for the full v0.1.1→v1.0.0 version-to-phase plan and `CHANGELOG.md`'s
-`[0.9.0]` entry for the complete list) — the full 8-scheme Curated cart tier
+**Current release:** v1.0.0 "Foundation" — the first stable release (see
+`to-dos/ROADMAP.md` for the full v0.1.1→v1.0.0 version-to-phase history and
+`CHANGELOG.md`'s `[1.0.0]` entry for the complete gate checklist). No code
+changed from `[0.9.0]`; this is a version-line milestone confirming every
+v1.0.0 gate criterion is met — the full 8-scheme Curated cart tier
 (v0.3.0) plus 12 BestEffort schemes (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC,
 BF/BFSC, UA, 0840, FE, SB, X07) are implemented and wired into automatic
 `detect()` — 22 of the 25 schemes in the LOCAL catalogue (`docs/cart.md`).

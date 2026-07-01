@@ -6,6 +6,78 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-01 - "Foundation"
+
+The first stable release. Every v1.0.0 gate in `to-dos/ROADMAP.md` is met:
+a real debugger, a real RetroAchievements integration, Stella-adjacent cart
+breadth, a 100%-passing accuracy battery, and a green three-platform release
+matrix. No behavior changes from `[0.9.0]` — this is a version-line
+milestone tag plus a full documentation/status reconciliation pass, not a
+feature bump.
+
+### Status at 1.0.0
+
+- **6507 CPU** — documented + undocumented opcodes, cycle-exact against the
+  trimmed SingleStepTests corpus (4,660/4,660 cases, 233/233 opcodes) and the
+  full ~10K-case-per-opcode corpus (weekly CI cron), plus Bruce Clark's
+  exhaustive decimal-mode test (all `ERROR=0`).
+- **TIA** — beam-raced video (RESPx/HMOVE comb, playfield, players/missiles/
+  ball, all 15 pairwise collision latches) and two-channel poly-counter audio
+  synthesis, unit-tested.
+- **RIOT** — 128 B RAM, DDR/I/O ports, and the interval timer (prescale,
+  underflow/INSTAT, read-after-write, and the post-underflow decrement-rate
+  reversion fixed in `[0.9.0]`), all unit-tested.
+- **Cart/bankswitch catalog** — all 8 Curated-tier schemes (2K, 4K, F8, F6,
+  F4, CV, FA/CBS-RAM, Superchip, DPC, E7) plus 12 of 15 BestEffort schemes
+  (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA, 0840, FE, SB, X07) — 22 of
+  25 catalogued schemes, all wired into automatic `detect()`. 4A50, AR/
+  Supercharger, and the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family remain
+  out of scope for 1.0 (see "Explicit non-requirements" below).
+- **Debugger** (`debug-hooks`, default-on) — live 6507/TIA/RIOT/memory
+  panels, breakpoints/step/continue, a side-effect-free `Bus::peek`/
+  `peek_range`, a standalone disassembler.
+- **RetroAchievements** (`retroachievements`, off by default) —
+  `rusty2600-cheevos` vendors the `rcheevos` C library; per-frame
+  achievement tracking, hardcore mode, and a menu all work. A dedicated
+  achievement-list/login/toast UI is deferred post-1.0 (`T-0802-005`).
+  Server-side RA.org allowlisting is explicitly not a 1.0 gate — the
+  integration working correctly is the bar, not third-party approval.
+- **Accuracy battery** (`rusty2600-test-harness`) — the shared `Sentinel`/
+  `run_cpu_until_sentinel` Layer 2 runner, a real `AccuracyScore`-gated
+  battery (2/2, 100%, CI-enforced), and a tolerance-aware `SnapComparator`.
+  A genuine externally-oracled golden CPU trace log and TIA-timing
+  test-ROM fixtures remain honestly deferred (`T-0602-006`/`007`) — the
+  Klaus functional/decimal oracles remain the authoritative CPU gate in the
+  meantime.
+- **Testing** — 151 tests passing workspace-wide (154 with
+  `--features test-roms`). Full CI matrix green: Linux/macOS/Windows +
+  the `no_std` gate.
+- **Release matrix** — three platform archives (Linux/macOS/Windows)
+  built and published for every tagged release since `[0.5.0]`.
+
+### Explicit non-requirements (unchanged from `to-dos/ROADMAP.md`)
+
+Netplay, TAS tooling, Lua scripting, HD texture packs, shader stacks, mobile
+builds, and RA server-side allowlisting were never part of the 1.0 gate —
+these remain Beyond-1.0 (Phase 7 residual breadth / Phase 8 reach), same as
+documented throughout the `v0.x.0` line. A handful of frontend UI stubs fall
+under this umbrella and remain unwired: the TIA-audio scope/cheat-editor/
+ROM-DB-editor/TAStudio tools tab, the shader/filter picklist and per-side
+overscan control, the 2600 key-rebind grid, the pacer's smoothed-FPS
+display, and the Reset/PowerCycle/OpenDocs menu wiring — none of these
+gate 1.0 per the non-requirements list above.
+
+### Notes
+
+- No code changes from `[0.9.0]` — version bump only (workspace + all 8
+  crates), plus this changelog entry and a full `README.md`/`docs/STATUS.md`/
+  `to-dos/ROADMAP.md` reconciliation pass confirming every number and claim
+  matches the shipped `v1.0.0` tag.
+- Future work continues under `to-dos/ROADMAP.md`'s "Beyond v1.0.0" line:
+  the three deferred cart-scheme families, the two deferred accuracy-battery
+  fixtures, the deferred RA UI, and any hardening the battery surfaces next,
+  each shipped as its own `v1.x.0`/`v1.x.y` release.
+
 ## [0.9.0] - 2026-07-01 - "Hardening"
 
 Closes `T-0601-008`, the one open accuracy residual in the project: Pitfall

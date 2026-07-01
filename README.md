@@ -13,24 +13,25 @@ the timebase, the 6507 runs on every third clock, `WSYNC`/`RDY` beam-stalls the 
 owns everything mutable, a one-directional `no_std + alloc` chip-crate graph, a hard determinism
 contract, and test-ROM-is-spec. The frontend is pure Rust (`winit` + `wgpu` + `cpal` + `egui`).
 
-> **Status: v0.9.0 "Hardening" — real chip cores, full Curated tier + broad BestEffort coverage,
-> real debugger, real RetroAchievements backend, a real accuracy battery, and the project's last
-> known accuracy residual fixed.** The 6507 (documented + undocumented opcodes), the TIA
-> (beam-raced video + two-channel audio), and the RIOT are implemented and tested — cycle-exact
-> against a trimmed SingleStepTests corpus (4,660 cases, 233 opcodes, 100% passing) and 151 tests
-> passing workspace-wide (154 with `--features test-roms`, including a real `AccuracyScore`-gated
-> accuracy battery at 2/2, 100%). All 8 Curated-tier bankswitch schemes plus 12 BestEffort schemes
-> are implemented and wired into automatic detection
+> **Status: v1.0.0 "Foundation" — the first stable release.** Real chip cores, full Curated tier
+> + broad BestEffort cart coverage, a real debugger, a real RetroAchievements backend, and a real
+> accuracy battery all shipped. The 6507 (documented + undocumented opcodes), the TIA (beam-raced
+> video + two-channel audio), and the RIOT are implemented and tested — cycle-exact against a
+> trimmed SingleStepTests corpus (4,660 cases, 233 opcodes, 100% passing) and 151 tests passing
+> workspace-wide (154 with `--features test-roms`, including a real `AccuracyScore`-gated accuracy
+> battery at 2/2, 100%). All 8 Curated-tier bankswitch schemes plus 12 BestEffort schemes are
+> implemented and wired into automatic detection
 > (2K/4K/F8/F6/F4/CV/FA/Superchip/DPC/E7/F0/E0/3F/3E/EF/DF/BF/UA/0840/FE/SB/X07 — 22 of 25
 > catalogued schemes). Only 4A50, AR/Supercharger, and the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family
-> remain, each deliberately deferred as a substantially larger undertaking. The frontend's
-> `debug-hooks` debugger is real (live 6507/TIA/RIOT/memory panels, breakpoints/step/continue, a
-> standalone disassembler) and default-on. `rusty2600-cheevos` vendors the RetroAchievements
-> `rcheevos` C library and drives real per-frame achievement tracking, hardcore mode, and a
-> RetroAchievements menu (off by default; no dedicated achievement-list UI yet). A RIOT-timer bug
-> that stalled Pitfall II's boot forever is fixed (`docs/riot.md`). HD-pack remains an unwired
-> stub. See `docs/STATUS.md` for the authoritative per-suite / per-chip state and
-> `to-dos/ROADMAP.md` for the full plan through v1.0.0.
+> remain, explicitly out of scope for 1.0 (see `to-dos/ROADMAP.md`'s non-requirements list). The
+> frontend's `debug-hooks` debugger is real (live 6507/TIA/RIOT/memory panels, breakpoints/step/
+> continue, a standalone disassembler) and default-on. `rusty2600-cheevos` vendors the
+> RetroAchievements `rcheevos` C library and drives real per-frame achievement tracking, hardcore
+> mode, and a RetroAchievements menu (off by default; no dedicated achievement-list UI yet). A
+> RIOT-timer bug that stalled Pitfall II's boot forever is fixed (`docs/riot.md`). HD-pack, netplay,
+> TAS tooling, Lua scripting, shader stacks, and mobile builds remain unwired stubs / Beyond-1.0.
+> See `docs/STATUS.md` for the authoritative per-suite / per-chip state and `to-dos/ROADMAP.md` for
+> what's next.
 
 ## Crates
 
