@@ -5,11 +5,18 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v1.0.0 "Foundation" — the first stable release (see
-`to-dos/ROADMAP.md` for the full v0.1.1→v1.0.0 version-to-phase history and
-`CHANGELOG.md`'s `[1.0.0]` entry for the complete gate checklist). No code
-changed from `[0.9.0]`; this is a version-line milestone confirming every
-v1.0.0 gate criterion is met — the full 8-scheme Curated cart tier
+**Current release:** v1.1.0 "Persistence" — the first release of the
+`v1.1.0 -> v2.0.0` RustyNES-parity line (see `to-dos/ROADMAP.md` for the
+full plan and `CHANGELOG.md`'s `[1.1.0]` entry for the complete list). Ships
+save-states (`rusty2600-core::save_state`, ADR 0007) and a rewind rework
+reusing the same serialized format, plus fixes for three real frontend bugs
+found during manual verification: a rapid gameplay/debugger flicker (the
+`emu-thread` present path was falling back to a dead, permanently-black
+buffer on every render pass that missed a freshly-published frame), a
+window that didn't display the entire active picture (the blit shader
+sampled the full PAL/SECAM-worst-case texture instead of the active
+region's sub-rect), and Settings-window changes that never persisted to
+disk. The full 8-scheme Curated cart tier
 (v0.3.0) plus 12 BestEffort schemes (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC,
 BF/BFSC, UA, 0840, FE, SB, X07) are implemented and wired into automatic
 `detect()` — 22 of the 25 schemes in the LOCAL catalogue (`docs/cart.md`).
@@ -61,8 +68,8 @@ ROM. See `docs/riot.md` for the full writeup;
 | `rusty2600-tia` | TIA — video + audio | Beam-raced video (RESPx/HMOVE/playfield/players/missiles/ball/collisions) + audio poly-counter synthesis implemented and unit-tested. RIOT-timer-adjacent edge cases, AUDC 0xA/0xB pinning, TIA-revision modeling, and power-on RAM determinism are open (v0.2.0). |
 | `rusty2600-riot` | MOS 6532 RIOT | RAM/DDR ports/timer implemented and unit-tested (prescale, underflow, INSTAT, read-after-write). `T-0601-008` fixed (v0.9.0): reading `INTIM` now reverts the post-underflow (divide-by-1) decrement rate back to the normal prescale (confirmed against Stella's `M6532::peek`/`updateEmulation`), matching real 6532 silicon — see `docs/riot.md`. |
 | `rusty2600-cart` | Bankswitch boards | All 8 Curated schemes (2K, 4K, F8, F6, F4, CV, FA/CBS-RAM, Superchip, DPC, E7) implemented and wired into `detect()` (v0.3.0). BestEffort (v0.4.0-v0.6.0): F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA, 0840, FE, SB, X07 implemented and wired (22 of 25 catalogued schemes total). Two hooks, `Board::snoop_write`/`snoop_read` (`crates/rusty2600-core/src/bus.rs`), let boards react to accesses the console routes to TIA/RIOT space — needed for 3F/3E's `$3E`/`$3F` write hotspots, UA/0840/X07's read+write hotspots, FE's `$01FE` stack-frame-value pickup, and SB's address-low-bits bank select, none of which are in the cart window at all. Only 4A50 (`T-0402-014`, needs three independently relocatable ROM/RAM windows), AR/Supercharger (`T-0402-015`, tape/audio-based loading, architecturally unlike every other scheme here), and DPC+/CDF/CDFJ/CDFJ+ (`T-0401-006`, need a full ARM7TDMI Thumb interpreter) remain — all deliberately deferred as substantially larger, separately-scoped undertakings. |
-| `rusty2600-core` | Bus + scheduler | lockstep loop + seeded phase live; bus decode complete |
-| `rusty2600-frontend` | egui shell | Rendering, audio, pacing, input, WASM support, the emu-thread path, the real debugger (`debug-hooks`, default-on), and now RetroAchievements (`retroachievements`, off by default: `cheevos.rs` owns an `RaClient` on the main thread, pumped once per frame under the brief lock, ROM load/close wired, hardcore-mode menu, unlock events surfaced as status text) all real and tested (v0.5.0-v0.7.0). HD-pack remains an unwired stub. |
+| `rusty2600-core` | Bus + scheduler + save-states | lockstep loop + seeded phase live; bus decode complete. `save_state` (v1.1.0, ADR 0007) wraps the already-`serde`-derived `System` in a versioned header (magic, format version, caller-supplied `rom_tag`), encoded via `postcard`; the frontend's rewind ring reuses the same encoding. |
+| `rusty2600-frontend` | egui shell | Rendering, audio, pacing, input, WASM support, the emu-thread path, the real debugger (`debug-hooks`, default-on), and RetroAchievements (`retroachievements`, off by default: `cheevos.rs` owns an `RaClient` on the main thread, pumped once per frame under the brief lock, ROM load/close wired, hardcore-mode menu, unlock events surfaced as status text) all real and tested (v0.5.0-v0.7.0). v1.1.0 fixed three real frontend bugs: the `emu-thread` present path's dead-black-buffer fallback (rapid flicker), the blit shader's full-texture UV sampling instead of the active sub-rect (window not showing the whole picture), and Settings-window changes never reaching disk. HD-pack remains an unwired stub. |
 | `rusty2600-cheevos` | RetroAchievements FFI | Vendors the `rcheevos` C library (MIT); safe `RaClient` wrapper adapted from RustyNES's own `rustynes-cheevos` (console-agnostic except the memory map + one console-ID constant). `ra_addr_to_riot` maps RA's flat address space directly onto the RIOT's 128 bytes of RAM. Native-only (`#![cfg(not(target_arch = "wasm32"))]`); 7 tests passing, including real FFI smoke tests (v0.7.0). |
 | `rusty2600-test-harness` | accuracy oracle | Real as of v0.8.0: `Sentinel`/`run_cpu_until_sentinel` (the shared Layer 2 runner both bundled Klaus oracles now use), a real `AccuracyScore`-gated `tests/accuracy_battery.rs` (2/2, 100%), and a tolerance-aware `SnapComparator`. `GoldenLogDiffer`'s capture/diff machinery is real too, but no externally-oracled golden CPU trace is bundled yet (`T-0602-007`); `run_until_complete` (Layer 3, full-`System`) remains a stub pending TIA-timing test-ROM fixtures (`T-0602-006`). |
 
@@ -77,8 +84,8 @@ ROM. See `docs/riot.md` for the full writeup;
 | TIA timing / draw ROMs | test-ROM corpus | not yet wired (`T-0602-006`) |
 | Stella regression corpus | test-ROM corpus | not yet wired (`T-0602-006`/v0.9.x) |
 | **Accuracy battery (AccuracyCoin-equivalent)** | battery | **2 / 2 (100%)** — stood up v0.8.0, `tests/accuracy_battery.rs`, CI-enforced via the existing `--features test-roms` step, ≥90% v1.0 threshold |
-| **Workspace test suite** | `cargo test --workspace` | **151 / 151** (both Klaus tests moved to `--features test-roms`, gated out of the fast default path — see `crates/rusty2600-test-harness/tests/klaus_test.rs`) |
-| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **154 / 154** |
+| **Workspace test suite** | `cargo test --workspace` | **157 / 157** (both Klaus tests moved to `--features test-roms`, gated out of the fast default path — see `crates/rusty2600-test-harness/tests/klaus_test.rs`; +6 vs. v1.0.0 for the new save-state module + rewind-restore regression tests) |
+| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **160 / 160** |
 
 ## Board / mapper matrix
 

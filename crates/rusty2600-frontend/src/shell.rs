@@ -50,6 +50,12 @@ pub enum MenuAction {
     OpenDocs,
     /// File -> Quit.
     Quit,
+    /// A Settings-window widget changed this frame — persist `cfg` to disk.
+    /// Native-only in effect (the wasm build has no filesystem config path;
+    /// [`crate::config::Config::save`] simply doesn't exist there), but kept
+    /// as a plain action here since [`ShellState::render`] is shared code and
+    /// must never call platform-specific I/O directly.
+    SaveConfig,
 }
 
 /// The console-switch menu actions (the 2600-specific panel the NES shell lacks).
@@ -323,7 +329,7 @@ impl ShellState {
 
         // The Settings + debugger windows float above the panels (rendered on the same ctx).
         if self.settings_open {
-            self.render_settings(&ctx, cfg);
+            self.render_settings(&ctx, cfg, &mut actions);
         }
         if self.debugger_visible {
             self.render_debugger(&ctx, info, &mut actions);
@@ -334,8 +340,22 @@ impl ShellState {
 
     /// The tabbed Settings window (Video / Audio / Input / System). v0.1 wires the live config
     /// fields; deep per-knob panels (NTSC, shader stack, per-game overrides) are TODO.
-    fn render_settings(&mut self, ctx: &egui::Context, cfg: &mut Config) {
+    ///
+    /// Every widget here edits `cfg` in place immediately (so the change takes effect this
+    /// frame), but a live edit alone never reaches disk — [`crate::config::Config::save`] is
+    /// native-only I/O this shared module must not call directly. Instead, any widget that
+    /// reports `.changed()` pushes [`MenuAction::SaveConfig`] so the native-only app layer
+    /// persists it once, after this render pass (the previous behavior only ever saved on the
+    /// top menu bar's Region submenu, so every OTHER Settings-window change silently never
+    /// stuck between sessions).
+    fn render_settings(
+        &mut self,
+        ctx: &egui::Context,
+        cfg: &mut Config,
+        actions: &mut Vec<MenuAction>,
+    ) {
         let mut open = self.settings_open;
+        let mut changed = false;
         egui::Window::new("Settings")
             .open(&mut open)
             .resizable(true)
@@ -352,13 +372,29 @@ impl ShellState {
                         for m in ["fifo", "mailbox", "immediate"] {
                             if ui.radio(cfg.video.present_mode == m, m).clicked() {
                                 cfg.video.present_mode = m.to_string();
+                                changed = true;
                             }
                         }
-                        ui.checkbox(&mut cfg.video.integer_scale, "Integer scale");
+                        if ui
+                            .checkbox(&mut cfg.video.integer_scale, "Integer scale")
+                            .changed()
+                        {
+                            changed = true;
+                        }
                     }
                     1 => {
-                        ui.checkbox(&mut cfg.audio.enabled, "Audio enabled");
-                        ui.add(egui::Slider::new(&mut cfg.audio.volume, 0.0..=1.0).text("Volume"));
+                        if ui
+                            .checkbox(&mut cfg.audio.enabled, "Audio enabled")
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        if ui
+                            .add(egui::Slider::new(&mut cfg.audio.volume, 0.0..=1.0).text("Volume"))
+                            .changed()
+                        {
+                            changed = true;
+                        }
                     }
                     2 => {
                         // TODO(impl-phase): the 2600 key-rebind grid (joystick * 2 players + the
@@ -367,13 +403,25 @@ impl ShellState {
                     }
                     _ => {
                         ui.label("Region:");
-                        ui.radio_value(&mut cfg.region, Region::Ntsc, "NTSC");
-                        ui.radio_value(&mut cfg.region, Region::Pal, "PAL");
-                        ui.radio_value(&mut cfg.region, Region::Secam, "SECAM");
+                        if ui
+                            .radio_value(&mut cfg.region, Region::Ntsc, "NTSC")
+                            .changed()
+                            || ui
+                                .radio_value(&mut cfg.region, Region::Pal, "PAL")
+                                .changed()
+                            || ui
+                                .radio_value(&mut cfg.region, Region::Secam, "SECAM")
+                                .changed()
+                        {
+                            changed = true;
+                        }
                     }
                 }
             });
         self.settings_open = open;
+        if changed {
+            actions.push(MenuAction::SaveConfig);
+        }
     }
 
     /// The debugger overlay: a panel selector + the live 6507/TIA/RIOT/memory

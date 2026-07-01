@@ -7,8 +7,14 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current release: v1.0.0 "Foundation" — the first stable release.**
-Phase 0 (foundation) through the
+**Current release: v1.1.0 "Persistence"** — the first release of the
+`v1.1.0 -> v2.0.0` RustyNES-parity line (see "Version -> Phase mapping
+(v1.1.0 -> v2.0.0)" below for the full plan). Ships save-states
+(`rusty2600-core::save_state`, ADR 0007) + a rewind rework, plus fixes for
+three real frontend bugs found during manual verification (a rapid
+gameplay/debugger flicker, a window that didn't display the whole active
+picture, and Settings changes that never persisted) — see `CHANGELOG.md`'s
+`[1.1.0]` entry. Phase 0 (foundation) through the
 full Curated-tier board set (Phase 4) are complete. Phase 7 (BestEffort
 breadth) has landed 12 of the ~15-scheme BestEffort long tail cataloged in
 `docs/cart.md` (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA, 0840, FE, SB,
@@ -98,24 +104,40 @@ fractional-timebase refactor **only if** a hard residual ever warrants it
 (for the 2600, **likely never** — integer color-clock resolution is the
 machine's native granularity).
 
-## Beyond v1.0.0
+## Version → Phase mapping (v1.1.0 → v2.0.0)
 
-With v1.0.0 shipped, further work is battery-driven hardening and residual
-breadth rather than gated milestones:
+With v1.0.0 shipped, the project targets RustyNES-level (`../RustyNES`,
+v1.9.9) documentation depth, feature breadth, performance rigor, and
+accuracy methodology through an iterative `v1.x.0` line, culminating in a
+Rusty2600 `v2.0.0`. Full context, rationale, and per-version technical
+design lives in the plan this table summarizes; each `v1.x.0` gets `v1.x.y`
+patch releases for anything found wrong after the fact, same convention as
+the `v0.x.0` line.
 
-- The three deferred cart-scheme families: 4A50 (`T-0402-014`), AR/
-  Supercharger (`T-0402-015`), and the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family
-  (`T-0401-006`, needs a full ARM7TDMI Thumb interpreter) — each a
-  substantially larger, separately-scoped undertaking.
-- A genuine externally-oracled golden CPU trace log (`T-0602-007`) and
-  TIA-timing test-ROM fixtures (`T-0602-006`) for the accuracy battery's
-  remaining deferred layers.
-- The RetroAchievements achievement-list/login/toast UI (`T-0802-005`).
-- The commercial-ROM regression oracle, whenever locally-supplied ROM dumps
-  become available in this environment.
-- Any further hardening the accuracy battery surfaces, released as
-  `v1.x.0`/`v1.x.y` per the same iterative-release discipline used
-  throughout the v0.x.0 line.
+| Version | Codename | Headline content |
+|---|---|---|
+| **v1.1.0 "Persistence"** (current) | Save-states (`rusty2600-core::save_state`, ADR 0007) + a rewind rework reusing the same serialized format; three real frontend bugs fixed (gameplay/debugger flicker, window sizing, Settings persistence) |
+| v1.2.0 "Foresight" | Run-ahead (`rusty2600-frontend::runahead`), built on v1.1.0's snapshot/restore primitives |
+| v1.3.0 "Scope" | Debugger depth: watch/conditional-breakpoint expression engine, callstack, a TIA per-scanline event/write-scatter viewer, a player/missile/ball position view — plus the long-deferred RetroAchievements achievement-list/login/toast UI (`T-0802-005`) |
+| v1.4.0 "Signal" | A composable shader/filter stack (composite-NTSC + CRT-scanline) + a right-sized sprite-replacement overlay (the 2600-appropriate HD-pack analog — player/missile/ball only) |
+| v1.5.0 "Full Catalog" | 4A50 (`T-0402-014`) + AR/Supercharger (`T-0402-015`) — closes 24 of 25 cataloged cart schemes |
+| v1.6.0 → v1.6.x "Coprocessor" (patch train) | A new `rusty2600-thumb` crate: an ARM7TDMI Thumb interpreter (ported from Gopher2600's Go implementation) for the DPC+/CDF/CDFJ/CDFJ+ family (`T-0401-006`) — closes the catalogue at 25/25 |
+| v1.7.0 "Chronicle" | TAS movie format (`.r26m`) + a TAStudio-lite panel, built on v1.1.0's snapshot substrate |
+| v1.8.0 "Oracle" | Accuracy battery depth: real, license-clear TIA-timing test-ROM fixtures (`T-0602-006`) and a genuine externally-oracled golden CPU trace (`T-0602-007`), grown honestly rather than claiming an inflated pass rate |
+| v1.9.0 "Scriptable" | Lua scripting (`rusty2600-script`: `mlua` native + `piccolo` wasm fallback) |
+| v1.10.0 → v1.10.x "Rollback" (train) | Rollback netplay (`rusty2600-netplay`), 2-player-only by deliberate scope cut vs. RustyNES's 2-4-player mesh |
+| v1.11.0 → v1.11.x "Handheld" (train) | Android build (`rusty2600-mobile` UniFFI bridge + `rusty2600-android`) — sideloadable, not store-submitted |
+| v1.12.0 → v1.12.x "Pocket" (train) | iOS build (`rusty2600-ios`, reusing the `rusty2600-mobile` bridge), including a genuinely new virtual-analog-paddle UX design — TestFlight-equivalent, not App-Store-submitted |
+| **v2.0.0 "Parity"** | Full doc/status reconciliation confirming every gate above shipped; release-matrix green across desktop ×3 + wasm/Pages + Android + iOS; mobile store production launch stays explicitly out of scope (deferred beyond v2.0.0, matching RustyNES's own v2.1.0 precedent) |
+
+**Explicit scope note**: unlike RustyNES's own literal "v2.0.0" (a
+fractional master-clock timebase rewrite closing hard sub-scanline
+residuals — ADR 0002 already considered and rejected that exact rewrite for
+the 2600, "likely never needed"), Rusty2600's v2.0.0 is the RustyNES-parity
+culmination milestone, not an accuracy-architecture rewrite. All four of
+RustyNES's biggest-ticket features (Lua scripting, HD texture packs,
+rollback netplay, mobile builds) are in scope for this line — confirmed
+explicitly, not assumed.
 
 ## How the phases map to the architecture
 

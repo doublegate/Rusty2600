@@ -15,6 +15,7 @@
 extern crate alloc;
 
 pub mod bus;
+pub mod save_state;
 pub mod scheduler;
 
 // Re-export the chip crates (the public surface).
@@ -24,6 +25,7 @@ pub use rusty2600_riot as riot;
 pub use rusty2600_tia as tia;
 
 pub use bus::{AudioBus, Bus, VideoBus};
+pub use save_state::{SaveState, SaveStateError};
 pub use scheduler::System;
 
 // Re-export the cart tiering types so the test-harness honesty gate (and any

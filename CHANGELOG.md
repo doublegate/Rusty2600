@@ -6,6 +6,93 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-01 - "Persistence"
+
+The first release of the `v1.1.0 -> v2.0.0` RustyNES-parity line
+(`to-dos/ROADMAP.md`). Ships the planned save-states/rewind rework, plus a
+set of real frontend bugs found and fixed during manual verification of the
+running emulator — the kind of defect only surfaces once someone actually
+plays a game, not from `cargo test` alone.
+
+### Added
+
+- **Save-states** (`rusty2600-core::save_state`): a versioned binary
+  snapshot format wrapping the already-`serde`-derived `System` (Cpu + Bus +
+  phase + color-clock count). Encoded via `postcard` (a compact,
+  `no_std`+`alloc`-native serde format) rather than a hand-rolled
+  tagged-section encoder, since every chip crate (`Cpu`, `Bus`, `Tia`,
+  `Riot`, the 22-variant `Cartridge` enum) already derives
+  `Serialize`/`Deserialize` and already compiles under the
+  `thumbv7em-none-eabihf` no_std gate. A caller-supplied opaque `rom_tag: u64`
+  guards against restoring a save file against the wrong cartridge. See
+  `docs/adr/0007-save-state-versioning.md` for the 3-tier compatibility
+  policy (same MAJOR.MINOR round-trips byte-identical; same MINOR/different
+  PATCH is additive-only via `#[serde(default)]`; anything else is
+  best-effort with a typed `SaveStateError`).
+- A permanent save-state round-trip regression test
+  (`round_trip_is_byte_identical`), run in the default `cargo test
+  --workspace` path — no ROM fixtures needed.
+
+### Changed
+
+- **Rewind rework**: `EmuCore`'s rewind ring (`emu_thread.rs`) now stores
+  serialized `SaveState` bytes instead of raw `System` clones. `Cartridge`'s
+  enum size is pinned to its largest fixed-size variant (`BankF4`'s 32 KiB
+  ROM array) regardless of which board is actually loaded, so a raw
+  `.clone()` paid that cost for every game; serializing through the real
+  data shrinks a 2K/4K-cart rewind entry to its true size. No compression
+  needed at this scale — a 2600's entire mutable state is tiny compared to
+  even a modest NES/PPU/APU footprint.
+
+### Fixed
+
+- **Gameplay display + debugger flicker (rapid, entire-screen).** Under the
+  default-on `emu-thread` feature, `about_to_wait` requests a redraw every
+  event-loop iteration with no rate limit, while the emu-thread only
+  publishes a fresh frame at the region's frame rate (~60 Hz). Every render
+  pass that found no new frame in the channel used to fall back to
+  `EmuCore::framebuffer` — a buffer that's *only ever written* by the
+  non-`emu-thread` (`run_frame`) path and stays permanently black under the
+  default feature set. The result was a real-content/black strobe on every
+  render pass that missed a fresh frame (the majority of them on any
+  display faster than ~60 Hz). Fixed by caching the most recently published
+  frame in `Active::last_frame` and reusing it instead of the dead black
+  buffer; cleared explicitly on ROM close so the display actually goes
+  blank instead of freezing on the last game frame.
+- **Window not sized to show the entire game display.** The wgpu blit
+  pipeline always sampled the *full* `MAX_W x MAX_H` (160x228,
+  PAL/SECAM-worst-case) framebuffer texture via `0..1` UV, regardless of the
+  active region's real sub-rect (160x192 for NTSC) — so an NTSC frame was
+  effectively squished into the top ~84% of the window with the never-written
+  bottom rows sampled below it. Fixed with a new `uv_scale` uniform
+  (`fb_w/MAX_W, fb_h/MAX_H`) that crops sampling to the active sub-rect,
+  updated whenever the framebuffer's dimensions change.
+- **Settings not persisting / not auto-saving.** The Settings window
+  (`shell.rs::render_settings`) mutated the live `Config` in place, but
+  `Config::save()` was only ever called from the top menu bar's Region
+  submenu — every other Settings-window change (present mode, integer
+  scale, audio enabled/volume, region via the Settings tab) silently never
+  reached disk. Fixed by tracking `.changed()` on every Settings widget and
+  pushing a new `MenuAction::SaveConfig`, dispatched by the native-only app
+  layer (`shell.rs` is shared with the wasm build and must never call
+  platform-specific file I/O directly).
+- Wired the status bar's FPS estimate (previously a hardcoded `0.0` `TODO`)
+  to a real exponential-moving-average of the render-pass cadence.
+- The window title now shows the loaded ROM's filename (`Rusty2600 -
+  <rom>`), resetting to `Rusty2600` on ROM close — matching RustyNES's own
+  convention.
+
+### Notes
+
+- 157 tests passing workspace-wide (up from 151 at `[1.0.0]`; +6 for the
+  save-state module, the rewind-restore regression tests, and the round-trip
+  suite).
+- `README.md` overhauled to RustyNES-parity depth and structure (Overview,
+  Why Rusty2600, Highlights, Features, Quick Start, Architecture,
+  Compatibility and Accuracy, Performance, Platform Support, Documentation,
+  Contributing, License, Acknowledgments) — deliberately excludes a
+  changelog-shaped "Version History" section; that information belongs here.
+
 ## [1.0.0] - 2026-07-01 - "Foundation"
 
 The first stable release. Every v1.0.0 gate in `to-dos/ROADMAP.md` is met:

@@ -71,6 +71,25 @@ struct Active {
     shared_input: Arc<crate::emu_thread::SharedInput>,
     #[cfg(feature = "emu-thread")]
     frame_rx: crate::present_buffer::Consumer,
+    /// The most recently PUBLISHED frame's pixels, reused when `frame_rx.take()`
+    /// finds nothing new this render pass. The emu-thread only publishes at the
+    /// region's frame rate (~60 Hz NTSC), while `RedrawRequested` fires with no
+    /// rate limit of its own (see `about_to_wait`'s doc comment) — every render
+    /// pass in between MUST redisplay the last real frame, not a black one:
+    /// `EmuCore::framebuffer` is only ever written by the non-`emu-thread`
+    /// (`run_frame`) path and stays permanently black under this feature, so
+    /// falling back to it here used to flash black on most render passes (the
+    /// "entire display flickers" bug).
+    #[cfg(feature = "emu-thread")]
+    last_frame: Vec<u8>,
+
+    /// Timestamp of the previous render pass, for the smoothed FPS estimate.
+    last_render_at: std::time::Instant,
+    /// An exponential-moving-average FPS estimate shown in the status bar
+    /// (`ShellInfo::fps`) — measures actual render-pass cadence, not the
+    /// emulator's internal frame-production rate, so it reflects what the
+    /// user is actually seeing (display refresh rate under `emu-thread`).
+    fps_smoothed: f32,
 
     /// The RetroAchievements client. Lives here (main thread), never inside
     /// `EmuCore` — `RaClient` is deliberately `!Send`, and `EmuCore` must stay
@@ -255,6 +274,10 @@ impl ApplicationHandler for App {
             shared_input,
             #[cfg(feature = "emu-thread")]
             frame_rx,
+            #[cfg(feature = "emu-thread")]
+            last_frame: vec![0u8; (crate::gfx::VCS_W * crate::gfx::VCS_H_NTSC * 4) as usize],
+            last_render_at: std::time::Instant::now(),
+            fps_smoothed: 0.0,
             #[cfg(feature = "retroachievements")]
             cheevos,
         });
@@ -391,6 +414,22 @@ impl App {
         #[cfg(feature = "emu-thread")]
         active.shared_input.store(active.host_input);
 
+        // Smoothed (EMA) render-pass FPS for the status bar — measures the actual
+        // presented cadence, not the emulator's internal frame-production rate, so
+        // it reflects what's really on screen (which under `emu-thread` tracks the
+        // display's refresh rate, not necessarily the console's ~60 Hz).
+        let now = std::time::Instant::now();
+        let dt = now.duration_since(active.last_render_at).as_secs_f32();
+        active.last_render_at = now;
+        if dt > 0.0 {
+            let instantaneous = 1.0 / dt;
+            active.fps_smoothed = if active.fps_smoothed <= 0.0 {
+                instantaneous
+            } else {
+                active.fps_smoothed.mul_add(0.9, instantaneous * 0.1)
+            };
+        }
+
         // --- (1) Step one frame + copy the framebuffer + read-only info under a BRIEF lock. ---
         let (fb, fb_dims, info) = {
             #[cfg(feature = "emu-thread")]
@@ -420,10 +459,13 @@ impl App {
             }
 
             #[cfg(feature = "emu-thread")]
-            let fb = active
-                .frame_rx
-                .take()
-                .map_or_else(|| emu.framebuffer().to_vec(), |f| f.pixels);
+            let fb = match active.frame_rx.take() {
+                Some(f) => {
+                    active.last_frame = f.pixels;
+                    active.last_frame.clone()
+                }
+                None => active.last_frame.clone(),
+            };
             #[cfg(not(feature = "emu-thread"))]
             let fb = emu.framebuffer().to_vec();
 
@@ -441,7 +483,7 @@ impl App {
             let info = ShellInfo {
                 board_tier: emu.board_tier().map(str::to_string),
                 region: emu.region,
-                fps: 0.0, // TODO(impl-phase): wire the pacer's smoothed FPS estimate.
+                fps: active.fps_smoothed,
                 rom_loaded: emu.rom_loaded,
                 #[cfg(feature = "debug-hooks")]
                 debug,
@@ -539,6 +581,7 @@ impl App {
 
     /// Dispatch the menu actions collected during the egui pass (AFTER the pass, so the emu lock is
     /// never taken inside the egui closure).
+    #[allow(clippy::too_many_lines)]
     fn dispatch_actions(
         active: &mut Active,
         event_loop: &ActiveEventLoop,
@@ -559,6 +602,11 @@ impl App {
                                     active.shell.status = format!("load failed: {e}");
                                 } else {
                                     active.shell.status = format!("Loaded {}", path.display());
+                                    let rom_label = path.file_name().map_or_else(
+                                        || path.display().to_string(),
+                                        |n| n.to_string_lossy().into_owned(),
+                                    );
+                                    active.window.set_title(&format!("Rusty2600 - {rom_label}"));
                                 }
                                 drop(emu);
                                 #[cfg(feature = "retroachievements")]
@@ -574,6 +622,13 @@ impl App {
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .close_rom();
+                    active.window.set_title("Rusty2600");
+                    // The emu-thread stops publishing once `rom_loaded` is false
+                    // (see its `paused` gate), so without this the cached
+                    // `last_frame` fallback would keep showing the last game
+                    // frame forever instead of going blank.
+                    #[cfg(feature = "emu-thread")]
+                    active.last_frame.iter_mut().for_each(|b| *b = 0);
                     #[cfg(feature = "retroachievements")]
                     active.cheevos.close_rom();
                     active.shell.status = "ROM closed".into();
@@ -638,6 +693,9 @@ impl App {
                     active.window.set_fullscreen(mode);
                 }
                 MenuAction::OpenSettings => active.shell.settings_open = true,
+                MenuAction::SaveConfig => {
+                    let _ = active.config.save();
+                }
                 MenuAction::Quit => event_loop.exit(),
                 // TODO(impl-phase): Reset / PowerCycle / OpenDocs wire to the core / Docs pane.
                 MenuAction::Reset | MenuAction::PowerCycle | MenuAction::OpenDocs => {

@@ -19,7 +19,9 @@
 //! v0.1.0: the deep post-process chain (CRT / NTSC / upscalers) is a TODO — only the direct
 //! nearest-blit ships in the skeleton, which presents a deterministically cleared frame.
 
-#![allow(clippy::cast_possible_truncation)]
+// The `u32 as f32` casts in this module (`uv_scale` ratios) are all over dimensions
+// bounded by `MAX_W`/`MAX_H` (160 / 228) — nowhere near f32's 23-bit mantissa limit.
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use std::sync::Arc;
 
@@ -88,7 +90,9 @@ pub struct Gfx {
     pub config: wgpu::SurfaceConfiguration,
     /// The streaming framebuffer texture (sized to the PAL/SECAM worst case).
     texture: wgpu::Texture,
-    /// The bind group binding `texture` + the nearest sampler for the blit.
+    /// The `uv_scale` uniform (`fb_w/MAX_W, fb_h/MAX_H`) — see [`Self::uv_scale_buffer`].
+    uv_scale_buffer: wgpu::Buffer,
+    /// The bind group binding `texture` + the nearest sampler + `uv_scale_buffer` for the blit.
     bind_group: wgpu::BindGroup,
     /// The fullscreen-triangle blit pipeline.
     pipeline: wgpu::RenderPipeline,
@@ -183,6 +187,23 @@ impl Gfx {
             min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
+        // `uv_scale = (fb_w/MAX_W, fb_h/MAX_H)` crops the fullscreen blit's UV
+        // sampling down to just the active region's sub-rect of the
+        // PAL/SECAM-worst-case-sized texture, instead of stretching the WHOLE
+        // texture (including the NTSC case's never-written bottom rows) across
+        // the window — this is what made the display only show the correct
+        // picture in the top ~84% of the window (192/228) with undefined
+        // content below, and let a region change's tall PAL content sample the
+        // right sub-rect too. Starts at the NTSC default; `upload` keeps it in
+        // sync with `fb_w`/`fb_h`.
+        let uv_scale_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("rusty2600-uv-scale"),
+            contents: bytemuck::cast_slice(&[
+                VCS_W as f32 / MAX_W as f32,
+                VCS_H_NTSC as f32 / MAX_H as f32,
+            ]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("rusty2600-blit"),
@@ -207,6 +228,16 @@ impl Gfx {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -220,6 +251,10 @@ impl Gfx {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uv_scale_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -267,6 +302,7 @@ impl Gfx {
             surface,
             config,
             texture,
+            uv_scale_buffer,
             bind_group,
             pipeline,
             fb_w: VCS_W,
@@ -294,8 +330,15 @@ impl Gfx {
         if rgba.len() < (w as usize) * (h as usize) * 4 {
             return;
         }
-        self.fb_w = w;
-        self.fb_h = h;
+        if w != self.fb_w || h != self.fb_h {
+            self.fb_w = w;
+            self.fb_h = h;
+            self.queue.write_buffer(
+                &self.uv_scale_buffer,
+                0,
+                bytemuck::cast_slice(&[w as f32 / MAX_W as f32, h as f32 / MAX_H as f32]),
+            );
+        }
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.texture,
@@ -372,6 +415,7 @@ impl Gfx {
 const BLIT_WGSL: &str = r"
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var<uniform> uv_scale: vec2<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -391,7 +435,12 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    return textureSample(tex, samp, in.uv);
+    // `uv_scale` crops sampling to the active region's sub-rect of the
+    // PAL/SECAM-worst-case-sized texture (`fb_w/MAX_W, fb_h/MAX_H`), so a
+    // window always shows the whole active picture stretched to fill it,
+    // never the never-written padding rows below a shorter (e.g. NTSC)
+    // active region.
+    return textureSample(tex, samp, in.uv * uv_scale);
 }
 ";
 

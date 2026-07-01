@@ -19,7 +19,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use rusty2600_core::{System, detect};
+use rusty2600_core::{SaveState, System, detect};
 
 use crate::audio::AudioProducer;
 use crate::gfx::{MAX_H, MAX_W};
@@ -52,9 +52,16 @@ pub struct EmuCore {
     board_tier: Option<&'static str>,
     /// The lock-free audio ring producer (pushes samples to the frontend).
     pub audio_tx: Option<AudioProducer>,
-    /// Snapshots of the system state, stored before each frame is executed.
-    /// Used for rewind/run-ahead. Maintains ~600 frames (10 seconds) of history.
-    pub snapshots: std::collections::VecDeque<System>,
+    /// Serialized snapshots of the system state (via [`SaveState`]), stored before
+    /// each frame is executed. Used for rewind/run-ahead. Maintains ~600 frames
+    /// (10 seconds) of history.
+    ///
+    /// Kept as encoded bytes rather than raw `System` clones: `Cartridge`'s enum
+    /// size is pinned to its largest fixed-size variant (`BankF4`'s 32 KiB ROM
+    /// array) regardless of which board is actually loaded, so a raw `.clone()`
+    /// pays that cost for every game. Serializing through the real data shrinks
+    /// a 2K/4K-cart entry to its true size (see `docs/adr/0007-save-state-versioning.md`).
+    pub snapshots: std::collections::VecDeque<Vec<u8>>,
     /// State for the high-pass DC blocker.
     dc_blocker_x: f32,
     dc_blocker_y: f32,
@@ -113,9 +120,16 @@ impl EmuCore {
     }
 
     /// Rewinds the emulator state by one frame if history is available.
+    ///
+    /// A corrupt/malformed entry (should be unreachable — these are our own
+    /// just-encoded bytes) is treated as "no history available" rather than
+    /// panicking, matching the rest of the codebase's never-`unwrap`-on-data
+    /// convention.
     pub fn rewind(&mut self) {
-        if let Some(prev) = self.snapshots.pop_back() {
-            self.system = prev;
+        if let Some(bytes) = self.snapshots.pop_back()
+            && let Ok(state) = SaveState::decode(&bytes)
+        {
+            self.system = state.into_system();
         }
     }
 
@@ -165,7 +179,8 @@ impl EmuCore {
         }
 
         // Save snapshot before advancing state
-        self.snapshots.push_back(self.system.clone());
+        self.snapshots
+            .push_back(SaveState::capture(&self.system, 0).encode());
         if self.snapshots.len() > 600 {
             self.snapshots.pop_front();
         }
@@ -264,7 +279,8 @@ impl EmuCore {
         }
 
         // Save snapshot before advancing state
-        self.snapshots.push_back(self.system.clone());
+        self.snapshots
+            .push_back(SaveState::capture(&self.system, 0).encode());
         if self.snapshots.len() > 600 {
             self.snapshots.pop_front();
         }
@@ -443,5 +459,27 @@ mod tests {
         let before = core.system.color_clocks();
         core.step_frame(&tx, None);
         assert!(core.system.color_clocks() > before);
+    }
+
+    #[test]
+    fn rewind_restores_a_prior_color_clock_count() {
+        let (tx, _rx) = crate::present_buffer::channel();
+        let mut core = EmuCore::new(0);
+        core.rom_loaded = true;
+        core.step_frame(&tx, None);
+        let before_second_frame = core.system.color_clocks();
+        core.step_frame(&tx, None);
+        assert!(core.system.color_clocks() > before_second_frame);
+
+        core.rewind();
+        assert_eq!(core.system.color_clocks(), before_second_frame);
+    }
+
+    #[test]
+    fn rewind_with_no_history_is_a_no_op() {
+        let mut core = EmuCore::new(0);
+        let before = core.system.color_clocks();
+        core.rewind();
+        assert_eq!(core.system.color_clocks(), before);
     }
 }
