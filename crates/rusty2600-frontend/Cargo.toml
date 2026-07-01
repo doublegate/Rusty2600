@@ -118,6 +118,8 @@ web-sys = { version = "0.3.77", features = [
     "Event", "EventTarget", "KeyboardEvent", "HtmlInputElement", "FileReader",
     "FileList", "File",
     "CanvasRenderingContext2d", "ImageData", "Storage",
+    "AudioContext", "AudioDestinationNode", "AudioNode", "AudioBuffer",
+    "AudioBufferSourceNode", "AudioScheduledSourceNode",
 ] }
 
 [dev-dependencies]

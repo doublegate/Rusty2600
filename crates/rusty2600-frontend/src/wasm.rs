@@ -27,12 +27,87 @@ use wasm_bindgen::prelude::*;
 use web_sys::*;
 
 const ATARI_W: u32 = 160;
-const ATARI_H: u32 = 192; // Typical NTSC height
+const ATARI_H: u32 = 192; // NTSC active picture height (post-VBLANK crop).
+
+/// NTSC scanlines before the active picture starts (VSYNC + VBLANK) — the
+/// same crop `emu_thread::run_frame` applies natively. The TIA's raw
+/// `video_buffer` starts at scanline 0 (VSYNC), not the first visible line;
+/// skipping this offset was a real bug (fixed alongside real audio/keyboard
+/// input): the canvas was showing the top ~40 non-picture scanlines and
+/// cutting off the bottom of the actual picture.
+const NTSC_VBLANK_LINES: usize = 37;
+
+/// The TIA's audio sample rate: two samples pushed per scanline (color
+/// clocks 114 and 227 of each 228-color-clock line), so one sample every
+/// 114 color clocks of the 3.579545 MHz NTSC dot clock.
+const AUDIO_SAMPLE_RATE: f32 = 3_579_545.0 / 114.0;
 
 struct Emu {
     system: Option<System>,
     input: InputState,
     key_bindings: KeyBindings,
+    /// 1-pole DC-blocker state, matching `emu_thread`'s native audio path
+    /// exactly (same `r = 0.995` coefficient) so the browser's audio isn't
+    /// dominated by the TIA's large silence-level DC offset.
+    dc_blocker_x: f32,
+    dc_blocker_y: f32,
+    audio: Option<AudioSink>,
+}
+
+/// A minimal Web Audio buffered-playback sink: each frame's drained samples
+/// become one `AudioBuffer`, scheduled back-to-back via `AudioBufferSourceNode`
+/// (the standard gapless-queue pattern for streaming synthesized audio,
+/// avoiding the extra complexity of an `AudioWorklet` module for this small
+/// canvas-2D bootstrap). `AudioContext` requires a user gesture to start, so
+/// this is only constructed once the user picks a ROM file.
+struct AudioSink {
+    ctx: AudioContext,
+    /// The `AudioContext.currentTime` at which the next scheduled buffer
+    /// should start — kept running just ahead of playback so buffers queue
+    /// gaplessly instead of restarting the clock (and audibly clicking)
+    /// every frame.
+    next_start: f64,
+}
+
+impl AudioSink {
+    fn new() -> Result<Self, JsValue> {
+        let ctx = AudioContext::new()?;
+        let next_start = ctx.current_time();
+        Ok(Self { ctx, next_start })
+    }
+
+    /// Schedule one frame's worth of already-normalized samples for gapless
+    /// playback, resyncing to the context clock if playback has fallen more
+    /// than a fraction of a second behind (e.g. the tab was backgrounded).
+    // `samples` isn't mutated by this fn's own body — it's `&mut` only
+    // because `AudioBuffer::copy_to_channel`'s web-sys binding requires it
+    // (the underlying JS call reads, not writes, the slice).
+    #[allow(clippy::needless_pass_by_ref_mut)]
+    fn push_samples(&mut self, samples: &mut [f32]) -> Result<(), JsValue> {
+        if samples.is_empty() {
+            return Ok(());
+        }
+        let now = self.ctx.current_time();
+        if self.next_start < now - 0.25 {
+            self.next_start = now;
+        }
+
+        // A single frame's audio sample count (a few hundred at ~31.4 kHz /
+        // 60 fps) never approaches `u32::MAX`.
+        #[allow(clippy::cast_possible_truncation)]
+        let len = samples.len() as u32;
+
+        let buffer = self.ctx.create_buffer(1, len, AUDIO_SAMPLE_RATE)?;
+        buffer.copy_to_channel(samples, 0)?;
+
+        let src = self.ctx.create_buffer_source()?;
+        src.set_buffer(Some(&buffer));
+        src.connect_with_audio_node(&self.ctx.destination())?;
+        let start = self.next_start.max(now);
+        src.start_with_when(start)?;
+        self.next_start = start + f64::from(len) / f64::from(AUDIO_SAMPLE_RATE);
+        Ok(())
+    }
 }
 
 thread_local! {
@@ -40,6 +115,9 @@ thread_local! {
         system: None,
         input: InputState::default(),
         key_bindings: KeyBindings::default(),
+        dc_blocker_x: 0.0,
+        dc_blocker_y: 0.0,
+        audio: None,
     }));
 }
 
@@ -99,6 +177,21 @@ pub fn set_console_switch(name: &str, pressed: bool) {
 
 fn install_rom_loader(rom_input: &HtmlInputElement) {
     let on_change = Closure::<dyn FnMut(Event)>::new(move |ev: Event| {
+        // Construct (or resume) the `AudioContext` synchronously, right here
+        // in the file-input's `change` handler — the browser autoplay policy
+        // requires audio to start from a real user gesture, and that
+        // gesture window can close by the time the async `FileReader`
+        // callback below fires.
+        EMU.with(|emu| {
+            let mut emu = emu.borrow_mut();
+            if emu.audio.is_none() {
+                match AudioSink::new() {
+                    Ok(sink) => emu.audio = Some(sink),
+                    Err(e) => web_sys::console::warn_2(&"Rusty2600: audio init failed".into(), &e),
+                }
+            }
+        });
+
         let Some(input) = ev
             .target()
             .and_then(|t| t.dyn_into::<HtmlInputElement>().ok())
@@ -182,6 +275,15 @@ fn start_raf_loop(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
         EMU.with(|emu| {
             let mut emu = emu.borrow_mut();
             let input = emu.input;
+            // Copied out (not accessed through `emu.` directly) so the
+            // borrow checker sees them as disjoint from the `emu.system`
+            // borrow below — `RefMut`'s `DerefMut` indirection means Rust
+            // can't split-borrow `emu`'s fields the way it could a plain
+            // struct, so this mirrors the existing `let input = emu.input;`
+            // copy-out above.
+            let mut dc_x = emu.dc_blocker_x;
+            let mut dc_y = emu.dc_blocker_y;
+            let mut pending_audio: Vec<f32> = Vec::new();
             if let Some(ref mut system) = emu.system {
                 // Late-latch the current input state into the RIOT/TIA ports,
                 // same convention the native `emu_thread::run_frame` uses
@@ -212,8 +314,14 @@ fn start_raf_loop(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
                 let mut framebuffer = vec![0u8; (ATARI_W * ATARI_H * 4) as usize];
                 let video = &system.bus.tia.video_buffer;
                 for y in 0..ATARI_H as usize {
+                    // Skip VSYNC+VBLANK (the raw `video_buffer` starts at
+                    // scanline 0, not the first visible line) — same crop
+                    // `emu_thread::run_frame` applies natively. Without this,
+                    // the canvas showed the top ~40 non-picture scanlines and
+                    // cut off the bottom of the real picture.
+                    let sl = y + NTSC_VBLANK_LINES;
                     for x in 0..ATARI_W as usize {
-                        let src = y * 160 + x;
+                        let src = sl * 160 + x;
                         let color_idx = video.get(src).copied().unwrap_or(0);
                         let rgb = crate::palette::Region::Ntsc.table()[(color_idx >> 1) as usize];
                         let off = (y * ATARI_W as usize + x) * 4;
@@ -226,12 +334,35 @@ fn start_raf_loop(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
                     }
                 }
 
+                // Drain this frame's audio samples (DC-blocked + normalized),
+                // matching `emu_thread`'s native audio path exactly. Pushed to
+                // the Web Audio sink AFTER this `system` borrow ends (below),
+                // since the sink lives in a different `emu` field.
+                let samples = core::mem::take(&mut system.bus.tia.audio_buffer);
+                pending_audio.reserve(samples.len());
+                for s in samples {
+                    let normalized = (f32::from(s) / 15.0) - 1.0;
+                    let r = 0.995;
+                    let y = normalized - dc_x + r * dc_y;
+                    dc_x = normalized;
+                    dc_y = y;
+                    pending_audio.push(y);
+                }
+
                 let clamped = wasm_bindgen::Clamped(framebuffer.as_slice());
                 if let Ok(image_data) =
                     ImageData::new_with_u8_clamped_array_and_sh(clamped, ATARI_W, ATARI_H)
                 {
                     let _ = ctx.put_image_data(&image_data, 0.0, 0.0);
                 }
+            }
+            emu.dc_blocker_x = dc_x;
+            emu.dc_blocker_y = dc_y;
+            if !pending_audio.is_empty()
+                && let Some(sink) = emu.audio.as_mut()
+                && let Err(e) = sink.push_samples(&mut pending_audio)
+            {
+                web_sys::console::warn_2(&"Rusty2600: audio push failed".into(), &e);
             }
         });
 
