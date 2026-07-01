@@ -96,7 +96,8 @@ does UI + present. See `docs/frontend.md`.
 | `rusty2600-cart` | Bankswitch boards (tiered) | (independent) | no | on-cart only |
 | `rusty2600-core` | `Bus` + `System` scheduler | all of the above | draws from TIA | no `wram` |
 | `rusty2600-frontend` | egui shell (`std`, `unsafe`) | `rusty2600-core` | cpal sink | — |
-| `rusty2600-test-harness` | accuracy oracle + honesty gate | `rusty2600-core` | — | — |
+| `rusty2600-cheevos` | RetroAchievements FFI (`std`, `unsafe` — vendors `rcheevos`) | (independent; no chip dep) | — | — |
+| `rusty2600-test-harness` | accuracy oracle + honesty gate | `rusty2600-core`, `rusty2600-cpu` | — | — |
 
 ## Test ROMs are the spec
 

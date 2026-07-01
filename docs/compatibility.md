@@ -41,14 +41,16 @@ Out-of-scope for the initial cut (BestEffort or deferred): ARM-coprocessor carts
 
 ## TIA revisions
 
-**Resolved by `docs/adr/0005`** (research report §14, item 3): rather than a
-coarse revision enum, TIA variation is modeled as independent, named,
+**Design resolved by `docs/adr/0005`** (research report §14, item 3): rather
+than a coarse revision enum, TIA variation is modeled as independent, named,
 individually-toggleable hardware quirk flags (mirroring Gopher2600's eight —
 `LateVDELGRP0`/`LateVDELGRP1`/`LateRESPx`/`EarlyScancounter`/`LatePFx`/
 `LateColor`/`LostMOTCK`/`RESPxHBLANK`), default all-off (the idealized/
-most-common behavior). `LostMOTCK` is the Cosmic Ark starfield bug already
-tracked as a hard problem for v0.7.0/v0.8.x; the rest are implemented
-per-quirk as their own tickets, not as a batch.
+most-common behavior). **Implementation status:** none of the eight quirk
+flags are implemented yet as of v0.8.0 (the ADR fixes the design, not the
+code) — `LostMOTCK` (the Cosmic Ark starfield bug) remains a real, tracked
+hard problem with no assigned version; the rest are implemented per-quirk as
+their own tickets, not as a batch, when picked up.
 
 
 ---
