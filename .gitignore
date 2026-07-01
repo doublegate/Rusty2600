@@ -41,3 +41,12 @@ Cargo.lock.bak
 /tests/golden/ProcessorTests/
 /tests/roms/stella/
 /tests/roms/external/
+
+# 3 confirmed-commercial ROMs (Pac-Man 4K, Crazy Balloon, Lady Bug) were found
+# committed under tests/roms/test_suite/ and scrubbed from history + force-
+# pushed 2026-07-01; the other ~110 files in that dir are homebrew/freeware
+# (several with embedded AtariAge copyright/distribution strings) and stay.
+# Guard specifically against re-adding the 3 confirmed ones.
+/tests/roms/test_suite/Pac-Man 4K (NTSC).a26
+/tests/roms/test_suite/Crazy Balloon (NTSC).a26
+/tests/roms/test_suite/Lady Bug (NTSC).a26
