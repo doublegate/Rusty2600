@@ -6,6 +6,87 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-01 - "Cycle-Exact"
+
+Closes out the accuracy-hardening pass the plan scoped for this release:
+RIOT timer semantics, TIA collision-latch behavior, the audio model's real
+scope, two new ADRs resolving open research questions, the full SingleStepTests
+corpus wired into CI, Klaus's decimal-mode test wired for real, and a
+substantial CPU-crate cleanup/restructuring. One real bug found and fixed
+along the way in `tests/roms/test_suite/` (three commercial ROMs scrubbed
+from history); several deliberately-deferred findings logged as scoped
+future tickets rather than rushed.
+
+### Added
+
+- **RIOT (`T-0601-005`):** pinned the DirtyHairy/Stella read-after-write
+  timer model explicitly (`INTIM` one cycle after a `TIMxT` write already
+  reads `written_value - 1`, for every prescale); confirmed the
+  read/write-at-the-underflow-cycle question resolves structurally from the
+  scheduler's existing tick-then-access ordering.
+- **TIA collisions:** pinned continuous per-clock re-evaluation (not just
+  once per object-enable) and same-cycle `CXCLR` clearing. Found and logged
+  (not fixed — a real architecture change, `T-0601-007`) that collisions
+  occurring during HBLANK aren't currently detected, since the position/
+  pixel-coordinate model is 0..159-visible-window-relative, not full-scanline.
+- **ADR 0005:** TIA revision variation modeled as independent, named,
+  individually-toggleable hardware quirk flags (mirroring Gopher2600's
+  eight — `LostMOTCK` is the Cosmic Ark starfield bug already tracked for
+  v0.7.0/v0.8.x), not a coarse chip-revision enum.
+- **ADR 0006 + real fix:** power-on RIOT RAM and CPU `A`/`X`/`Y` are now
+  actually seeded from `System::new(seed)` via a small SplitMix64 mixer
+  (Stella's `ramrandom=<seed>` model) — `docs/riot.md`/`docs/cpu.md` already
+  claimed this was true; it wasn't, until now.
+- **Full SingleStepTests corpus in CI:** `.github/workflows/singlestep-full.yml`
+  (weekly cron + manual dispatch — ~700 MB across 233 opcodes, unsuitable
+  for the per-push path) downloads and audits the full ~10K-cases/opcode
+  upstream corpus.
+- **Klaus `6502_decimal_test` wired for real:** the binary was a 0-byte
+  placeholder; assembled it for real from the bundled `as65` 1.42 source.
+  `ERROR=0` — decimal-mode `ADC`/`SBC` is bit-exact against the exhaustive
+  256×256×2-carry-in reference. Both Klaus tests moved behind the
+  `test-roms` feature (previously unconditional despite the crate's stated
+  intent to gate them there).
+
+### Fixed / Changed
+
+- **`rusty2600-cpu` restructured (`T-0601-006`):** the crate carried a
+  second, entirely dead, never-compiled RustyNES-lineage CPU implementation
+  (`cpu.rs`/`bus.rs`/`disasm.rs`/`status.rs`, ~3,560 lines — no `mod`
+  declarations ever wired any of it in). Deleted outright. The one live
+  file (`lib.rs`) had only stale NES-flavored comment prose (no actual dead
+  code) attached to correct, needed universal 6502 behavior; rewrote four
+  comment blocks to describe the 2600-relevant case instead. Also split
+  the 2,172-line `lib.rs` into `status.rs`/`bus.rs`/`cpu.rs` + a thin
+  `lib.rs`, matching RustyNES's own live file layout. Zero regression
+  (full SingleStepTests audit + both Klaus tests re-verified).
+- **`release.yml`** was missing the same Linux system-deps step `ci.yml`
+  needed, and never actually uploaded a release asset on any platform —
+  fixed (shipped as v0.1.2).
+- **`pages.yml`** was an unimplemented stub (checkout + comments only) —
+  implemented for real: wasm demo (Trunk) + rustdoc, one combined artifact,
+  deployed via the standard GitHub Pages actions.
+- Default branch renamed `master` → `main`.
+
+### Removed
+
+- **Three commercial ROM dumps** (`Pac-Man 4K`, `Crazy Balloon`, `Lady Bug`)
+  found committed under `tests/roms/test_suite/` — scrubbed from all git
+  history via `git-filter-repo` and force-pushed (a real violation of this
+  project's own "never commit commercial ROMs" rule). ~110 other files in
+  that directory are legitimate homebrew/freeware (several carry embedded
+  AtariAge copyright/distribution strings) and were kept.
+
+### Notes
+
+- **Deliberately deferred, not silently dropped:** HBLANK-region TIA
+  collisions (`T-0601-007`); the TIA audio model needs a real
+  rearchitecture around Stella's two-counter pulse/noise feedback network
+  and fixed-position two-phase clocking, not a two-mode patch (see
+  `ref-docs/2026-07-01-supplemental-audio-hardware-model.md` and
+  `to-dos/phase-3-audio/sprint-2-hardware-accurate-model.md`). Both are
+  real, scoped, tracked work — not overlooked.
+
 ## [0.1.2] - 2026-07-01
 
 Patch release, primarily to ship a working release build: v0.1.1's

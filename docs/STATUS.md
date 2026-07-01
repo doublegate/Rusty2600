@@ -5,15 +5,17 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** unreleased (v0.1.1 pending — Sprint 0 truth pass; see
-`to-dos/ROADMAP.md` for the full v0.1.1→v1.0.0 version-to-phase plan). The
-Phase 1-4 core components (CPU, TIA video/audio, RIOT, Bus, Core/Curated cart
-boards implemented so far) are real and tested (74 tests passing
-workspace-wide, `cargo test --workspace`). Phase 5 Frontend (rendering,
+**Current release:** v0.2.0 "Cycle-Exact" (see `to-dos/ROADMAP.md` for the
+full v0.1.1→v1.0.0 version-to-phase plan and `CHANGELOG.md`'s `[0.2.0]` entry
+for the complete list). RIOT read-after-write timing, TIA collision-latch
+continuity, seeded power-on RAM/registers (ADR 0006), TIA revision modeling
+(ADR 0005), the full SingleStepTests corpus + Klaus decimal test wired into
+CI, and a substantial CPU-crate cleanup (a second, entirely dead RustyNES-
+lineage implementation removed; the live code split into `status.rs`/
+`bus.rs`/`cpu.rs`) all landed this release. Phase 5 Frontend (rendering,
 pacing, input, WASM/thread support) has a working synchronous AND dedicated
-emu-thread path (`emu-thread` default-on as of this release); its debugger
-panels are still TODO stubs (targeted for v0.5.0). This entry replaces an
-earlier draft that under-reported the actual pass counts below.
+emu-thread path (`emu-thread` default-on); its debugger panels are still
+TODO stubs (targeted for v0.5.0).
 
 ## Subsystem progress
 
@@ -59,12 +61,17 @@ The F8 Core-vs-Curated tier discrepancy (`T-0401-008`) is **resolved**:
 
 ## Version policy
 
-Start at **v0.1.0**; additive features behind default-off flags keep
-shipped/native/`no_std`/wasm byte-identical. Drive the accuracy battery to ≥90%
-by v1.0, 100% the goal; hard residuals are **deferred and documented**, never
-point-fixed (and only the ADR 0002 fractional-timebase refactor — **likely
-unneeded** for the 2600 — would close sub-color-clock residuals). Do **NOT**
-import RustyNES engine-lineage "v2.0" anchors as releases (the versioning trap).
+Additive features behind default-off flags keep shipped/native/`no_std`/wasm
+byte-identical. Drive the accuracy battery to ≥90% by v1.0, 100% the goal;
+hard residuals are **deferred and documented**, never point-fixed (and only
+the ADR 0002 fractional-timebase refactor — **likely unneeded** for the
+2600 — would close sub-color-clock residuals). Do **NOT** import RustyNES
+engine-lineage "v2.0" anchors as releases (the versioning trap). Bump the
+workspace + every crate's `Cargo.toml` version to match BEFORE tagging and
+pushing a release (never after); every GitHub release's notes are the full,
+comprehensive `CHANGELOG.md` entry for that version via `--notes-file`, not
+an abbreviated tag-annotation summary. See `to-dos/ROADMAP.md` for the full
+v0.1.1→v1.0.0 version-to-phase mapping.
 
 
 ---

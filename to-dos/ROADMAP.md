@@ -7,7 +7,13 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current phase: Phase 5 (frontend).** Phase 0 (foundation) through Phase 4 (carts / mappers) are complete. The workspace compiles as fully wired components with the lockstep scheduler, the seeded determinism phase, the Core/Curated cart boards, and the honesty gate already live. We are now working on filling out the frontend egui shell and wiring it perfectly to the core in Phase 5.
+**Current release: v0.2.0 "Cycle-Exact".** Phase 0 (foundation) through Phase 4
+(carts/mappers, Core+partial-Curated boards) are complete; Phase 5 (frontend)
+is functionally complete except the real debugger (`debug-hooks`, targeted
+v0.5.0); Phase 6 (accuracy-to-100) is actively underway (RIOT timing, TIA
+collision continuity, seeded power-on state, the full SingleStepTests
+corpus, and Klaus's decimal test all landed in v0.2.0 — see `CHANGELOG.md`).
+See `docs/STATUS.md` for the authoritative per-suite/per-chip state.
 
 ## The phase line
 
@@ -34,12 +40,31 @@ messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 
 ## Release line
 
-- **v1.0.0** — production cut: Phases 0–6 complete (CPU 0-diff, beam-racing video,
-  TIA audio, Core/Curated boards, accuracy battery ≥90% → 100% goal),
-  README/CHANGELOG/docs/STATUS in sync, release matrix + Pages green.
-- **Beyond v1.0** — Phases 7–8 breadth/reach; and the ADR 0002 fractional-timebase
-  refactor **only if** a hard residual warrants it (for the 2600, **likely never**
-  — integer color-clock resolution is the machine's native granularity).
+Iterative `v0.x.0` releases (each a real GitHub tag + release, `v0.x.y` for
+post-`.0` fixes), extending the phases above with a debugger and
+RetroAchievements pulled forward into the v1.0.0 gate, and cart breadth
+pushed toward Stella-adjacent parity rather than stopping at the original
+Core/Curated set:
+
+| Version | Content |
+|---|---|
+| v0.1.1 / v0.1.2 | Truth-pass (docs/code reconciliation) + release-CI fixes |
+| **v0.2.0 "Cycle-Exact"** (current) | RIOT/TIA accuracy hardening, ADRs 0005/0006, full SingleStepTests + Klaus decimal in CI, CPU-crate cleanup |
+| v0.3.0 | Curated-tier cart schemes finished (CV/FA/Superchip/DPC/E7) |
+| v0.4.0–v0.4.x | BestEffort cart breadth toward Stella-adjacent parity (staged patch train) |
+| v0.5.0 | Real `debug-hooks` debugger; performance benches populated |
+| v0.6.0 | RetroAchievements (`rusty2600-cheevos`) |
+| v0.7.0 | The accuracy battery itself stood up + CI regression gate |
+| v0.8.x | Battery-driven hardening, commercial-ROM regression oracle, doc sync |
+| **v1.0.0** | Accuracy battery ≥90% (100% goal), debugger + RA shipped, Stella-adjacent cart breadth, green release matrix |
+
+Explicit v1.0.0 non-requirements: netplay, TAS tooling, Lua scripting, HD
+texture packs, shader stacks, mobile builds, and RA server-side allowlisting
+(the integration working is the bar, not third-party approval) — all
+Beyond-v1.0 (Phase 7 residual breadth / Phase 8 reach), plus the ADR 0002
+fractional-timebase refactor **only if** a hard residual ever warrants it
+(for the 2600, **likely never** — integer color-clock resolution is the
+machine's native granularity).
 
 ## How the phases map to the architecture
 
