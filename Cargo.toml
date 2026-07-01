@@ -12,10 +12,11 @@ members = [
     "crates/rusty2600-gfx-shaders",
     "crates/rusty2600-test-harness",
     "crates/rusty2600-script",
+    "crates/rusty2600-netplay",
 ]
 
 [workspace.package]
-version = "1.9.0"
+version = "1.10.0"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"

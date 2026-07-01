@@ -1,0 +1,26 @@
+[package]
+name = "rusty2600-netplay"
+description = "2-player rollback netplay for Rusty2600 (native UDP transport, wraps ggrs)"
+version = "1.10.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+# std-only, native-only (UDP sockets): not part of the no_std gate build, and
+# not linked from rusty2600-frontend yet (frontend wiring is a v1.10.x
+# follow-up, see the crate-level docs). Depends on rusty2600-core (System,
+# SaveState, MovieFrame) — never the reverse, matching the workspace's
+# one-directional crate graph.
+[lints]
+workspace = true
+
+[dependencies]
+rusty2600-core = { path = "../rusty2600-core", version = "1.10.0" }
+ggrs = "0.13"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+rusty2600-cart = { path = "../rusty2600-cart", version = "1.10.0" }

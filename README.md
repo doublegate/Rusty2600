@@ -97,6 +97,7 @@ look different, they visibly break.
 | **TAS Movies** *(v1.7.0)* | A `.r26m` movie format (`rusty2600-core::movie`) — a seeded power-on or embedded save-state start point plus a per-frame input log — and a TAStudio-lite piano-roll debugger panel with jump-to-frame and branch points |
 | **Accuracy Battery** | A real `AccuracyScore`-gated battery (`rusty2600-test-harness`), CI-enforced, growing honestly rather than claiming an inflated pass rate. *(v1.8.0)* `GoldenLogDiffer` now bundles a genuine externally-oracled golden CPU trace (20,000 instructions vs. an independent Gopher2600 run) |
 | **Lua Scripting Engine** *(v1.9.0)* | A real, tested `rusty2600-script` crate (`mlua` native backend, off by default): a deliberately-smaller-than-RustyNES `emu` API over a host-agnostic `ScriptBus` trait, gated by a `WritesLocked` determinism lock. Engine only in this release — not yet wired into the frontend |
+| **Rollback Netplay** *(v1.10.0)* | A real, tested `rusty2600-netplay` crate: 2-player rollback netplay wrapping `ggrs` (GGPO-style), `resync()` built on the existing save-state substrate, input-delay/max-prediction-window matching GGPO convention, a genuine rollback-desync test. Session crate only — direct-IP/LAN UDP transport, not yet wired into the frontend |
 | **WebAssembly** | Runs in-browser via `wasm-winit` (full winit/wgpu/egui) or a lightweight `wasm-canvas` embed mode |
 | **Pure Rust** | `winit` + `wgpu` + `cpal` + `egui` frontend; a safe `no_std + alloc` chip stack behind a one-directional crate graph |
 
@@ -104,8 +105,8 @@ Planned via the iterative `v1.x.0` line toward `v2.0.0` — see
 [`to-dos/ROADMAP.md`](to-dos/ROADMAP.md) for the full plan, and
 [`CHANGELOG.md`](CHANGELOG.md) for exactly what's shipped in each release:
 closing the remaining 2 bankswitch schemes (AR/Supercharger, the ARM-driven
-DPC+/CDF/CDFJ/CDFJ+ family), wiring Lua scripting into the frontend,
-rollback netplay, and Android/iOS builds. The sprite-pack data model
+DPC+/CDF/CDFJ/CDFJ+ family), wiring Lua scripting and rollback netplay
+into the frontend, and Android/iOS builds. The sprite-pack data model
 (`sprite_pack`, `hd-pack` feature) shipped in v1.4.0; its live rendering
 splice awaits a TIA
 object-ID mask. The `.r26m` movie format and
@@ -330,6 +331,7 @@ numbers as deltas across changes, not absolute cross-machine guarantees.
 | [`docs/thumb.md`](docs/thumb.md) | The ARM7TDMI Thumb-1 interpreter (`rusty2600-thumb`): architecture, scope, deviations from the Go reference |
 | [`docs/movie.md`](docs/movie.md) | The `.r26m` TAS movie format and TAStudio-lite panel: architecture and scope |
 | [`docs/scripting.md`](docs/scripting.md) | The Lua scripting engine (`rusty2600-script`): the `emu` API, `ScriptBus`, determinism gating, scope |
+| [`docs/netplay.md`](docs/netplay.md) | Rollback netplay (`rusty2600-netplay`): the `ggrs` integration, scope, the rollback-desync test |
 | [`docs/frontend.md`](docs/frontend.md) | The frontend crate's shape and behavior |
 | [`docs/testing-strategy.md`](docs/testing-strategy.md) | The layered accuracy-oracle methodology |
 | [`docs/performance.md`](docs/performance.md) | Measured Criterion baselines and profiling guidance |

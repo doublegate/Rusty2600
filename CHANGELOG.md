@@ -6,6 +6,75 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-07-01 - "Rollback"
+
+A new `rusty2600-netplay` crate: 2-player rollback netplay wrapping `ggrs`
+(GGPO-style), not a from-scratch reimplementation. The session crate
+lands in this release; frontend wiring is an explicitly-scoped follow-up.
+
+### Added
+
+- **`rusty2600-netplay`** (new crate): 2-player-only rollback netplay,
+  a deliberate scope cut vs. RustyNES's own 2-4-player mesh — real 2600
+  hardware rarely supported more than 2 controllers, so a fully-connected
+  N-peer mesh would be pure RustyNES-parity cost with little real payoff.
+  - `PortInput` — one player's joystick contribution (four directions +
+    fire). Deliberately NOT `rusty2600_core::MovieFrame` as `ggrs::Config::Input`:
+    `MovieFrame` packs BOTH joystick ports together (a whole-machine-state
+    record), but GGRS's input type is fundamentally per-player; using
+    `MovieFrame` as-is would let one player's "input" silently smuggle the
+    other's port bits.
+  - `RustyConfig` — the `ggrs::Config` binding (`Input = PortInput`,
+    `State = Vec<u8>` (a `SaveState`-encoded blob), `Address = SocketAddr`).
+  - `RollbackSession` — wraps `ggrs::P2PSession`, using GGRS's own
+    built-in `UdpNonBlockingSocket` (no custom transport implementation
+    needed). `DEFAULT_INPUT_DELAY = 2` / `DEFAULT_MAX_PREDICTION_WINDOW = 8`
+    match GGPO convention exactly.
+  - `resync()` reuses `[1.1.0]`'s `SaveState` capture/restore directly —
+    no new determinism infrastructure needed, per ADR 0004's own citation
+    of save-states as "the basis for rewind, run-ahead, and netplay
+    rollback."
+  - **A genuine rollback-desync test**, not a decorative one: uses
+    `ggrs::SyncTestSession` (GGRS's own built-in determinism-testing
+    session) driving a real `rusty2600_core::System` loaded with a
+    synthetic 4K ROM whose state visibly depends on joystick input, across
+    12 frames of varied two-player input. `SyncTestSession` internally
+    saves, advances, rewinds, re-simulates, and panics on any checksum
+    mismatch — reaching the end without a panic is the test's actual pass
+    condition. Validated for real: an initial version using a bare
+    `System::new()` with no cartridge passed vacuously; fixed by adding the
+    input-reactive ROM and a real checksum, then re-confirmed by
+    deliberately reintroducing the same bug and watching the test
+    correctly fail.
+
+### Notes
+
+- **This release lands the session crate only.** `rusty2600-netplay` is
+  not yet wired into `rusty2600-frontend`: no host/join-game menu, no live
+  per-frame input capture feeding a running session. A `v1.10.x`
+  follow-up does that wiring — the same pattern `rusty2600-thumb`
+  (`[1.6.0]`) and `rusty2600-script` (`[1.9.0]`) already established. See
+  `docs/netplay.md` for the full scope.
+- **Direct-IP/LAN connection only this release** — STUN/hole-punch NAT
+  traversal for real internet play is deferred to `v1.10.x`: implementing
+  and verifying real NAT traversal needs a genuine external peer no
+  sandbox can provide, and is substantial, separable work from the
+  rollback session logic itself.
+- **WebRTC browser transport is also deferred to `v1.10.x`** per the
+  original plan — this crate is native-only.
+- Console switches (Select/Reset/Color/Difficulty) and paddles are not
+  modeled per-player this pass — there's no natural "which peer owns
+  this" mapping for shared machine-level switches in a 2-player session.
+  A session runs with switches idle and paddles centered until revisited.
+- A real stack-overflow bug was found and fixed while building the
+  desync test: `rusty2600_cart::Cartridge`'s enum is sized to its largest
+  variant (`BankF4`'s inline 32 KiB ROM array), so several nested
+  `System::clone()`s (inside GGRS's own rollback recursion) overflowed the
+  default ~2 MiB test-thread stack. The test now runs on an explicit
+  32 MiB-stack thread.
+- 262 tests passing workspace-wide (+6 for the new `rusty2600-netplay`
+  tests), up from 256 at `[1.9.0]`; 266 with `--features test-roms`.
+
 ## [1.9.0] - 2026-07-01 - "Scriptable"
 
 A new `rusty2600-script` crate: a real, tested Lua scripting engine, off

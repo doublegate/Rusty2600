@@ -5,9 +5,30 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v1.9.0 "Scriptable" — the ninth release of the
+**Current release:** v1.10.0 "Rollback" — the tenth release of the
 `v1.1.0 -> v2.0.0` RustyNES-parity line (see `to-dos/ROADMAP.md` for the
-full plan and `CHANGELOG.md`'s `[1.9.0]` entry). Adds a new
+full plan and `CHANGELOG.md`'s `[1.10.0]` entry). Adds a new
+`rusty2600-netplay` crate: 2-player rollback netplay wrapping the mature
+`ggrs` (GGPO-style) rollback engine rather than reimplementing it from
+scratch, over GGRS's own built-in UDP transport (direct-IP/LAN only this
+release). Rollback's `resync()` loop reuses `[1.1.0]`'s `SaveState`
+substrate directly — no new determinism infrastructure needed, per ADR
+0004's own citation of save-states as "the basis for rewind, run-ahead,
+and netplay rollback." Input-delay (2 frames) and max-prediction-window
+(8 frames) defaults match GGPO convention exactly. A genuine
+rollback-desync test (`ggrs::SyncTestSession` driving a real `System` with
+a synthetic input-reactive ROM across varied two-player input,
+`SyncTestSession` panicking on any checksum mismatch) proves the
+save/restore/resimulate path is correct — validated for real by
+deliberately reintroducing a bug and confirming the test catches it.
+**This release lands the session crate only** — not yet wired into
+`rusty2600-frontend` (no host/join-game menu, no live input capture); a
+`v1.10.x` follow-up does that wiring plus STUN/hole-punch NAT traversal
+and the WebRTC browser transport, the same pattern `rusty2600-thumb`
+(`[1.6.0]`) and `rusty2600-script` (`[1.9.0]`) already established. See
+`docs/netplay.md` for the full architecture and scope.
+
+Earlier in the line: `v1.9.0 "Scriptable"` added a new
 `rusty2600-script` crate: a real, tested Lua scripting engine (`mlua`
 native backend, off by default) exposing a deliberately-smaller-than-
 RustyNES `emu` table (`peek`/`poke`/`cpu`/`onFrame`/`setJoystick`/
@@ -26,93 +47,12 @@ mature than `mlua`; the `emu`/`ScriptBus` design is backend-agnostic so
 this stays a scoped follow-up, not a rewrite). See `docs/scripting.md`
 for the full architecture and scope.
 
-Earlier in the line: `v1.8.0 "Oracle"` closed `T-0602-007`:
-`GoldenLogDiffer` now bundles a genuine externally-oracled golden CPU
-trace (`tests/golden/klaus_functional_test_gopher2600.trace`, 20,000
-retired instructions of the Klaus functional test, captured by running
-Gopher2600's `hardware/cpu` package directly against the identical CC0
-ROM). `GoldenLogDiffer::bundled()` reports `true`;
-`tests/golden_log_test.rs` confirms `first_divergence() == None` — two
-independently-implemented 6502 cores agreeing register-for-register and
-cycle-for-cycle, real external validation distinct from Klaus's own
-internal pass/fail trap. `T-0602-006` (a TIA-timing test-ROM corpus for
-Layer 3's `run_until_complete`) stays honestly a stub: researched again
-this release, confirming no freely-redistributable 2600-specific TIA/RIOT
-test-ROM corpus exists (Gopher2600's own README makes the same admission;
-the Atari Diagnostic Test Cartridge 2.0 is official service-center
-software, not redistributable) — a real, permanent scope boundary, not a
-gap to close by more effort. TIA/RIOT accuracy work continues via the
-differential-oracle method against specific known-hard titles, the same
-technique that found the real Frogger WSYNC-jitter and Pitfall II
-RIOT-timer bugs. See `docs/testing-strategy.md` for the full detail.
-
-Earlier still: `v1.7.0 "Chronicle"` added a `.r26m` TAS movie
-format (`rusty2600-core::movie`, `no_std`-compatible): a start point
-(fresh seeded power-on per ADR 0006, or an embedded save-state blob — a
-branch point is exactly this) plus a per-frame `MovieFrame` input log
-(joystick directions/fire, four paddle positions + fire, console
-switches — the latter per-frame since they can change mid-run on real
-hardware). Deliberately mirrors `save_state.rs`'s header conventions
-(magic, format version, `rom_tag`, `postcard`-encoded, typed errors)
-without depending on it beyond reusing `SaveState`'s own encoding for
-embedded branch points. Also adds a TAStudio-lite piano-roll panel
-(`debugger/tastudio_panel.rs`, click-to-toggle editing, jump-to-frame via
-the existing `[1.1.0]` rewind ring, branch points as separate `.r26m`
-files) plus two cheap generic riders: `debugger/access_counter.rs`
-(per-address write-count heatmap) and `debugger/memory_compare_panel.rs`
-(byte-diff two memory snapshots). **Live per-frame recording is not yet
-wired into `EmuCore::run_frame`'s hot path** — the format, panel state
-machine, and manual jump/branch actions are real and tested, but nothing
-auto-appends a frame every tick yet (the same honest-partial-landing call
-`[1.4.0]`'s sprite-pack data model made). See `docs/movie.md` for the full
-architecture and scope.
-
-Earlier still: `v1.6.0 "Coprocessor"` added a new `rusty2600-thumb`
-crate: a real ARM7TDMI Thumb-1 interpreter ported from Gopher2600's Go
-implementation (`hardware/memory/cartridge/arm/`), not Stella's C++
-`Thumbulator` — registers, N/Z/C/V status flags, the `ThumbMemory` trait
-seam, an approximate N/S/I cycle + MAM prefetch-latch timing model, and
-all 19 Thumb-1 instruction-format classes, with 27 hand-authored
-conformance tests. That release landed the interpreter core only — it is
-still **not yet wired into any `rusty2600-cart` `Board`/`Cartridge`
-variant**; the `v1.6.x` patch train wires DPC+, then CDF, then CDFJ/CDFJ+
-into `detect()` one family at a time (`T-0401-006`), closing the bankswitch
-catalogue to 24 of 25 (AR/Supercharger remains its own separately-scoped
-follow-up, per `[1.5.0]`). See `docs/thumb.md` for the full architecture,
-scope, and deviations from the Go reference.
-
-Earlier still: `v1.5.0 "Full Catalog"` implemented `Bank4A50`
-(`T-0402-014`, BestEffort): three independently relocatable ROM/RAM
-segments (2K/1.5K/256B) plus a fixed 256B trailer, driven by a
-previous-access-gated hotspot state machine ported faithfully from
-Stella's `Cartridge4A50::checkBankSwitch`, wired into `detect()`'s 64K/128K
-size branches via `is_probably_4a50()` (the NMI-vector `$4A50` signature,
-falling back to a reset-vector-targets-a-`NOP $6Exx`/`$6Fxx` heuristic) —
-closing the catalogue to 23 of 25 schemes. AR/Supercharger (`T-0402-015`)
-was deliberately NOT attempted in that release: even its "fast-load"
-(ROM-image-only) mode needs a bank-config decode, a delayed-write protocol
-keyed on 5 DISTINCT bus accesses (this crate has no equivalent of Stella's
-global CPU-side access counter), and a synthesized dummy 6502 BIOS stub
-whose exact bytes haven't been sourced — substantially larger than every
-other scheme in the catalogue, so it stays its own separately-scoped
-follow-up. `v1.4.0 "Signal"` added a composable post-process
-shader stack (new `rusty2600-gfx-shaders` crate +
-`rusty2600-frontend::shader_pass`: `CrtScanline` + an honestly-labeled
-`CompositeArtifact` approximation, toggleable from Settings, empty-stack
-default preserving the byte-identical build), plus the data-model half of
-the 2600-appropriate HD-pack analog (`sprite_pack`, `hd-pack` feature:
-replacement bitmaps keyed by `GRPx`/`NUSIZx`) — its live rendering splice
-is honestly deferred pending a TIA object-ID mask, a genuine architectural
-prerequisite not yet built. `v1.3.0 "Scope"` added debugger depth (a
-watch/conditional-breakpoint expression engine, a call stack, a TIA
-write-scatter viewer, a player/missile/ball panel) plus the RetroAchievements
-achievement-list/login/toast UI (`T-0802-005`, DONE). `v1.2.0 "Foresight"`
-shipped run-ahead built on `[1.1.0]`'s save-state snapshot primitives,
-fixing a real `Tia::scanline` `u16` overflow panic along the way. `v1.1.0
-"Persistence"` shipped save-states (`rusty2600-core::save_state`, ADR 0007)
-and a rewind rework, plus fixes for three real frontend bugs found during
-manual verification. See `CHANGELOG.md`'s `[1.1.0]`-`[1.3.0]` entries for
-the full detail. The full 8-scheme Curated cart tier
+Full release-by-release detail for `[1.1.0]` through `[1.8.0]` (save-states,
+run-ahead, debugger depth, the shader stack, `Bank4A50`, the
+`rusty2600-thumb` ARM interpreter, `.r26m` movies, and the golden CPU
+trace) lives in `CHANGELOG.md` — not duplicated here to avoid this section
+drifting out of sync with the authoritative per-release record as the
+line grows. The full 8-scheme Curated cart tier
 (v0.3.0) plus 12 BestEffort schemes (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC,
 BF/BFSC, UA, 0840, FE, SB, X07) are implemented and wired into automatic
 `detect()` — 22 of the 25 schemes in the LOCAL catalogue (`docs/cart.md`).
@@ -174,6 +114,7 @@ ROM. See `docs/riot.md` for the full writeup;
 | `rusty2600-cheevos` | RetroAchievements FFI | Vendors the `rcheevos` C library (MIT); safe `RaClient` wrapper adapted from RustyNES's own `rustynes-cheevos` (console-agnostic except the memory map + one console-ID constant). `ra_addr_to_riot` maps RA's flat address space directly onto the RIOT's 128 bytes of RAM. Native-only (`#![cfg(not(target_arch = "wasm32"))]`); 7 tests passing, including real FFI smoke tests (v0.7.0). |
 | `rusty2600-test-harness` | accuracy oracle | Real as of v0.8.0: `Sentinel`/`run_cpu_until_sentinel` (the shared Layer 2 runner both bundled Klaus oracles now use), a real `AccuracyScore`-gated `tests/accuracy_battery.rs` (2/2, 100%), and a tolerance-aware `SnapComparator`. **`T-0602-007` closed (v1.8.0)**: `GoldenLogDiffer` now bundles a genuine externally-oracled golden CPU trace (`tests/golden/klaus_functional_test_gopher2600.trace`, 20,000 instructions captured from Gopher2600's `hardware/cpu` package) — `bundled()` reports `true`, `tests/golden_log_test.rs` confirms `first_divergence() == None` against Rusty2600's own CPU. `run_until_complete` (Layer 3, full-`System`) remains — and stays — a stub: `T-0602-006` is a permanent scope boundary, no freely-redistributable TIA/RIOT test-ROM corpus exists (researched again this release; see `docs/testing-strategy.md`). |
 | `rusty2600-script` | Lua scripting engine | New in v1.9.0: `mlua` native backend (off by default), a deliberately-smaller-than-RustyNES `emu` table (`peek`/`poke`/`cpu`/`onFrame`/`setJoystick`/`setConsoleSwitch`/`drawText`/`drawRect`/`drawPixel`/`pause`/`saveState`/`loadState`) over a host-agnostic `ScriptBus` trait, gated by `WritesLocked` (folds RetroAchievements hardcore mode today; `.r26m` movie/netplay locks are documented future additions, not stub fields). 18 tests passing. `std`-only, `unsafe`-permitted (the one exception besides `rusty2600-cheevos`, both for C-FFI reasons). **Not yet wired into `rusty2600-frontend`** — no `scripting` feature flag, no live `ScriptBus` impl, no overlay compositing yet; see `docs/scripting.md` for the full scope and the `v1.9.x` wiring plan. A `piccolo` wasm-fallback backend is also deferred. |
+| `rusty2600-netplay` | Rollback netplay | New in v1.10.0: 2-player rollback netplay wrapping `ggrs` (GGPO-style), not a from-scratch reimplementation — `resync()` reuses `[1.1.0]`'s `SaveState` substrate directly. `PortInput` (per-player, distinct from `MovieFrame`'s whole-machine packing) + `RustyConfig` (the `ggrs::Config` binding) + `RollbackSession` (wrapping `ggrs::P2PSession` over GGRS's own built-in UDP transport, direct-IP/LAN only). Input-delay=2/max-prediction-window=8 match GGPO convention. A genuine rollback-desync test (`ggrs::SyncTestSession` + a synthetic input-reactive ROM, validated by deliberately reintroducing a bug and confirming it's caught) proves the save/restore/resimulate path is correct. 6 tests passing. **Not yet wired into `rusty2600-frontend`** — no host/join-game menu, no live input capture; STUN/hole-punch NAT traversal and the WebRTC transport are also deferred to `v1.10.x`. See `docs/netplay.md` for the full scope. |
 
 ## Accuracy (per-suite pass counts)
 
@@ -187,8 +128,8 @@ ROM. See `docs/riot.md` for the full writeup;
 | TIA timing / draw ROMs | test-ROM corpus | permanently unavailable (`T-0602-006`) — no freely-redistributable corpus exists; see `docs/testing-strategy.md` |
 | Stella regression corpus | test-ROM corpus | same as above (`T-0602-006`) |
 | **Accuracy battery (AccuracyCoin-equivalent)** | battery | **2 / 2 (100%)** — stood up v0.8.0, `tests/accuracy_battery.rs`, CI-enforced via the existing `--features test-roms` step, ≥90% v1.0 threshold |
-| **Workspace test suite** | `cargo test --workspace` | **256 / 256** (+18 vs. v1.8.0 for the new `rusty2600-script` engine tests) |
-| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **260 / 260** |
+| **Workspace test suite** | `cargo test --workspace` | **262 / 262** (+6 vs. v1.9.0 for the new `rusty2600-netplay` rollback-desync + unit tests) |
+| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **266 / 266** |
 | `rusty2600-frontend` (`--features hd-pack`) | `cargo test -p rusty2600-frontend --features hd-pack` | **70 / 70** (+3 sprite-pack loader tests; `hd-pack` off by default, not part of the two workspace-wide counts above) |
 
 ## Board / mapper matrix
