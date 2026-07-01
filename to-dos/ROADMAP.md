@@ -7,20 +7,22 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current release: v1.3.0 "Scope"** — the third release of the
+**Current release: v1.4.0 "Signal"** — the fourth release of the
 `v1.1.0 -> v2.0.0` RustyNES-parity line (see "Version -> Phase mapping
-(v1.1.0 -> v2.0.0)" below for the full plan). Adds debugger depth (a
-watch/conditional-breakpoint expression engine, a call stack, a TIA
-write-scatter viewer, a player/missile/ball panel) plus the
-long-deferred RetroAchievements achievement-list/login/toast UI
-(`T-0802-005`, now DONE) — see `CHANGELOG.md`'s `[1.3.0]` entry. Earlier:
+(v1.1.0 -> v2.0.0)" below for the full plan). Adds a composable
+post-process shader stack (new `rusty2600-gfx-shaders` crate,
+`CrtScanline` + an honestly-labeled `CompositeArtifact` approximation,
+toggleable from Settings, empty-stack default byte-identical) plus the
+data-model half of the 2600-appropriate HD-pack analog (`sprite_pack`,
+`hd-pack` feature — its live rendering splice is honestly deferred pending
+a TIA object-ID mask) — see `CHANGELOG.md`'s `[1.4.0]` entry. Earlier:
+`v1.3.0 "Scope"` added debugger depth plus the long-deferred
+RetroAchievements achievement-list/login/toast UI (`T-0802-005`, DONE);
 `v1.2.0 "Foresight"` added run-ahead built on `[1.1.0]`'s save-state
 snapshot primitives; `v1.1.0 "Persistence"` shipped save-states
 (`rusty2600-core::save_state`, ADR 0007) + a rewind rework, plus fixes for
-three real frontend bugs found during manual verification (a rapid
-gameplay/debugger flicker, a window that didn't display the whole active
-picture, and Settings changes that never persisted) — see `CHANGELOG.md`'s
-`[1.1.0]`/`[1.2.0]` entries. Phase 0 (foundation) through the
+three real frontend bugs found during manual verification — see
+`CHANGELOG.md`'s `[1.1.0]`-`[1.3.0]` entries. Phase 0 (foundation) through the
 full Curated-tier board set (Phase 4) are complete. Phase 7 (BestEffort
 breadth) has landed 12 of the ~15-scheme BestEffort long tail cataloged in
 `docs/cart.md` (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA, 0840, FE, SB,
@@ -124,8 +126,8 @@ the `v0.x.0` line.
 |---|---|---|
 | v1.1.0 "Persistence" | Save-states (`rusty2600-core::save_state`, ADR 0007) + a rewind rework reusing the same serialized format; three real frontend bugs fixed (gameplay/debugger flicker, window sizing, Settings persistence) |
 | v1.2.0 "Foresight" | Run-ahead (`rusty2600-frontend::runahead`, off by default, `0..=4` frames), built on v1.1.0's snapshot/restore primitives; a `Tia::scanline` overflow panic fixed along the way |
-| **v1.3.0 "Scope"** (current) | Debugger depth: watch/conditional-breakpoint expression engine, callstack, a TIA per-scanline event/write-scatter viewer, a player/missile/ball position view — plus the long-deferred RetroAchievements achievement-list/login/toast UI (`T-0802-005`, DONE) |
-| v1.4.0 "Signal" | A composable shader/filter stack (composite-NTSC + CRT-scanline) + a right-sized sprite-replacement overlay (the 2600-appropriate HD-pack analog — player/missile/ball only) |
+| v1.3.0 "Scope" | Debugger depth: watch/conditional-breakpoint expression engine, callstack, a TIA per-scanline event/write-scatter viewer, a player/missile/ball position view — plus the long-deferred RetroAchievements achievement-list/login/toast UI (`T-0802-005`, DONE) |
+| **v1.4.0 "Signal"** (current) | A composable shader/filter stack (`rusty2600-gfx-shaders`: `CrtScanline` + an honestly-labeled `CompositeArtifact` approximation) + the data-model half of a right-sized sprite-replacement overlay (`sprite_pack`, `hd-pack` feature — live rendering splice deferred pending a TIA object-ID mask) |
 | v1.5.0 "Full Catalog" | 4A50 (`T-0402-014`) + AR/Supercharger (`T-0402-015`) — closes 24 of 25 cataloged cart schemes |
 | v1.6.0 → v1.6.x "Coprocessor" (patch train) | A new `rusty2600-thumb` crate: an ARM7TDMI Thumb interpreter (ported from Gopher2600's Go implementation) for the DPC+/CDF/CDFJ/CDFJ+ family (`T-0401-006`) — closes the catalogue at 25/25 |
 | v1.7.0 "Chronicle" | TAS movie format (`.r26m`) + a TAStudio-lite panel, built on v1.1.0's snapshot substrate |

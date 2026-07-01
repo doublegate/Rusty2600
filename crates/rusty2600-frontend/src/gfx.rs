@@ -100,6 +100,10 @@ pub struct Gfx {
     fb_w: u32,
     /// See [`Gfx::fb_w`].
     fb_h: u32,
+    /// The composable post-process shader stack (`crate::shader_pass`). An
+    /// empty pass list at [`Self::present`] skips this entirely, so the
+    /// default build's output stays byte-identical.
+    shader_stack: crate::shader_pass::ShaderStack,
 }
 
 impl Gfx {
@@ -296,6 +300,9 @@ impl Gfx {
             usage: wgpu::BufferUsages::COPY_SRC,
         });
 
+        let shader_stack =
+            crate::shader_pass::ShaderStack::new(&device, format, config.width, config.height);
+
         Ok(Self {
             device,
             queue,
@@ -307,6 +314,7 @@ impl Gfx {
             pipeline,
             fb_w: VCS_W,
             fb_h: VCS_H_NTSC,
+            shader_stack,
         })
     }
 
@@ -315,6 +323,8 @@ impl Gfx {
         if w == 0 || h == 0 {
             return;
         }
+        self.shader_stack
+            .resize(&self.device, self.config.format, w, h);
         self.config.width = w;
         self.config.height = h;
         self.surface.configure(&self.device, &self.config);
@@ -404,10 +414,26 @@ impl Gfx {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
-        // Sample only the live sub-rect by drawing a quad scaled to fb/MAX; the blit shader maps
-        // UVs over the full triangle, so a future region-aware UV uniform is a TODO. For the
-        // skeleton (blank frame) the full-texture sample is acceptable.
         pass.draw(0..3, 0..1);
+    }
+
+    /// Presents one frame to `target` (the acquired swapchain view), running
+    /// `passes` (`rusty2600-gfx-shaders`' [`rusty2600_gfx_shaders::PassKind`])
+    /// after the base blit. An empty `passes` list calls [`Self::blit`]
+    /// directly — the byte-identical zero-pass default.
+    pub fn present(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        passes: &[rusty2600_gfx_shaders::PassKind],
+    ) {
+        if passes.is_empty() {
+            self.blit(encoder, target);
+            return;
+        }
+        let first_target = self.shader_stack.first_target_view();
+        self.blit(encoder, &first_target);
+        self.shader_stack.render(encoder, target, passes);
     }
 }
 

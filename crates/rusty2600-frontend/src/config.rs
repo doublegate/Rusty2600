@@ -42,6 +42,9 @@ pub struct VideoConfig {
     /// lag, at the cost of running that many extra hidden frames per real
     /// tick under the `emu-thread` feature.
     pub runahead_frames: u32,
+    /// The active post-process shader stack, in order (empty = off, the
+    /// default — the byte-identical direct blit). See `crate::shader_pass`.
+    pub shader_passes: Vec<rusty2600_gfx_shaders::PassKind>,
 }
 
 impl Default for VideoConfig {
@@ -51,6 +54,7 @@ impl Default for VideoConfig {
             pacing: PacingMode::default(),
             integer_scale: false,
             runahead_frames: 0,
+            shader_passes: Vec::new(),
         }
     }
 }

@@ -6,6 +6,50 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-01 - "Signal"
+
+A composable post-process shader stack, plus the data model half of the
+2600-appropriate HD-pack analog.
+
+### Added
+
+- **A composable shader stack** (new `rusty2600-gfx-shaders` crate +
+  `rusty2600-frontend::shader_pass`): two real passes — `CrtScanline`
+  (scanline darkening, computed from `@builtin(position)` with no extra
+  uniform) and `CompositeArtifact` (an honestly-labeled horizontal
+  chroma-bleed *approximation*, not a genuine composite-signal YIQ decode —
+  the render pipeline doesn't currently carry raw palette indices through to
+  this stage, so this is styled, not authoritative). `Gfx::present`
+  replaces the direct `Gfx::blit` call site: an empty pass list (the
+  default) calls the unchanged direct blit, preserving the byte-identical
+  default-build output the `uv_scale` fix (`[1.1.0]`) established. A new
+  Settings checkbox pair (`config.video.shader_passes`) toggles each pass,
+  persisted like every other Settings widget since `[1.1.0]`'s
+  `MenuAction::SaveConfig` fix.
+- **`rusty2600-frontend::sprite_pack`** (`hd-pack` feature): the data model
+  + manifest loader for a right-sized, 2600-appropriate HD-pack analog —
+  replacement bitmaps keyed by `(GRPx value, NUSIZx copy mode)`, since a
+  player/missile/ball's `GRPx` byte *is* its entire visual data (no
+  tile/pattern-table/CRC-hash system needed, unlike a tile-based console).
+  Manifests are plain TOML pointing at raw RGBA8 files — no new
+  image-decoder dependency for this first cut.
+
+### Notes
+
+- **Sprite-pack rendering integration is honestly deferred.** The data
+  model and loader above are real and tested, but splicing a loaded
+  replacement bitmap into the live wgpu render path needs an object-ID mask
+  threaded through the TIA first — the rendering pipeline currently
+  flattens every object into one resolved-color `video_buffer` with no
+  per-pixel "this dot came from P0" tag preserved. That's a genuine
+  architectural addition, not a quick splice, so it's left as a documented
+  follow-up rather than rushed or silently dropped.
+- 183 tests passing workspace-wide (186 with `--features test-roms`; +2 for
+  the shader-stack WGSL validation tests), up from 181/184 at `[1.3.0]`.
+  The sprite-pack loader's 3 tests are gated behind `hd-pack` (off by
+  default) and verified separately: `cargo test -p rusty2600-frontend
+  --features hd-pack` — 70 passed (67 + the 3 new sprite-pack tests).
+
 ## [1.3.0] - 2026-07-01 - "Scope"
 
 Debugger depth plus the long-deferred RetroAchievements achievement-list/

@@ -90,6 +90,14 @@ pub mod app;
 pub mod audio;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gfx;
+/// The composable post-process shader stack `gfx` presents through.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod shader_pass;
+
+/// The player/missile/ball sprite-replacement data model + loader
+/// (`hd-pack` feature) — the 2600-appropriate HD-pack analog.
+#[cfg(all(not(target_arch = "wasm32"), feature = "hd-pack"))]
+pub mod sprite_pack;
 
 // The dedicated emulation thread + the shared-state handles (native; the thread spawn itself is
 // behind the `emu-thread` feature, but the handle types + the `EmuCore` are always present).

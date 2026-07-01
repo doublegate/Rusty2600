@@ -1,25 +1,15 @@
 [package]
-name = "rusty2600-riot"
+name = "rusty2600-gfx-shaders"
+description = "WGSL post-process shader sources for Rusty2600's composable shader stack"
 version = "1.4.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-
-[features]
-default = ["std"]
-std = []
+repository.workspace = true
 
 [dependencies]
 serde.workspace = true
-bitflags = "2"
-
-[dev-dependencies]
-criterion.workspace = true
-
-[[bench]]
-name = "riot_bench"
-harness = false
 
 [lints]
 workspace = true

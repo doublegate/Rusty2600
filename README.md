@@ -10,7 +10,7 @@
 <p align="center">
   <a href="https://github.com/doublegate/Rusty2600/actions"><img src="https://github.com/doublegate/Rusty2600/workflows/CI/badge.svg" alt="Build Status"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a>
-  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v1.3.0-blue.svg" alt="Version"></a>
+  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v1.4.0-blue.svg" alt="Version"></a>
   <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/rust-1.96-orange.svg" alt="Rust: 1.96"></a>
   <br>
   <a href="#compatibility-and-accuracy"><img src="https://img.shields.io/badge/accuracy%20battery-100%25%20(2%2F2)-brightgreen.svg" alt="Accuracy battery"></a>
@@ -91,6 +91,7 @@ look different, they visibly break.
 | **RetroAchievements** | Native `rcheevos` integration: login, a live achievement list, leaderboards, rich presence, per-frame achievement tracking, hardcore mode, and a recent-unlocks toast list (off by default) |
 | **Save-States + Rewind** *(v1.1.0)* | A versioned binary snapshot format (ADR 0007) reusing the core's own `serde` derives; a rewind ring built on the same format |
 | **Run-Ahead** *(v1.2.0)* | Speculatively simulates a few frames ahead to hide a game's internal input lag, built on the save-state snapshot primitives — off by default, `0..=4` frames, adjustable live from Settings |
+| **Shader Stack** *(v1.4.0)* | A composable post-process stack (`rusty2600-gfx-shaders`) — CRT scanline darkening and an honestly-labeled composite-artifact color-bleed approximation, toggleable from Settings; empty stack (the default) is byte-identical to the direct blit |
 | **Accuracy Battery** | A real `AccuracyScore`-gated battery (`rusty2600-test-harness`), CI-enforced, growing honestly rather than claiming an inflated pass rate |
 | **WebAssembly** | Runs in-browser via `wasm-winit` (full winit/wgpu/egui) or a lightweight `wasm-canvas` embed mode |
 | **Pure Rust** | `winit` + `wgpu` + `cpal` + `egui` frontend; a safe `no_std + alloc` chip stack behind a one-directional crate graph |
@@ -98,9 +99,11 @@ look different, they visibly break.
 Planned via the iterative `v1.x.0` line toward `v2.0.0` — see
 [`to-dos/ROADMAP.md`](to-dos/ROADMAP.md) for the full plan, and
 [`CHANGELOG.md`](CHANGELOG.md) for exactly what's shipped in each release:
-a composable shader/filter stack, closing the remaining 3 bankswitch
-schemes (4A50, AR/Supercharger, the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family),
-TAS movie tooling, Lua scripting, rollback netplay, and Android/iOS builds.
+closing the remaining 3 bankswitch schemes (4A50, AR/Supercharger, the
+ARM-driven DPC+/CDF/CDFJ/CDFJ+ family), TAS movie tooling, Lua scripting,
+rollback netplay, and Android/iOS builds. The sprite-pack data model
+(`sprite_pack`, `hd-pack` feature) shipped in v1.4.0; its live rendering
+splice awaits a TIA object-ID mask.
 
 ---
 
@@ -237,6 +240,7 @@ cart-mediated bus state via `rusty2600-cart`:
 | `rusty2600-core` | The Bus (owns every chip) + the master-clock lockstep scheduler + save-states |
 | `rusty2600-frontend` | The `winit` + `wgpu` + `cpal` + `egui` shell (binary `rusty2600`), including the debugger |
 | `rusty2600-cheevos` | Native-only RetroAchievements integration — a safe wrapper around vendored `rcheevos` |
+| `rusty2600-gfx-shaders` | `no_std` WGSL post-process shader sources for the composable shader stack |
 | `rusty2600-test-harness` | The accuracy oracle + the bankswitch-tier honesty gate |
 
 The Bus owns everything mutable; the CPU borrows `&mut Bus` for the duration
@@ -259,7 +263,7 @@ seeding, and save-state versioning).
 | SingleStepTests `6502` (trimmed) | cycle-exact audit | 4,660 / 4,660 cases, 233 / 233 opcodes |
 | SingleStepTests `6502` (full corpus) | cycle-exact audit | weekly CI cron (~700 MB across 233 opcodes, not per-push) |
 | **Accuracy battery** | `rusty2600-test-harness` | **2 / 2 (100%)**, CI-enforced, ≥90% v1.0 threshold — growing honestly as real test-ROM fixtures are sourced, not inflated |
-| Workspace test suite | `cargo test --workspace` | 181 / 181 |
+| Workspace test suite | `cargo test --workspace` | 183 / 183 |
 
 Every bankswitch scheme is classified **Core** (register-decode trivial,
 always oracle-gated), **Curated** (a redistributable fixture + full test

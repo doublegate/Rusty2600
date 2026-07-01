@@ -549,8 +549,10 @@ impl App {
                     label: Some("rusty2600-frame"),
                 });
 
-        // --- (3) Blit the framebuffer (clears then draws the fullscreen triangle). ---
-        active.gfx.blit(&mut encoder, &view);
+        // --- (3) Present the framebuffer (base blit + any active shader-stack passes). ---
+        active
+            .gfx
+            .present(&mut encoder, &view, &active.config.video.shader_passes);
 
         // --- (4) Run the always-on egui shell pass. The shell NEVER touches the emu lock. ---
         let raw_input = active.egui_state.take_egui_input(&active.window);

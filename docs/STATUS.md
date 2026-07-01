@@ -5,28 +5,28 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v1.3.0 "Scope" — the third release of the
+**Current release:** v1.4.0 "Signal" — the fourth release of the
 `v1.1.0 -> v2.0.0` RustyNES-parity line (see `to-dos/ROADMAP.md` for the
-full plan and `CHANGELOG.md`'s `[1.3.0]` entry). Adds debugger depth — a
-watch/conditional-breakpoint expression engine (`debugger::expr` +
-`watch_panel`, evaluated against RIOT RAM + CPU/TIA registers), a live
-JSR/RTS call stack (`callstack`), a per-scanline TIA write-scatter viewer
-(`event_panel`, backed by a new `rusty2600-core::WriteLog` on `Bus`,
-`#[serde(skip)]` per ADR 0007), and a player/missile/ball position panel
-(`pmb_panel`) — plus the long-deferred RetroAchievements
-achievement-list/login/toast UI (`T-0802-005`, `cheevos_panel`), all UI
-plumbing over `RaClient`'s already-complete surface.
+full plan and `CHANGELOG.md`'s `[1.4.0]` entry). Adds a composable
+post-process shader stack (new `rusty2600-gfx-shaders` crate +
+`rusty2600-frontend::shader_pass`: `CrtScanline` + an honestly-labeled
+`CompositeArtifact` approximation, toggleable from Settings, empty-stack
+default preserving the byte-identical build), plus the data-model half of
+the 2600-appropriate HD-pack analog (`sprite_pack`, `hd-pack` feature:
+replacement bitmaps keyed by `GRPx`/`NUSIZx`) — its live rendering splice
+is honestly deferred pending a TIA object-ID mask, a genuine architectural
+prerequisite not yet built.
 
-Earlier in the line: `v1.2.0 "Foresight"` shipped run-ahead
-(`rusty2600-frontend::runahead`, off by default) built on `[1.1.0]`'s
-save-state snapshot primitives, fixing a real `Tia::scanline` `u16`
-overflow panic along the way. `v1.1.0 "Persistence"` shipped save-states
-(`rusty2600-core::save_state`, ADR 0007) and a rewind rework, plus fixes
-for three real frontend bugs found during manual verification (a rapid
-gameplay/debugger flicker, a window not displaying the entire active
-picture, and Settings changes never persisting to disk). See
-`CHANGELOG.md`'s `[1.1.0]`/`[1.2.0]` entries for the full detail. The full
-8-scheme Curated cart tier
+Earlier in the line: `v1.3.0 "Scope"` added debugger depth (a
+watch/conditional-breakpoint expression engine, a call stack, a TIA
+write-scatter viewer, a player/missile/ball panel) plus the RetroAchievements
+achievement-list/login/toast UI (`T-0802-005`, DONE). `v1.2.0 "Foresight"`
+shipped run-ahead built on `[1.1.0]`'s save-state snapshot primitives,
+fixing a real `Tia::scanline` `u16` overflow panic along the way. `v1.1.0
+"Persistence"` shipped save-states (`rusty2600-core::save_state`, ADR 0007)
+and a rewind rework, plus fixes for three real frontend bugs found during
+manual verification. See `CHANGELOG.md`'s `[1.1.0]`-`[1.3.0]` entries for
+the full detail. The full 8-scheme Curated cart tier
 (v0.3.0) plus 12 BestEffort schemes (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC,
 BF/BFSC, UA, 0840, FE, SB, X07) are implemented and wired into automatic
 `detect()` — 22 of the 25 schemes in the LOCAL catalogue (`docs/cart.md`).
@@ -79,7 +79,8 @@ ROM. See `docs/riot.md` for the full writeup;
 | `rusty2600-riot` | MOS 6532 RIOT | RAM/DDR ports/timer implemented and unit-tested (prescale, underflow, INSTAT, read-after-write). `T-0601-008` fixed (v0.9.0): reading `INTIM` now reverts the post-underflow (divide-by-1) decrement rate back to the normal prescale (confirmed against Stella's `M6532::peek`/`updateEmulation`), matching real 6532 silicon — see `docs/riot.md`. |
 | `rusty2600-cart` | Bankswitch boards | All 8 Curated schemes (2K, 4K, F8, F6, F4, CV, FA/CBS-RAM, Superchip, DPC, E7) implemented and wired into `detect()` (v0.3.0). BestEffort (v0.4.0-v0.6.0): F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA, 0840, FE, SB, X07 implemented and wired (22 of 25 catalogued schemes total). Two hooks, `Board::snoop_write`/`snoop_read` (`crates/rusty2600-core/src/bus.rs`), let boards react to accesses the console routes to TIA/RIOT space — needed for 3F/3E's `$3E`/`$3F` write hotspots, UA/0840/X07's read+write hotspots, FE's `$01FE` stack-frame-value pickup, and SB's address-low-bits bank select, none of which are in the cart window at all. Only 4A50 (`T-0402-014`, needs three independently relocatable ROM/RAM windows), AR/Supercharger (`T-0402-015`, tape/audio-based loading, architecturally unlike every other scheme here), and DPC+/CDF/CDFJ/CDFJ+ (`T-0401-006`, need a full ARM7TDMI Thumb interpreter) remain — all deliberately deferred as substantially larger, separately-scoped undertakings. |
 | `rusty2600-core` | Bus + scheduler + save-states | lockstep loop + seeded phase live; bus decode complete. `save_state` (v1.1.0, ADR 0007) wraps the already-`serde`-derived `System` in a versioned header (magic, format version, caller-supplied `rom_tag`), encoded via `postcard`; the frontend's rewind ring reuses the same encoding. v1.3.0 added `Bus::write_log` (`WriteLog`, `#[serde(skip)]`): an optional, capped, scanline/color-clock-tagged per-write log for the debugger's Events panel and (indirectly) the watch engine. |
-| `rusty2600-frontend` | egui shell | Rendering, audio, pacing, input, WASM support, the emu-thread path, the real debugger (`debug-hooks`, default-on), and RetroAchievements (`retroachievements`, off by default) all real and tested (v0.5.0-v0.7.0). v1.1.0 fixed three real frontend bugs: the `emu-thread` present path's dead-black-buffer fallback (rapid flicker), the blit shader's full-texture UV sampling instead of the active sub-rect, and Settings-window changes never reaching disk. v1.2.0 added `runahead` (off by default, `0..=4` frames, live via a Settings slider). **v1.3.0 added debugger depth**: `debugger::expr`/`watch_panel` (a watch/conditional-breakpoint expression engine evaluated against RIOT RAM + CPU/TIA registers, cheap enough to check every iteration of `DebugContinue`'s step loop), `debugger::callstack` (JSR/RTS tracking on `DebugStep`), `debugger::event_panel` (the TIA write-scatter viewer), `debugger::pmb_panel` (player/missile/ball live state), and `debugger::cheevos_panel` (`T-0802-005`: login/logout, achievement list, leaderboard list, rich presence, a capped recent-unlocks toast list — `CheevosState` gained `begin_login`/`logout`/`login_state`/`achievement_list`/`leaderboard_list`/`rich_presence`/`game_summary`, all thin wrappers over `RaClient`'s already-complete surface). HD-pack remains an unwired stub. |
+| `rusty2600-frontend` | egui shell | Rendering, audio, pacing, input, WASM support, the emu-thread path, the real debugger (`debug-hooks`, default-on), and RetroAchievements (`retroachievements`, off by default) all real and tested (v0.5.0-v0.7.0). v1.1.0 fixed three real frontend bugs: the `emu-thread` present path's dead-black-buffer fallback (rapid flicker), the blit shader's full-texture UV sampling instead of the active sub-rect, and Settings-window changes never reaching disk. v1.2.0 added `runahead` (off by default, `0..=4` frames, live via a Settings slider). v1.3.0 added debugger depth: `debugger::expr`/`watch_panel`, `callstack`, `event_panel`, `pmb_panel`, and `cheevos_panel` (`T-0802-005`, DONE). **v1.4.0 added `shader_pass`** (the composable post-process stack `Gfx::present` chains after the base blit — `CrtScanline` + an honestly-labeled `CompositeArtifact` approximation, toggleable from Settings, empty-stack default byte-identical) and **`sprite_pack`** (`hd-pack` feature: the `(GRPx, NUSIZx)`-keyed replacement-bitmap data model + TOML manifest loader — live rendering splice honestly deferred pending a TIA object-ID mask, a genuine prerequisite not yet built). |
+| `rusty2600-gfx-shaders` | shader sources | New in v1.4.0: `no_std`, zero-dependency-besides-serde WGSL source constants (`CompositeArtifact`, `CrtScanline`) + the `PassKind` selector enum, consumed by `rusty2600-frontend::shader_pass`'s wgpu orchestration. Both passes derive everything from `textureDimensions()`/`@builtin(position)` — no per-pass uniform buffers needed. |
 | `rusty2600-cheevos` | RetroAchievements FFI | Vendors the `rcheevos` C library (MIT); safe `RaClient` wrapper adapted from RustyNES's own `rustynes-cheevos` (console-agnostic except the memory map + one console-ID constant). `ra_addr_to_riot` maps RA's flat address space directly onto the RIOT's 128 bytes of RAM. Native-only (`#![cfg(not(target_arch = "wasm32"))]`); 7 tests passing, including real FFI smoke tests (v0.7.0). |
 | `rusty2600-test-harness` | accuracy oracle | Real as of v0.8.0: `Sentinel`/`run_cpu_until_sentinel` (the shared Layer 2 runner both bundled Klaus oracles now use), a real `AccuracyScore`-gated `tests/accuracy_battery.rs` (2/2, 100%), and a tolerance-aware `SnapComparator`. `GoldenLogDiffer`'s capture/diff machinery is real too, but no externally-oracled golden CPU trace is bundled yet (`T-0602-007`); `run_until_complete` (Layer 3, full-`System`) remains a stub pending TIA-timing test-ROM fixtures (`T-0602-006`). |
 
@@ -94,8 +95,9 @@ ROM. See `docs/riot.md` for the full writeup;
 | TIA timing / draw ROMs | test-ROM corpus | not yet wired (`T-0602-006`) |
 | Stella regression corpus | test-ROM corpus | not yet wired (`T-0602-006`/v0.9.x) |
 | **Accuracy battery (AccuracyCoin-equivalent)** | battery | **2 / 2 (100%)** — stood up v0.8.0, `tests/accuracy_battery.rs`, CI-enforced via the existing `--features test-roms` step, ≥90% v1.0 threshold |
-| **Workspace test suite** | `cargo test --workspace` | **181 / 181** (both Klaus tests moved to `--features test-roms`, gated out of the fast default path — see `crates/rusty2600-test-harness/tests/klaus_test.rs`; +21 vs. v1.2.0 for the new expression-engine/write-log/call-stack tests) |
-| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **184 / 184** |
+| **Workspace test suite** | `cargo test --workspace` | **183 / 183** (both Klaus tests moved to `--features test-roms`, gated out of the fast default path — see `crates/rusty2600-test-harness/tests/klaus_test.rs`; +2 vs. v1.3.0 for the new shader-stack WGSL validation tests) |
+| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **186 / 186** |
+| `rusty2600-frontend` (`--features hd-pack`) | `cargo test -p rusty2600-frontend --features hd-pack` | **70 / 70** (+3 sprite-pack loader tests; `hd-pack` off by default, not part of the two workspace-wide counts above) |
 
 ## Board / mapper matrix
 

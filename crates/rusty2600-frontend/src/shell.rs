@@ -410,6 +410,22 @@ impl ShellState {
                         {
                             changed = true;
                         }
+                        ui.separator();
+                        ui.label("Shader stack (empty = off, byte-identical default):");
+                        for kind in [
+                            rusty2600_gfx_shaders::PassKind::CompositeArtifact,
+                            rusty2600_gfx_shaders::PassKind::CrtScanline,
+                        ] {
+                            let mut enabled = cfg.video.shader_passes.contains(&kind);
+                            if ui.checkbox(&mut enabled, kind.label()).changed() {
+                                if enabled {
+                                    cfg.video.shader_passes.push(kind);
+                                } else {
+                                    cfg.video.shader_passes.retain(|p| *p != kind);
+                                }
+                                changed = true;
+                            }
+                        }
                     }
                     1 => {
                         if ui
