@@ -691,4 +691,47 @@ mod tests {
             "player pixel rendered at x={x}, expected near the left edge"
         );
     }
+
+    // Collision latches must be re-evaluated on every color clock a shape's
+    // pixel is actually on, not just once when the object is first enabled —
+    // a missile sitting entirely inside a player's 8-pixel span must raise
+    // CXM0P on every one of the overlapping clocks (this test only checks the
+    // steady-state result, but the collision block runs unconditionally from
+    // `render_pixel`'s per-clock call, so there is no "detect once" path to
+    // regress into).
+    #[test]
+    fn collision_latch_sets_when_missile_overlaps_player() {
+        let mut tia = Tia::new();
+        tia.objects.grp[0] = 0xFF; // player 0: fully-lit 8px sprite
+        tia.objects.nusiz[0] = 0;
+        tia.objects.pos[0] = 0; // player at visible x=0 (pos is already in 0..159 space)
+        tia.objects.enam[0] = true;
+        tia.objects.pos[2] = 0; // missile 0 at the same position: guaranteed overlap
+        // nusiz[0]'s low 3 bits also drive missile 0's copies/spacing; size bits
+        // (4:6) control missile width — leave both at 0 (one copy, 1px wide).
+
+        for _ in 0..68 {
+            tia.tick_color_clock(); // walk through HBLANK to the visible window
+        }
+        tia.tick_color_clock(); // the first visible clock: x=0, both objects present
+
+        assert_eq!(
+            tia.cpu_read(u16::from(regs::CXM0P)) & 0x40,
+            0x40,
+            "missile 0 / player 0 collision (D6) should be latched"
+        );
+    }
+
+    // `CXCLR` must clear all eight collision registers on the same cycle its
+    // write lands — not the next tick — since a program strobes it and reads
+    // a collision register back in immediate succession.
+    #[test]
+    fn cxclr_clears_within_the_same_cycle() {
+        let mut tia = Tia::new();
+        tia.collisions.cxm0p = 0xC0;
+        tia.collisions.cxblpf = 0x80;
+        tia.write_register(regs::CXCLR, 0);
+        assert_eq!(tia.cpu_read(u16::from(regs::CXM0P)), 0);
+        assert_eq!(tia.cpu_read(u16::from(regs::CXBLPF)), 0);
+    }
 }

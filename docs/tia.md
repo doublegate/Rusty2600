@@ -115,8 +115,29 @@ Per ref-docs/research-report.md §5.7.
 15 collision pairs are detected in hardware per pixel and latched, read through
 `CXM0P` ($00), `CXM1P` ($01), `CXP0FB` ($02), `CXP1FB` ($03), `CXM0FB` ($04),
 `CXM1FB` ($05), `CXBLPF` ($06), `CXPPMM` ($07) (each returns 1–2 bits on D6/D7),
-and cleared by `CXCLR` ($2C). The emulator computes per-pixel object overlap
-during synthesis and latches it. Per ref-docs/research-report.md §5.8.
+and cleared by `CXCLR` ($2C). The emulator re-evaluates per-pixel object
+overlap on every visible color clock (not just once when an object is first
+enabled) and latches it; `CXCLR` clears all eight registers on the same cycle
+its write lands. Pinned by `collision_latch_sets_when_missile_overlaps_player`
+and `cxclr_clears_within_the_same_cycle` (v0.2.0). Per
+ref-docs/research-report.md §5.8.
+
+**Known gap: HBLANK-region collisions (`T-0601-007`, unscheduled).** Object
+positions (`Objects::pos`) and the collision-evaluation pixel coordinate are
+both modeled in the 0..159 *visible-window* space (`x = color_clock - 68`),
+not the full 0..227 raw color-clock range — `render_pixel` early-returns
+before ever reaching the collision block when `color_clock < 68`. On real
+hardware the position counters and graphics-shift logic that drive collision
+detection run continuously regardless of HBLANK blanking (only the video
+DAC output is suppressed), so a collision that would occur during HBLANK is
+a real, if obscure, hardware behavior this emulator does not currently
+reproduce — some advanced demos/homebrew reportedly use HBLANK collisions as
+an invisible timing signal. Fixing this properly means extending the
+position/pixel-coordinate model to the full scanline, which risks the
+already-verified RESPx/HMOVE visible-window positioning logic (see the
+regression tests above it) — deliberately deferred rather than rushed;
+revisit alongside a broader TIA accuracy pass once a differential-oracle
+probe against Gopher2600/Stella can confirm the exact expected behavior.
 
 ## Colour
 

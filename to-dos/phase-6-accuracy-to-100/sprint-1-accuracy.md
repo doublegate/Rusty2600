@@ -33,6 +33,14 @@
   6502/6507 timing independent of interrupts (the taken-branch C3 dummy-PC
   read). Re-run the full SingleStepTests audit + Klaus functional/decimal
   suites after to confirm no regression (`docs/cpu.md`).
+- [ ] `T-0601-007` (unscheduled — deliberately deferred, see `docs/tia.md`
+  §Collisions): extend the TIA's object-position / pixel-coordinate model
+  from the current 0..159 visible-window space to the full 0..227 raw
+  color-clock range so collisions occurring during HBLANK are detected (real
+  hardware runs position counters continuously; only the video DAC output is
+  blanked). Requires a Gopher2600/Stella differential-oracle probe to
+  confirm exact expected behavior first, and must not regress the
+  already-verified RESPx/HMOVE visible-window positioning tests.
 
 
 ---
