@@ -69,13 +69,18 @@ Current corpus: **109/110 rendered** (2026-07-01, v0.3.0 in progress).
 
 ### commercial/
 
-Current corpus: **14/16 rendered** (2026-07-01, v0.3.0 in progress). See
+Current corpus: **15/16 rendered** (2026-07-01, v0.3.0 in progress). See
 `tests/roms/README.md` for the local ROM staging convention.
 
-- **`Pitfall II - Lost Caverns (USA)`** — needs the DPC (Display Processor
-  Chip) coprocessor scheme (`Board::tick_coprocessor`), tracked as a
-  Curated-tier v0.3.0 ticket (`T-0401-005`). `detect()` correctly returns
-  `None`; expected `Unsupported` failure until DPC lands.
+- **`Pitfall II - Lost Caverns (USA)`** — now boots via the DPC (Display
+  Processor Chip) coprocessor scheme (`T-0401-005`, v0.3.0), but its
+  screenshot is a blank blue frame at every frame count tried (60-900): a
+  Gopher2600 differential probe confirmed DPC decode / control-flow are
+  bit-exact for the first ~2,000 executed instructions, but the CPU then
+  spends far longer than Gopher2600 in a boot-time RIOT-timer wait loop
+  before reaching steady gameplay (tracked as `T-0601-008`, likely a data-
+  value rather than control-flow divergence). Not a DPC decode bug; left
+  as-is pending that investigation rather than blocking this ticket.
 - **`Communist Mutants from Space (USA)`** — 8,448-byte image, not one of
   the size buckets `detect()` currently resolves; needs BestEffort-tier
   breadth work (v0.4.x) once its bankswitch scheme is identified. Expected

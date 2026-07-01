@@ -516,6 +516,240 @@ impl Board for BankFA {
     }
 }
 
+/// DPC (Pitfall II's "Display Processor Chip"): 8 KiB program ROM as two
+/// 4 KiB F8-style banks (`$1FF8`/`$1FF9` hotspots, same convention as
+/// [`BankF8`]) + a 2 KiB fixed display-data ROM + 8 hardware "data fetchers"
+/// + an LFSR random-number generator, all memory-mapped at
+/// `$1000..=$107F` (`$1000..=$103F` read port, `$1040..=$107F` write port).
+/// Curated tier.
+///
+/// Confirmed against Stella's `CartDPC.cxx`/`.hxx` and Gopher2600's
+/// `mapper_dpc.go` (both independently cite David P. Crane's US Patent
+/// 4,644,495 — cross-checked here since they diverge on two points, resolved
+/// by favoring Stella as the more mature oracle, see below). Data fetchers
+/// 0-4 drive graphics reads (Pitfall II's level layout / vine / well art
+/// uses these directly, plus fetchers 0-3 for the RNG-driven level
+/// generation); fetchers 5-7 additionally support "music mode" for the
+/// cartridge's own analog audio-mixing hardware.
+///
+/// **Deliberate residual (documented, not a bug):** Rusty2600's audio bus is
+/// entirely TIA-owned (`docs/architecture.md`) with no cart-audio mixing
+/// path, so DF5-7's registers (top/bottom/low/hi/music-mode) are modeled
+/// faithfully and the `MUSIC` read (`$1004..=$1007`) returns the correct
+/// additive amplitude mix for whatever state they're currently in, but the
+/// real hardware's ~20 KHz-oscillator-driven *automatic* advance of DF5-7
+/// while in music mode is not implemented (it only ever affects analog
+/// audio output this emulator has no path for, and doing it properly needs
+/// console-clock-rate awareness the `Board` trait doesn't expose). Every
+/// other patent-described behavior — the RNG, DF0-4, bankswitching, and
+/// DF5-7's register semantics when accessed as plain (non-auto-advancing)
+/// fetchers — is implemented bit-exact.
+///
+/// Function-select bits 3-6 (nibble-swap / byte-reverse / ROR / ROL variants
+/// of the display-AND-flag read, `$1018..=$1037`) return 0, matching
+/// Stella's `CartDPC::peek` exactly (its `switch(function)` has no cases for
+/// them). Gopher2600 additionally implements ROR/ROL here, which Stella does
+/// not; Stella is the better-established oracle for Pitfall II specifically
+/// (Pitfall II's vine-swing animation predates and does not depend on this),
+/// so this board follows Stella's simpler, narrower model rather than
+/// Gopher2600's.
+///
+/// Real-world dumps often carry extra trailing bytes beyond the canonical
+/// 10 KiB (8 KiB program + 2 KiB display) — Gopher2600's own `mapper_dpc.go`
+/// notes this is "random data from the cartridge's RNG" left over from the
+/// dumping process, not part of the cartridge; `new()` accepts any image
+/// `>= 10 KiB` and only reads the first 10 KiB, same tolerance.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BankDpc {
+    #[serde(with = "serde_bytes_array")]
+    program: [u8; 0x2000],
+    #[serde(with = "serde_bytes_array")]
+    display: [u8; 0x0800],
+    bank: u8,
+    tops: [u8; 8],
+    bottoms: [u8; 8],
+    low: [u8; 8],
+    hi: [u8; 8],
+    flags: [bool; 8],
+    /// Music-mode enable for data fetchers 5, 6, 7 (indices 0, 1, 2 here).
+    music_mode: [bool; 3],
+    /// The DPC's LFSR register. Must never be left at 0 across a reset — real
+    /// hardware and both reference emulators initialize it non-zero.
+    random_number: u8,
+}
+
+impl BankDpc {
+    const HOTSPOT_BANK0: u16 = 0x1FF8;
+    const HOTSPOT_BANK1: u16 = 0x1FF9;
+    /// Canonical DPC image size: 8 KiB program + 2 KiB display data.
+    const IMAGE_SIZE: usize = 0x2800;
+
+    /// Build from a DPC image. Accepts any slice `>= 10 KiB`, reading only
+    /// the first 10 KiB (see the trailing-garbage-tolerance note above);
+    /// returns `None` if shorter.
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        if rom.len() < Self::IMAGE_SIZE {
+            return None;
+        }
+        let mut program = [0u8; 0x2000];
+        program.copy_from_slice(&rom[..0x2000]);
+        let mut display = [0u8; 0x0800];
+        display.copy_from_slice(&rom[0x2000..Self::IMAGE_SIZE]);
+        Some(Self {
+            program,
+            display,
+            bank: 1,
+            tops: [0; 8],
+            bottoms: [0; 8],
+            low: [0; 8],
+            hi: [0; 8],
+            flags: [false; 8],
+            music_mode: [false; 3],
+            random_number: 1,
+        })
+    }
+
+    #[allow(clippy::missing_const_for_fn)]
+    fn hotspot(&mut self, addr: u16) {
+        match addr & 0x1FFF {
+            Self::HOTSPOT_BANK0 => self.bank = 0,
+            Self::HOTSPOT_BANK1 => self.bank = 1,
+            _ => {}
+        }
+    }
+
+    /// Clock the RNG's shift register. Per the patent (col 7, ln 58-62,
+    /// fig 8): the input bit is the NOT of the XOR of bits 7, 5, 4, and 3;
+    /// clocked on literally every cartridge access (both peeks and pokes,
+    /// register or plain ROM) — confirmed unconditional in both Stella and
+    /// Gopher2600's reference implementations.
+    const fn clock_rng(&mut self) {
+        let r = self.random_number;
+        let bit = (((r >> 3) & 1) ^ ((r >> 4) & 1) ^ ((r >> 5) & 1) ^ ((r >> 7) & 1)) ^ 1;
+        self.random_number = (r << 1) | bit;
+    }
+
+    /// Decrement a data fetcher's 11-bit `hi:low` counter by one, borrowing
+    /// from `hi` on underflow; music-mode fetchers reload `low` from `top`
+    /// on that borrow (patent col 5 ln 65 - col 6 ln 3, col 7 ln 14-19).
+    const fn fetcher_clock(&mut self, i: usize) {
+        self.low[i] = self.low[i].wrapping_sub(1);
+        if self.low[i] == 0xFF {
+            self.hi[i] = self.hi[i].wrapping_sub(1);
+            if i >= 5 && self.music_mode[i - 5] {
+                self.low[i] = self.tops[i];
+            }
+        }
+    }
+
+    /// Update a fetcher's flag register against its current `low` value
+    /// (patent col 6 ln 7-12): sets on reaching `top`, clears on reaching
+    /// `bottom`, otherwise holds its prior value.
+    const fn fetcher_set_flag(&mut self, i: usize) {
+        if self.low[i] == self.tops[i] {
+            self.flags[i] = true;
+        } else if self.low[i] == self.bottoms[i] {
+            self.flags[i] = false;
+        }
+    }
+
+    /// The 2 KiB display image is addressed from its END (memtop-relative):
+    /// gfx offset = `2047 - (hi:low as an 11-bit value)`.
+    const fn gfx_addr(&self, i: usize) -> usize {
+        let counter = ((self.hi[i] as u16) << 8 | self.low[i] as u16) & 0x07FF;
+        (counter ^ 0x07FF) as usize
+    }
+}
+
+impl Board for BankDpc {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        self.hotspot(addr);
+        self.clock_rng();
+        let a = addr & 0x0FFF;
+        if a >= 0x0080 {
+            return self.program[usize::from(self.bank) * 0x1000 + a as usize];
+        }
+        let index = (a & 0x07) as usize;
+        let function = (a >> 3) & 0x07;
+        self.fetcher_set_flag(index);
+
+        let result = match function {
+            0 => {
+                if index < 4 {
+                    self.random_number
+                } else {
+                    let mut mix = 0u8;
+                    if self.music_mode[0] && self.flags[5] {
+                        mix += 4;
+                    }
+                    if self.music_mode[1] && self.flags[6] {
+                        mix += 5;
+                    }
+                    if self.music_mode[2] && self.flags[7] {
+                        mix += 6;
+                    }
+                    mix
+                }
+            }
+            1 => self.display[self.gfx_addr(index)],
+            2 => {
+                if self.flags[index] {
+                    self.display[self.gfx_addr(index)]
+                } else {
+                    0
+                }
+            }
+            7 => u8::from(self.flags[index]) * 0xFF,
+            // Nibble-swap / byte-reverse / ROR / ROL variants: unimplemented,
+            // matching Stella's CartDPC::peek exactly (see the type doc).
+            _ => 0,
+        };
+
+        if index < 5 || !self.music_mode[index - 5] {
+            self.fetcher_clock(index);
+        }
+        result
+    }
+
+    fn cpu_write(&mut self, addr: u16, val: u8) {
+        self.hotspot(addr);
+        self.clock_rng();
+        let a = addr & 0x0FFF;
+        if !(0x0040..0x0080).contains(&a) {
+            return;
+        }
+        let index = (a & 0x07) as usize;
+        let function = (a >> 3) & 0x07;
+        match function {
+            0 => {
+                self.tops[index] = val;
+                self.flags[index] = false;
+            }
+            1 => self.bottoms[index] = val,
+            2 => {
+                if index >= 5 && self.music_mode[index - 5] {
+                    self.low[index] = self.tops[index];
+                } else {
+                    self.low[index] = val;
+                }
+            }
+            3 => {
+                self.hi[index] = val;
+                if index >= 5 {
+                    self.music_mode[index - 5] = (val & 0x10) != 0;
+                }
+            }
+            6 => self.random_number = 1,
+            _ => {}
+        }
+    }
+
+    fn tier(&self) -> Tier {
+        Tier::Curated
+    }
+}
+
 /// An enum wrapping all supported boards, enabling static dispatch and
 /// `no_std`-compatible serialization without trait objects.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -534,6 +768,9 @@ pub enum Cartridge {
     BankCV(BankCV),
     /// CBS FA/RAM Plus: 12 KiB ROM + 256 B RAM (Curated tier)
     BankFA(BankFA),
+    /// DPC (Pitfall II): 8 KiB program + 2 KiB display ROM + 8 data fetchers
+    /// + RNG (Curated tier)
+    BankDpc(BankDpc),
 }
 
 impl Board for Cartridge {
@@ -546,6 +783,7 @@ impl Board for Cartridge {
             Self::BankF4(b) => b.cpu_read(addr),
             Self::BankCV(b) => b.cpu_read(addr),
             Self::BankFA(b) => b.cpu_read(addr),
+            Self::BankDpc(b) => b.cpu_read(addr),
         }
     }
 
@@ -558,6 +796,7 @@ impl Board for Cartridge {
             Self::BankF4(b) => b.cpu_write(addr, val),
             Self::BankCV(b) => b.cpu_write(addr, val),
             Self::BankFA(b) => b.cpu_write(addr, val),
+            Self::BankDpc(b) => b.cpu_write(addr, val),
         }
     }
 
@@ -570,6 +809,7 @@ impl Board for Cartridge {
             Self::BankF6(b) => b.tier(),
             Self::BankF4(b) => b.tier(),
             Self::BankFA(b) => b.tier(),
+            Self::BankDpc(b) => b.tier(),
         }
     }
 
@@ -582,6 +822,7 @@ impl Board for Cartridge {
             Self::BankF4(b) => b.tick(),
             Self::BankCV(b) => b.tick(),
             Self::BankFA(b) => b.tick(),
+            Self::BankDpc(b) => b.tick(),
         }
     }
 
@@ -594,6 +835,7 @@ impl Board for Cartridge {
             Self::BankF4(b) => b.tick_coprocessor(),
             Self::BankCV(b) => b.tick_coprocessor(),
             Self::BankFA(b) => b.tick_coprocessor(),
+            Self::BankDpc(b) => b.tick_coprocessor(),
         }
     }
 }
@@ -629,6 +871,10 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
             // TODO(T-0401-001): E0 / FE / 3F (BestEffort) detection for 8 KiB images.
             BankF8::new(rom).map(Cartridge::BankF8)
         }
+        // 10 KiB (+ up to 256 B of tolerated trailing dump garbage, see
+        // BankDpc's doc comment): DPC (Pitfall II, Curated). Unambiguous —
+        // nothing else in the catalogue is 10 KiB.
+        0x2800..=0x2900 => BankDpc::new(rom).map(Cartridge::BankDpc),
         // 12 KiB: CBS's FA/RAM Plus (Curated) — this size is unambiguous
         // (nothing else in the catalogue is 12 KiB), so no disambiguation
         // needed. NOTE: an earlier version of this comment incorrectly said
@@ -644,9 +890,11 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
             BankF6::new(rom).map(Cartridge::BankF6)
         }
         0x8000 => BankF4::new(rom).map(Cartridge::BankF4),
-        // TODO(T-0401-003): Superchip variants F8SC/F6SC/F4SC (+128 B RAM, Curated).
+        // T-0401-003 (DONE): Superchip variants F8SC/F6SC/F4SC — see
+        // BankF8/BankF6/BankF4::with_superchip(); not size-dispatched here
+        // since they're byte-identical to their plain counterparts.
         // TODO(T-0401-004): 3F (Tigervision) / 3E (Boulder Dash) / 3E+ (BestEffort).
-        // TODO(T-0401-005): DPC (Pitfall II, Curated) via tick_coprocessor.
+        // T-0401-005 (DONE): DPC (Pitfall II, Curated) — see the 0x2800..=0x2900 arm above.
         // TODO(T-0401-006): DPC+ (BestEffort) via tick_coprocessor.
         // TODO(T-0401-007): pirate / homebrew BMC schemes (BestEffort).
         _ => None,
@@ -825,5 +1073,100 @@ mod tests {
         // 16 KiB defaults to F6 until E7 gets ROM-DB disambiguation.
         let sixteen_k = detect(&[0u8; 0x4000]).unwrap();
         assert!(matches!(sixteen_k, Cartridge::BankF6(_)));
+    }
+
+    #[test]
+    fn dpc_new_rejects_undersized_images() {
+        assert!(BankDpc::new(&[0u8; 0x2800 - 1]).is_none());
+    }
+
+    #[test]
+    fn dpc_f8_style_bank_switch() {
+        let mut img = [0u8; 0x2800];
+        img[0x0FFF] = 0x11; // bank 0, last byte
+        img[0x1FFF] = 0x22; // bank 1, last byte
+        let mut board = BankDpc::new(&img).unwrap();
+        assert_eq!(board.tier(), Tier::Curated);
+        board.cpu_read(0x1FF8); // select bank 0
+        assert_eq!(board.cpu_read(0x1FFF), 0x11);
+        board.cpu_read(0x1FF9); // select bank 1
+        assert_eq!(board.cpu_read(0x1FFF), 0x22);
+    }
+
+    #[test]
+    fn dpc_rng_advances_and_never_settles_at_zero() {
+        let img = [0u8; 0x2800];
+        let mut board = BankDpc::new(&img).unwrap();
+        let mut prev = board.cpu_read(0x1000);
+        let mut changed = false;
+        for _ in 0..16 {
+            let next = board.cpu_read(0x1000);
+            assert_ne!(next, 0, "DPC RNG must never settle at 0");
+            changed |= next != prev;
+            prev = next;
+        }
+        assert!(changed, "RNG must advance across repeated accesses");
+    }
+
+    #[test]
+    fn dpc_rng_reset_hotspot_reproduces_a_fresh_boards_sequence() {
+        let img = [0u8; 0x2800];
+        let mut board = BankDpc::new(&img).unwrap();
+        board.cpu_read(0x1000);
+        board.cpu_read(0x1000);
+        board.cpu_write(0x1070, 0); // RNG reset hotspot (any value written)
+        let mut fresh = BankDpc::new(&img).unwrap();
+        assert_eq!(board.cpu_read(0x1000), fresh.cpu_read(0x1000));
+    }
+
+    #[test]
+    fn dpc_display_fetcher_reads_and_clocks_counter() {
+        let mut img = [0u8; 0x2800];
+        // Fetcher 0 defaults hi=0, low=0 -> gfx_addr = 2047 (memtop-relative).
+        img[0x2000 + 0x07FF] = 0xAA;
+        // After one clock (low/hi both wrap to 0xFF), gfx_addr = 0.
+        img[0x2000] = 0xBB;
+        let mut board = BankDpc::new(&img).unwrap();
+        assert_eq!(board.cpu_read(0x1008), 0xAA); // DF0 display read
+        assert_eq!(board.cpu_read(0x1008), 0xBB); // counter clocked in between
+    }
+
+    #[test]
+    fn dpc_flag_tracks_top_and_bottom_bounds() {
+        let img = [0u8; 0x2800];
+        let mut board = BankDpc::new(&img).unwrap();
+        board.cpu_write(0x1040, 0x00); // DF0 top = 0 (also clears the flag)
+        board.cpu_write(0x1048, 0x05); // DF0 bottom = 5
+        board.cpu_write(0x1050, 0x00); // DF0 low = 0 (== top)
+        assert_eq!(board.cpu_read(0x1038), 0xFF, "low == top must set the flag");
+    }
+
+    #[test]
+    fn dpc_music_mode_additive_amplitude_mix() {
+        let img = [0u8; 0x2800];
+        let mut board = BankDpc::new(&img).unwrap();
+        board.cpu_write(0x105D, 0x10); // DF5 hi write: enable music mode
+        board.cpu_write(0x105E, 0x10); // DF6 hi write: enable music mode
+        // DF7's music mode stays off. All three fetchers default
+        // top=bottom=low=0, so reading each flag register sets flags[i]=true.
+        board.cpu_read(0x103D); // DF5 flag
+        board.cpu_read(0x103E); // DF6 flag
+        board.cpu_read(0x103F); // DF7 flag
+        // DF5 (weight 4) + DF6 (weight 5); DF7 contributes 0 since its music
+        // mode is off, even though its flag is also set.
+        assert_eq!(board.cpu_read(0x1004), 9);
+    }
+
+    #[test]
+    fn detect_resolves_dpc_and_tolerates_trailing_dump_garbage() {
+        let exact = detect(&[0u8; 0x2800]).unwrap();
+        assert!(matches!(exact, Cartridge::BankDpc(_)));
+        // Real-world dumps often carry trailing garbage past the canonical
+        // 10 KiB (see BankDpc's doc comment) -- must still resolve.
+        let padded = detect(&[0u8; 0x2800 + 255]).unwrap();
+        assert!(matches!(padded, Cartridge::BankDpc(_)));
+        // 12 KiB stays unambiguously FA, unaffected by the DPC tolerance window.
+        let fa = detect(&[0u8; 0x3000]).unwrap();
+        assert!(matches!(fa, Cartridge::BankFA(_)));
     }
 }

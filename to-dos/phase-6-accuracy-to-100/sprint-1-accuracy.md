@@ -43,6 +43,25 @@
   blanked). Requires a Gopher2600/Stella differential-oracle probe to
   confirm exact expected behavior first, and must not regress the
   already-verified RESPx/HMOVE visible-window positioning tests.
+- [ ] `T-0601-008` (found during `T-0401-005` DPC bring-up, v0.3.0):
+  Pitfall II boots without error (DPC decode confirmed correct — a
+  Gopher2600 differential probe showed byte-identical PC control-flow
+  through the first ~2,000 executed distinct instructions), but the CPU
+  spends far longer than Gopher2600 in a boot-time RIOT-timer wait loop at
+  `$F108-$F112` (`LDA $1006` DPC music read / `STA $19` / `LDA $0284`
+  INTIM / `BNE $F108`) before reaching steady gameplay — Gopher2600 exits
+  this loop by roughly its 175,679th distinct-PC transition; Rusty2600 had
+  not exited it after 800,000. Since the loop's exit condition depends only
+  on `INTIM` reaching zero (not on the DPC read at `$1006`, which is stored
+  but not tested), and control flow up to entering the loop is confirmed
+  identical, the likely cause is a DATA-value divergence (not control-flow)
+  in whatever earlier read seeded the timer's reload value — needs a
+  memory-access-tracing probe (not just PC-tracing) to find where `TIM8T`/
+  `TIM64T`/`TIM1024T` gets written and compare the written value against
+  Gopher2600's. See the `rusty2600-gopher-differential-oracle` project
+  memory for the probe methodology. Does not block `T-0401-005`'s own
+  scope (register-level DPC model + hotspot bankswitching + unit tests),
+  which is complete and independently verified.
 
 
 ---

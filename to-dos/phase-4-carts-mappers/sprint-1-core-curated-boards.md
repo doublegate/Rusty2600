@@ -19,8 +19,18 @@
   8 KiB F8/E0/FE/3F ambiguity ROM-DB ticket.
 - [ ] `T-0401-004`: Disambiguate 3F (Tigervision) / 3E (Boulder Dash) / 3E+
   from the other 8 KiB+ schemes in `detect()`.
-- [ ] `T-0401-005`: Implement the DPC (Pitfall II) custom Display Processor
-  Chip board via `Board::tick_coprocessor`.
+- [x] `T-0401-005` (DONE): Implement the DPC (Pitfall II) custom Display
+  Processor Chip board — F8-style hotspot bankswitching + a memory-mapped
+  register file (RNG, 8 data fetchers, `$1000-$107F`), NOT via
+  `Board::tick`/`tick_coprocessor` (register-decode-driven, clocked on CPU
+  access instead of an independent clock; see `BankDpc`'s doc comment).
+  Verified against `docs/cart.md`'s notes plus a Gopher2600 differential
+  probe: byte-identical PC control-flow through the first ~2,000 executed
+  instructions of the real Pitfall II ROM. Found (not fixed, out of this
+  ticket's scope) a boot-time RIOT-timer-wait-loop discrepancy — tracked as
+  `T-0601-008`. `detect()` dispatches on the unambiguous 10 KiB size
+  (`0x2800..=0x2900`, tolerating the trailing dump garbage real-world DPC
+  dumps carry). 8 new unit tests in `crates/rusty2600-cart/src/lib.rs`.
 - [ ] `T-0401-006`: Implement DPC+ detection in `detect()` (deep BestEffort;
   may need the ARM-thumb interpreter dependency).
 - [ ] `T-0401-007`: Detect pirate / homebrew BMC (bank-multi-cart) schemes in

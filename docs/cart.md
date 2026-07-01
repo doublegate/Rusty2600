@@ -63,10 +63,11 @@ backing the accuracy oracle. Per ref-docs/research-report.md §8.3.
 | F4 | 32 KiB | $1FF4–$1FFB select 8×4K | — | Curated |
 | FA / CBS RAM Plus | 12 KiB | $1FF8/9/A select 3×4K | +256 B RAM | Curated |
 | F8SC / F6SC / F4SC (Superchip) | 8/16/32 KiB | F-series hotspots + Superchip | +128 B RAM | Curated |
+| DPC (Pitfall II) | 10 KiB ROM | F8-style hotspots + custom Display Processor Chip | coprocessor | Curated |
 | F0 | 64 KiB | $1FF0 increments / 16×4K | — | BestEffort |
 | FE (Activision) | 8 KiB | $01FE/$01FF via JSR/RTS stack frame | — | BestEffort |
 | E0 (Parker Bros) | 8 KiB | $1FE0–$1FF7 select four 1K slices | — | BestEffort |
-| E7 (M-Network) | 16 KiB | $1FE0–$1FEB, eight 2K banks | +2 KiB RAM | BestEffort |
+| E7 (M-Network) | 16 KiB | $1FE0–$1FEB, eight 2K banks | +2 KiB RAM | Curated (not yet implemented — `T-0401-002`) |
 | 3F (Tigervision) | up to 512 KiB | `STA $3F` with A = bank (low 2K window) | — | BestEffort |
 | 3E (Tigervision + RAM) | var | `STA $3E` RAM-bank / `STA $3F` ROM-bank | +RAM | BestEffort |
 | UA (UA Ltd.) | 8 KiB | $0220/$0240 hotspots | — | BestEffort |
@@ -78,12 +79,17 @@ backing the accuracy oracle. Per ref-docs/research-report.md §8.3.
 | X07 | 64 KiB | AtariAge custom | — | BestEffort |
 | 4A50 | up to 128 KiB | complex r/w hotspots + RAM | +RAM | BestEffort |
 | AR (Supercharger) | 6 KiB RAM | tape/audio load, 3×2K RAM banks | RAM-based | BestEffort |
-| DPC (Pitfall II) | 10 KiB ROM | custom Display Processor Chip | coprocessor | BestEffort |
 | DPC+ | var | Harmony/Melody ARM emulates DPC+ | ARM coproc | BestEffort |
 | CDF / CDFJ / CDFJ+ | var | Harmony/Melody ARM | ARM coproc | BestEffort |
 
-Tier totals: **2 Core**, **6 Curated**, **17 BestEffort** (25 schemes). Per
-ref-docs/research-report.md §8.1.
+Tier totals: **2 Core**, **8 Curated**, **15 BestEffort** (25 schemes). Per
+ref-docs/research-report.md §8.1 — DPC and E7 were both originally classified
+BestEffort there; reclassified Curated per `docs/STATUS.md`'s "v1.0.0 scope"
+decision that the full 8-scheme Curated set (CV, F8, F6, F4, FA/CBS-RAM,
+Superchip, DPC, E7) closes in v0.3.0 (`to-dos/ROADMAP.md`). DPC is
+implemented and its tier is pinned by `crates/rusty2600-cart`'s own
+`BankDpc::tier()`; E7 is reclassified ahead of its own implementation
+(`T-0401-002`) so this table doesn't need touching again once it lands.
 
 ## Notes on the special carts
 
@@ -93,8 +99,16 @@ ref-docs/research-report.md §8.1.
   BestEffort.
 - **DPC** is David Crane's custom **Display Processor Chip** in Pitfall II — a
   true coprocessor (two extra sound channels, music sequencing, a hardware RNG,
-  graphics streaming). **Pitfall II was the only commercial game to use it.** It
-  rides the `Board::tick` / `tick_coprocessor` hooks.
+  graphics streaming). **Pitfall II was the only commercial game to use it.**
+  Implemented (v0.3.0) as F8-style hotspot bankswitching + a memory-mapped
+  register file (`$1000..=$107F`), not via `Board::tick`/`tick_coprocessor` —
+  the RNG and the 8 data fetchers (graphics + level-generation reads) are
+  register-decode-driven, clocked on CPU access rather than on an independent
+  clock. The one deliberate residual: the "music mode" oscillator that would
+  auto-advance data fetchers 5-7 for the cart's own analog audio-mixing
+  hardware isn't implemented, since Rusty2600's audio bus is entirely
+  TIA-owned with no cart-audio mixing path (see `BankDpc`'s doc comment in
+  `crates/rusty2600-cart/src/lib.rs`).
 - **DPC+ / CDF / CDFJ** are modern Harmony/Melody formats backed by an **ARM
   microcontroller** running ARM code alongside the 6507; faithful emulation needs
   an ARM-thumb interpreter, so these are deep BestEffort (a later, optional
