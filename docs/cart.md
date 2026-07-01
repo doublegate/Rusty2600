@@ -119,21 +119,46 @@ Per ref-docs/research-report.md §8.2.
 ## Detection
 
 `detect()` resolves size-unambiguous schemes purely by length (2K → `Rom2K`,
-4K → `Rom4K`, 10K → `BankDpc`, 12K → `BankFA`). For sizes with a real
-same-catalogue collision — 2K/4K (`BankCV`), 8K/16K/32K (Superchip vs plain
-F8/F6/F4), and 16K (`BankE7` vs plain `BankF6`) — `detect()` runs a
-hotspot-pattern heuristic first (`is_probably_cv`/`is_probably_superchip`/
-`is_probably_e7`, ported from Stella's `CartDetector.cxx`) and only falls
-back to the more common plain scheme if it doesn't match (`T-0401-009`).
+4K → `Rom4K`, 10K → `BankDpc`, 12K → `BankFA`, 64K → `BankF0`). For sizes
+with a real same-catalogue collision — 2K/4K (`BankCV`), 8K/16K/32K
+(Superchip vs plain F8/F6/F4), 8K (`BankE0`/`Bank3E`/`Bank3F` vs plain F8),
+16K (`BankE7` vs plain `BankF6`), and 32K (`Bank3E`/`Bank3F` vs plain F4) —
+`detect()` runs hotspot-pattern heuristics first (`is_probably_cv`/
+`is_probably_superchip`/`is_probably_e7`/`is_probably_e0`/`is_probably_3e`/
+`is_probably_3f`, all ported from Stella's `CartDetector.cxx`, checked in
+the same priority order Stella itself uses at each size) and only falls
+back to the more common plain scheme if none match (`T-0401-009`,
+`T-0402-001..004`).
 
-The one remaining gap is 8 KiB ambiguity between the IMPLEMENTED `BankF8`
-and three NOT-YET-implemented BestEffort schemes (E0, FE, 3F) — since those
-have no board to dispatch to yet, `detect()` still just returns `BankF8`
-for any 8 KiB image, which is a real (if BestEffort-tier, so not accuracy-
-gated) misdetection risk until those schemes land (`T-0401-001`). The
-tiered TODOs (`T-0401-004`/`006`/`007`) track the remaining board families;
-the honesty gate's oracle set must be extended in lockstep so the pass-rate
-stays truthful as boards land.
+The one remaining 8 KiB gap is FE (Activision SCABS) — it isn't implemented
+yet, since (unlike E0/3E/3F) it needs to snoop CPU *reads* of TIA/RIOT-space
+addresses, not just writes (see `Board::snoop_write` below), and use the
+snooped VALUE to pick the bank. Until FE lands, an FE image at 8 KiB still
+resolves to `BankF8`, a real (if BestEffort-tier, so not accuracy-gated)
+misdetection risk (`T-0402-006`). The tiered TODOs (`T-0402-006`/`007`, plus
+`T-0401-006`/`007`) track the remaining board families; the honesty gate's
+oracle set must be extended in lockstep so the pass-rate stays truthful as
+boards land.
+
+### `Board::snoop_write` — bankswitching outside the cart window
+
+Several classic schemes bankswitch on writes the CONSOLE thinks are plain
+TIA/RIOT accesses, not cart accesses: 3F/3E (Tigervision) trigger on any
+write whose low byte is `$3F`/`$3E` (e.g. a zero-page `STA $3F`), UA on
+`$220`/`$240`, 0840 on `$800`/`$840`, FE on `$01FE` — all deep in
+TIA/RIOT-mirrored space (`$0000..=$0FFF`), not `$1000+`. This matches real
+hardware: a cartridge's edge connector is wired to every address line, and
+what the console's own decode logic thinks an address means has no bearing
+on what the cart chooses to react to.
+
+`Board::snoop_write(addr, val)` (default no-op) gives boards a look at
+every write the Bus routes to TIA/RIOT space, called from
+`Bus::cpu_write` (`crates/rusty2600-core/src/bus.rs`) before the console
+handles it. `Bank3F`/`Bank3E` are the first boards to use it. UA/0840/FE
+need the read-side equivalent too (`T-0402-006`) — a bigger interface
+question (the board must be able to REDIRECT a read, not just observe it,
+since these hotspots overlap real RIOT RAM / TIA registers), scoped as its
+own ticket rather than folded into the write-only case.
 
 
 ---

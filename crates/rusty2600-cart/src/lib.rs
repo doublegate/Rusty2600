@@ -85,8 +85,9 @@ pub trait Board {
     /// any read-triggered hotspot bank switch (e.g. F8's `$1FF8/$1FF9`).
     fn cpu_read(&mut self, addr: u16) -> u8;
 
-    /// CPU-side write. Drives write-triggered hotspots (3F/3E bank registers,
-    /// Superchip RAM writes) and on-cart RAM.
+    /// CPU-side write through the board's current bank mapping (`addr & 0x1000
+    /// != 0`, i.e. cart-window addresses only). Drives write-triggered
+    /// hotspots inside the window and on-cart RAM.
     fn cpu_write(&mut self, addr: u16, val: u8);
 
     /// This board's accuracy tier (the honesty marker).
@@ -100,6 +101,19 @@ pub trait Board {
     /// Drive any coprocessor that is clocked independently of the CPU (e.g. the
     /// DPC random-number / oscillator clock). Default no-op.
     fn tick_coprocessor(&mut self) {}
+
+    /// Observe a CPU write to a NON-cart-window address (`addr & 0x1000 ==
+    /// 0`, i.e. TIA/RIOT space) before the Bus routes it there. Real 2600
+    /// cartridge edge connectors are wired to every address line, not just
+    /// A12 — several classic BestEffort schemes bankswitch on writes the
+    /// console itself thinks are plain TIA/RIOT accesses: 3F/3E (Tigervision)
+    /// trigger on any write whose low byte is `$3F`/`$3E`, UA on `$220`/`$240`,
+    /// 0840 on `$800`/`$840` — all deep in TIA/RIOT-mirrored space, not
+    /// `$1000+`. Default no-op so the overwhelming majority of boards (which
+    /// only care about their own `$1000..=$1FFF` window) pay nothing.
+    fn snoop_write(&mut self, addr: u16, val: u8) {
+        let _ = (addr, val);
+    }
 }
 
 /// 2 KiB ROM, mirrored into the upper half of the 4 KiB window. Core tier.
@@ -618,6 +632,261 @@ impl Board for BankE7 {
     }
 }
 
+/// F0 (Dynacom Megaboy): 64 KiB ROM as sixteen 4 KiB banks, switched by a
+/// single SEQUENTIAL-ADVANCE hotspot — any access to `$1FF0` moves to the
+/// next bank (wrapping 15 -> 0). Unlike every other F-series scheme, the
+/// game can't jump to an arbitrary bank; its code layout must visit banks
+/// in order. BestEffort tier (register-decode + boot-smoke only).
+///
+/// Stored as a `Vec<u8>` rather than a `[u8; 0x10000]`: this struct lives
+/// inside the `Cartridge` enum, which is sized to its LARGEST variant — an
+/// inline 64 KiB array there would inflate every stack frame that moves a
+/// `Cartridge`/`Bus`/`System` by value (this crate `forbid`s `unsafe`, so
+/// there's no zero-copy way to keep a compile-time-sized array off the
+/// stack during construction either). `Bank3F`/`Bank3E` use the same
+/// pattern for the same reason.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BankF0 {
+    rom: alloc::vec::Vec<u8>,
+    bank: u8,
+}
+
+impl BankF0 {
+    const HOTSPOT: u16 = 0x1FF0;
+
+    /// Build from a 64 KiB image. Returns `None` if the slice is not 64 KiB.
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        if rom.len() != 0x10000 {
+            return None;
+        }
+        Some(Self {
+            rom: rom.to_vec(),
+            bank: 15,
+        })
+    }
+
+    #[allow(clippy::missing_const_for_fn)]
+    fn hotspot(&mut self, addr: u16) {
+        if addr & 0x1FFF == Self::HOTSPOT {
+            self.bank = (self.bank + 1) & 0x0F;
+        }
+    }
+}
+
+impl Board for BankF0 {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        self.hotspot(addr);
+        let off = usize::from(self.bank) * 0x1000 + (addr & 0x0FFF) as usize;
+        self.rom[off]
+    }
+    fn cpu_write(&mut self, addr: u16, _val: u8) {
+        self.hotspot(addr);
+    }
+    fn tier(&self) -> Tier {
+        Tier::BestEffort
+    }
+}
+
+/// E0 (Parker Brothers): 8 KiB ROM split into four 1 KiB segments. The first
+/// three segments are each INDEPENDENTLY selectable among all 8 possible
+/// 1 KiB banks (`$1FE0..=$1FE7` for segment 0, `$1FE8..=$1FEF` for segment 1,
+/// `$1FF0..=$1FF7` for segment 2 — the low 3 bits of the address pick the
+/// bank); the fourth segment is permanently fixed to the last 1 KiB bank.
+/// This is the most address-hungry classic scheme — real hardware compares
+/// only 3 bits per hotspot range, so the effective bank count per segment is
+/// always 8 regardless of image size. BestEffort tier.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BankE0 {
+    #[serde(with = "serde_bytes_array")]
+    rom: [u8; 0x2000],
+    /// Selected bank (0-7) for segments 0-2; segment 3 is always bank 7.
+    segments: [u8; 3],
+}
+
+impl BankE0 {
+    /// Reset default per Stella's `CartridgeE0::reset` (non-randomized path).
+    const DEFAULT_SEGMENTS: [u8; 3] = [4, 5, 6];
+    const FIXED_LAST_BANK: u8 = 7;
+
+    /// Build from an 8 KiB image. Returns `None` if the slice is not 8 KiB.
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        Some(Self {
+            rom: rom.try_into().ok()?,
+            segments: Self::DEFAULT_SEGMENTS,
+        })
+    }
+
+    #[allow(clippy::missing_const_for_fn)]
+    fn hotspot(&mut self, addr: u16) {
+        let a = addr & 0x1FFF;
+        if (0x1FE0..=0x1FE7).contains(&a) {
+            self.segments[0] = (a & 0x0007) as u8;
+        } else if (0x1FE8..=0x1FEF).contains(&a) {
+            self.segments[1] = (a & 0x0007) as u8;
+        } else if (0x1FF0..=0x1FF7).contains(&a) {
+            self.segments[2] = (a & 0x0007) as u8;
+        }
+    }
+
+    fn bank_for(&self, a: u16) -> u8 {
+        match a >> 10 {
+            0 => self.segments[0],
+            1 => self.segments[1],
+            2 => self.segments[2],
+            _ => Self::FIXED_LAST_BANK,
+        }
+    }
+}
+
+impl Board for BankE0 {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        self.hotspot(addr);
+        let a = addr & 0x0FFF;
+        let off = usize::from(self.bank_for(a)) * 0x400 + (a & 0x03FF) as usize;
+        self.rom[off]
+    }
+    fn cpu_write(&mut self, addr: u16, _val: u8) {
+        self.hotspot(addr);
+    }
+    fn tier(&self) -> Tier {
+        Tier::BestEffort
+    }
+}
+
+/// 3F (Tigervision): bank switched by writing the desired bank number to
+/// ANY address whose low byte is `$3F` — including plain zero-page writes
+/// like `STA $3F`, since the cart's address decode only checks the low 6
+/// bits and doesn't care about A12+ or whether the console itself thinks
+/// the write landed in TIA/RIOT space. This is why [`Board::snoop_write`]
+/// exists: the Bus must forward writes OUTSIDE the cart window too. The low
+/// 2 KiB of the CPU window is the selected bank; the high 2 KiB is always
+/// fixed to the LAST bank. BestEffort tier.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Bank3F {
+    rom: alloc::vec::Vec<u8>,
+    bank_count: u8,
+    bank: u8,
+}
+
+impl Bank3F {
+    /// Build from any image that's an exact multiple of 2 KiB (Tigervision
+    /// carts ranged from a few KiB up to 512 KiB). Returns `None` otherwise.
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        if rom.is_empty() || rom.len() % 0x0800 != 0 {
+            return None;
+        }
+        Some(Self {
+            rom: rom.to_vec(),
+            bank_count: (rom.len() / 0x0800) as u8,
+            bank: 0,
+        })
+    }
+}
+
+impl Board for Bank3F {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        let a = addr & 0x0FFF;
+        let bank = if a < 0x0800 {
+            self.bank
+        } else {
+            self.bank_count - 1
+        };
+        self.rom[usize::from(bank) * 0x0800 + (a & 0x07FF) as usize]
+    }
+    fn cpu_write(&mut self, _addr: u16, _val: u8) {}
+    fn tier(&self) -> Tier {
+        Tier::BestEffort
+    }
+    fn snoop_write(&mut self, addr: u16, val: u8) {
+        if addr & 0x00FF == 0x003F {
+            self.bank = val % self.bank_count;
+        }
+    }
+}
+
+/// 3E (Tigervision + RAM, Boulder Dash): identical bankswitching to
+/// [`Bank3F`] via `$3F` (ROM bank select), plus a second hotspot at `$3E`
+/// that instead selects a 1 KiB RAM bank into the low segment (write-low /
+/// read-high within that segment, matching this crate's established
+/// convention). BestEffort tier.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Bank3E {
+    rom: alloc::vec::Vec<u8>,
+    rom_bank_count: u8,
+    ram: alloc::vec::Vec<u8>,
+    ram_bank_count: u8,
+    /// `None` = ROM bank selected in the low segment; `Some(n)` = RAM bank `n`.
+    ram_bank: Option<u8>,
+    rom_bank: u8,
+}
+
+impl Bank3E {
+    const RAM_BANK_SIZE: usize = 0x0400; // 1 KiB (write-low $000-$3FF / read-high $400-$7FF)
+
+    /// Build from any image that's an exact multiple of 2 KiB, with `ram_kib`
+    /// KiB of on-cart RAM (Boulder Dash shipped 32 KiB RAM). Returns `None`
+    /// for a non-2-KiB-multiple image or non-1-KiB-multiple RAM size.
+    #[must_use]
+    pub fn new(rom: &[u8], ram_kib: usize) -> Option<Self> {
+        if rom.is_empty() || rom.len() % 0x0800 != 0 || ram_kib == 0 {
+            return None;
+        }
+        let ram_bytes = ram_kib * 1024;
+        if ram_bytes % Self::RAM_BANK_SIZE != 0 {
+            return None;
+        }
+        Some(Self {
+            rom: rom.to_vec(),
+            rom_bank_count: (rom.len() / 0x0800) as u8,
+            ram: alloc::vec![0; ram_bytes],
+            ram_bank_count: (ram_bytes / Self::RAM_BANK_SIZE) as u8,
+            ram_bank: None,
+            rom_bank: 0,
+        })
+    }
+}
+
+impl Board for Bank3E {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        let a = addr & 0x0FFF;
+        if a >= 0x0800 {
+            let bank = self.rom_bank_count - 1;
+            return self.rom[usize::from(bank) * 0x0800 + (a & 0x07FF) as usize];
+        }
+        if let Some(ram_bank) = self.ram_bank {
+            self.ram[usize::from(ram_bank) * Self::RAM_BANK_SIZE + (a & 0x03FF) as usize]
+        } else {
+            self.rom[usize::from(self.rom_bank) * 0x0800 + a as usize]
+        }
+    }
+    fn cpu_write(&mut self, addr: u16, val: u8) {
+        let a = addr & 0x0FFF;
+        if let Some(ram_bank) = self.ram_bank {
+            if a < 0x0400 {
+                self.ram[usize::from(ram_bank) * Self::RAM_BANK_SIZE + a as usize] = val;
+            }
+        }
+    }
+    fn tier(&self) -> Tier {
+        Tier::BestEffort
+    }
+    fn snoop_write(&mut self, addr: u16, val: u8) {
+        match addr & 0x00FF {
+            0x003F => {
+                self.rom_bank = val % self.rom_bank_count;
+                self.ram_bank = None;
+            }
+            0x003E => {
+                self.ram_bank = Some(val % self.ram_bank_count);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// DPC (Pitfall II's "Display Processor Chip"): 8 KiB program ROM as two
 /// 4 KiB F8-style banks (`$1FF8`/`$1FF9` hotspots, same convention as
 /// [`BankF8`]) + a 2 KiB fixed display-data ROM + 8 hardware "data fetchers"
@@ -875,6 +1144,18 @@ pub enum Cartridge {
     BankDpc(BankDpc),
     /// E7 (M-Network): 16 KiB ROM, 8×2K banks + 2 KiB RAM (Curated tier)
     BankE7(BankE7),
+    /// F0 (Dynacom Megaboy): 64 KiB ROM, 16×4K banks, sequential-advance
+    /// hotspot (BestEffort tier)
+    BankF0(BankF0),
+    /// E0 (Parker Bros): 8 KiB ROM, four independently-selectable 1K
+    /// segments (BestEffort tier)
+    BankE0(BankE0),
+    /// 3F (Tigervision): variable-size ROM, low 2K bank-selectable via a
+    /// `$3F`-low-byte write anywhere (BestEffort tier)
+    Bank3F(Bank3F),
+    /// 3E (Tigervision + RAM): `Bank3F` plus a `$3E` RAM-bank-select hotspot
+    /// (BestEffort tier)
+    Bank3E(Bank3E),
 }
 
 impl Board for Cartridge {
@@ -889,6 +1170,10 @@ impl Board for Cartridge {
             Self::BankFA(b) => b.cpu_read(addr),
             Self::BankDpc(b) => b.cpu_read(addr),
             Self::BankE7(b) => b.cpu_read(addr),
+            Self::BankF0(b) => b.cpu_read(addr),
+            Self::BankE0(b) => b.cpu_read(addr),
+            Self::Bank3F(b) => b.cpu_read(addr),
+            Self::Bank3E(b) => b.cpu_read(addr),
         }
     }
 
@@ -903,6 +1188,10 @@ impl Board for Cartridge {
             Self::BankFA(b) => b.cpu_write(addr, val),
             Self::BankDpc(b) => b.cpu_write(addr, val),
             Self::BankE7(b) => b.cpu_write(addr, val),
+            Self::BankF0(b) => b.cpu_write(addr, val),
+            Self::BankE0(b) => b.cpu_write(addr, val),
+            Self::Bank3F(b) => b.cpu_write(addr, val),
+            Self::Bank3E(b) => b.cpu_write(addr, val),
         }
     }
 
@@ -917,6 +1206,10 @@ impl Board for Cartridge {
             Self::BankFA(b) => b.tier(),
             Self::BankDpc(b) => b.tier(),
             Self::BankE7(b) => b.tier(),
+            Self::BankF0(b) => b.tier(),
+            Self::BankE0(b) => b.tier(),
+            Self::Bank3F(b) => b.tier(),
+            Self::Bank3E(b) => b.tier(),
         }
     }
 
@@ -931,6 +1224,10 @@ impl Board for Cartridge {
             Self::BankFA(b) => b.tick(),
             Self::BankDpc(b) => b.tick(),
             Self::BankE7(b) => b.tick(),
+            Self::BankF0(b) => b.tick(),
+            Self::BankE0(b) => b.tick(),
+            Self::Bank3F(b) => b.tick(),
+            Self::Bank3E(b) => b.tick(),
         }
     }
 
@@ -945,6 +1242,28 @@ impl Board for Cartridge {
             Self::BankFA(b) => b.tick_coprocessor(),
             Self::BankDpc(b) => b.tick_coprocessor(),
             Self::BankE7(b) => b.tick_coprocessor(),
+            Self::BankF0(b) => b.tick_coprocessor(),
+            Self::BankE0(b) => b.tick_coprocessor(),
+            Self::Bank3F(b) => b.tick_coprocessor(),
+            Self::Bank3E(b) => b.tick_coprocessor(),
+        }
+    }
+
+    fn snoop_write(&mut self, addr: u16, val: u8) {
+        match self {
+            Self::Rom2K(b) => b.snoop_write(addr, val),
+            Self::Rom4K(b) => b.snoop_write(addr, val),
+            Self::BankF8(b) => b.snoop_write(addr, val),
+            Self::BankF6(b) => b.snoop_write(addr, val),
+            Self::BankF4(b) => b.snoop_write(addr, val),
+            Self::BankCV(b) => b.snoop_write(addr, val),
+            Self::BankFA(b) => b.snoop_write(addr, val),
+            Self::BankDpc(b) => b.snoop_write(addr, val),
+            Self::BankE7(b) => b.snoop_write(addr, val),
+            Self::BankF0(b) => b.snoop_write(addr, val),
+            Self::BankE0(b) => b.snoop_write(addr, val),
+            Self::Bank3F(b) => b.snoop_write(addr, val),
+            Self::Bank3E(b) => b.snoop_write(addr, val),
         }
     }
 }
@@ -996,6 +1315,61 @@ fn is_probably_e7(rom: &[u8]) -> bool {
     SIGNATURES.iter().any(|sig| contains_bytes(rom, sig))
 }
 
+/// Returns `true` if `needle` occurs in `haystack` at least `min_hits`
+/// non-overlapping times, matching Stella's `BSPF::searchForBytes(..,
+/// minhits)` semantics (used for signatures that need 2+ occurrences to
+/// reduce false positives — plausible for a single stray match, much less
+/// so for two).
+fn count_bytes_at_least(haystack: &[u8], needle: &[u8], min_hits: usize) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    let mut count = 0;
+    let mut i = 0;
+    while i + needle.len() <= haystack.len() {
+        if haystack[i..i + needle.len()] == *needle {
+            count += 1;
+            if count >= min_hits {
+                return true;
+            }
+            i += needle.len(); // non-overlapping, matching Stella
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+/// Port of Stella's `CartDetector::isProbablyE0`: search for known Parker
+/// Bros bankswitch-hotspot opcode encodings targeting `$FE0..=$FF9`.
+fn is_probably_e0(rom: &[u8]) -> bool {
+    const SIGNATURES: [[u8; 3]; 8] = [
+        [0x8D, 0xE0, 0x1F], // STA $1FE0
+        [0x8D, 0xE0, 0x5F], // STA $5FE0
+        [0x8D, 0xE9, 0xFF], // STA $FFE9
+        [0x0C, 0xE0, 0x1F], // NOP $1FE0
+        [0xAD, 0xE0, 0x1F], // LDA $1FE0
+        [0xAD, 0xE9, 0xFF], // LDA $FFE9
+        [0xAD, 0xED, 0xFF], // LDA $FFED
+        [0xAD, 0xF3, 0xBF], // LDA $BFF3
+    ];
+    SIGNATURES.iter().any(|sig| contains_bytes(rom, sig))
+}
+
+/// Port of Stella's `CartDetector::isProbably3F`: at least two occurrences
+/// of `STA $3F` (a Tigervision cart with only one bank wouldn't need to
+/// bankswitch at all, so a genuine 3F image writes it repeatedly).
+fn is_probably_3f(rom: &[u8]) -> bool {
+    count_bytes_at_least(rom, &[0x85, 0x3F], 2)
+}
+
+/// Port of Stella's `CartDetector::isProbably3E`: at least one `STA $3E`
+/// (RAM-bank select) AND at least two `STA $3F` (ROM-bank select, same
+/// reasoning as [`is_probably_3f`]).
+fn is_probably_3e(rom: &[u8]) -> bool {
+    count_bytes_at_least(rom, &[0x85, 0x3E], 1) && count_bytes_at_least(rom, &[0x85, 0x3F], 2)
+}
+
 /// Detect the bankswitch scheme from a ROM image and build the board.
 ///
 /// Same-size same-catalogue collisions (CV vs plain 2K/4K, Superchip vs
@@ -1020,17 +1394,26 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
         0x1000 if is_probably_cv(rom) => BankCV::new(rom).map(Cartridge::BankCV),
         0x1000 => Rom4K::new(rom).map(Cartridge::Rom4K),
         0x2000 => {
-            // 8 KiB: Superchip (F8SC) checked first via its RAM-shadow
-            // signature, falling back to plain F8 (Curated). Disambiguation
-            // from E0 (Parker Bros, BestEffort) / FE (Activision SCABS,
-            // BestEffort) / 3F-with-8K (Tigervision, BestEffort) still needs
-            // hotspot-pattern + ROM-DB detection — those schemes aren't
-            // implemented yet, so this only ever resolves F8/F8SC.
-            // TODO(T-0401-001): E0 / FE / 3F (BestEffort) detection for 8 KiB images.
+            // 8 KiB: checked in the same priority order Stella's own
+            // CartDetector uses at this size (SC, E0, 3E, 3F, ... default
+            // F8) — Superchip (F8SC) via its RAM-shadow signature, E0
+            // (Parker Bros) and 3E/3F (Tigervision) via their hotspot-opcode
+            // signatures, falling back to plain F8 (Curated, the far more
+            // common scheme). FE (Activision SCABS) still needs detection —
+            // it isn't implemented yet (needs the address-bus-snoop
+            // extension `snoop_write` provides, plus read-side snooping
+            // `T-0402-xxx` doesn't have yet).
+            // TODO(T-0401-001): FE (BestEffort) detection for 8 KiB images.
             if is_probably_superchip(rom) {
                 BankF8::new(rom)
                     .map(BankF8::with_superchip)
                     .map(Cartridge::BankF8)
+            } else if is_probably_e0(rom) {
+                BankE0::new(rom).map(Cartridge::BankE0)
+            } else if is_probably_3e(rom) {
+                Bank3E::new(rom, 32).map(Cartridge::Bank3E)
+            } else if is_probably_3f(rom) {
+                Bank3F::new(rom).map(Cartridge::Bank3F)
             } else {
                 BankF8::new(rom).map(Cartridge::BankF8)
             }
@@ -1062,18 +1445,33 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
         }
         0x8000 => {
             // 32 KiB: Superchip (F4SC) checked first via its RAM-shadow
-            // signature, falling back to plain F4 (Curated).
+            // signature, then 3E/3F (Tigervision, also possible at this
+            // size per Stella's own CartDetector), falling back to plain F4
+            // (Curated, the far more common scheme at 32 KiB).
             if is_probably_superchip(rom) {
                 BankF4::new(rom)
                     .map(BankF4::with_superchip)
                     .map(Cartridge::BankF4)
+            } else if is_probably_3e(rom) {
+                Bank3E::new(rom, 32).map(Cartridge::Bank3E)
+            } else if is_probably_3f(rom) {
+                Bank3F::new(rom).map(Cartridge::Bank3F)
             } else {
                 BankF4::new(rom).map(Cartridge::BankF4)
             }
         }
+        // 64 KiB: F0 (Dynacom Megaboy, BestEffort) — the only scheme at this
+        // size implemented so far; EF/EFSC and X07 (also 64 KiB per
+        // docs/cart.md) aren't implemented yet, so this defaults here the
+        // same way 8/16/32 KiB defaulted to their single implemented scheme
+        // before this crate had any disambiguation heuristics.
+        // TODO(T-0402-xxx): EF/EFSC / X07 detection for 64 KiB images.
+        0x10000 => BankF0::new(rom).map(Cartridge::BankF0),
         // T-0401-003 (DONE): Superchip variants F8SC/F6SC/F4SC — dispatched
         // above via is_probably_superchip().
-        // TODO(T-0401-004): 3F (Tigervision) / 3E (Boulder Dash) / 3E+ (BestEffort).
+        // T-0401-004 (DONE): 3F (Tigervision) / 3E (Boulder Dash) — dispatched
+        // above at 8/32 KiB via is_probably_3f()/is_probably_3e(). 3E+ (an
+        // ARM-assisted successor) still unimplemented.
         // T-0401-005 (DONE): DPC (Pitfall II, Curated) — see the 0x2800..=0x2900 arm above.
         // TODO(T-0401-006): DPC+ (BestEffort) via tick_coprocessor.
         // TODO(T-0401-007): pirate / homebrew BMC schemes (BestEffort).
@@ -1464,5 +1862,124 @@ mod tests {
         assert_eq!(board.cpu_read(0x1A00), 0x99);
         board.cpu_read(0x1FE7); // RAM mode for the LOWER segment
         assert_eq!(board.cpu_read(0x1A00), 0x99); // upper segment unaffected
+    }
+
+    #[test]
+    fn f0_sequential_bank_advance_wraps() {
+        let mut img = [0u8; 0x10000];
+        for b in 0..16u8 {
+            img[usize::from(b) * 0x1000] = b; // marker byte at each bank's start
+        }
+        let mut board = BankF0::new(&img).unwrap();
+        assert_eq!(board.tier(), Tier::BestEffort);
+        assert_eq!(board.cpu_read(0x1000), 15); // default (start) bank is 15
+        board.cpu_read(0x1FF0); // advance: wraps 15 -> 0
+        assert_eq!(board.cpu_read(0x1000), 0);
+        board.cpu_read(0x1FF0); // advance: 0 -> 1
+        assert_eq!(board.cpu_read(0x1000), 1);
+    }
+
+    #[test]
+    fn e0_independent_segment_selection_and_fixed_last_bank() {
+        let mut img = [0u8; 0x2000];
+        for b in 0..8u8 {
+            img[usize::from(b) * 0x400] = b; // marker at each 1 KiB bank's start
+        }
+        let mut board = BankE0::new(&img).unwrap();
+        assert_eq!(board.tier(), Tier::BestEffort);
+        // Default segments (Stella's non-randomized reset path): 4, 5, 6;
+        // segment 3 permanently fixed to the last bank (7).
+        assert_eq!(board.cpu_read(0x1000), 4);
+        assert_eq!(board.cpu_read(0x1400), 5);
+        assert_eq!(board.cpu_read(0x1800), 6);
+        assert_eq!(board.cpu_read(0x1C00), 7);
+        board.cpu_read(0x1FE2); // select bank 2 into segment 0
+        assert_eq!(board.cpu_read(0x1000), 2);
+        assert_eq!(board.cpu_read(0x1C00), 7); // segment 3 unaffected
+    }
+
+    #[test]
+    fn bank3f_selects_bank_via_snoop_write_on_low_byte_3f() {
+        let mut img = [0u8; 0x1000]; // 4 KiB = 2 banks of 2 KiB
+        img[0] = 0x11; // bank 0, first byte
+        img[0x800] = 0x22; // bank 1, first byte
+        let mut board = Bank3F::new(&img).unwrap();
+        assert_eq!(board.tier(), Tier::BestEffort);
+        assert_eq!(
+            board.cpu_read(0x1800),
+            0x22,
+            "high segment always maps the last bank"
+        );
+        assert_eq!(
+            board.cpu_read(0x1000),
+            0x11,
+            "low segment defaults to bank 0"
+        );
+        board.snoop_write(0x003F, 1); // any address whose low byte is $3F
+        assert_eq!(board.cpu_read(0x1000), 0x22);
+        board.snoop_write(0x0040, 0); // NOT a $..3F address -- no switch
+        assert_eq!(board.cpu_read(0x1000), 0x22);
+    }
+
+    #[test]
+    fn bank3e_rom_and_ram_bank_select_independent() {
+        let mut img = [0u8; 0x1000]; // 4 KiB = 2 ROM banks of 2 KiB
+        img[0] = 0x11;
+        img[0x800] = 0x22;
+        let mut board = Bank3E::new(&img, 2).unwrap(); // 2 KiB RAM = 2x1 KiB banks
+        assert_eq!(board.tier(), Tier::BestEffort);
+        assert_eq!(board.cpu_read(0x1000), 0x11);
+        assert_eq!(
+            board.cpu_read(0x1800),
+            0x22,
+            "high segment always fixed to the last ROM bank"
+        );
+        board.snoop_write(0x003E, 1); // select RAM bank 1 into the low segment
+        board.cpu_write(0x1000, 0x55);
+        assert_eq!(board.cpu_read(0x1000), 0x55);
+        board.snoop_write(0x003F, 1); // switch back to ROM bank 1
+        assert_eq!(board.cpu_read(0x1000), 0x22);
+    }
+
+    #[test]
+    fn detect_resolves_e0_via_hotspot_signature() {
+        let mut img = [0u8; 0x2000];
+        img[0x00] = 0x01; // rule out the trivial all-zero Superchip match
+        img[0x0100] = 0x8D; // STA $1FE0 (Parker Bros hotspot)
+        img[0x0101] = 0xE0;
+        img[0x0102] = 0x1F;
+        assert!(matches!(detect(&img).unwrap(), Cartridge::BankE0(_)));
+    }
+
+    #[test]
+    fn detect_resolves_3f_via_repeated_sta_3f_signature() {
+        let mut img = [0u8; 0x2000];
+        img[0x00] = 0x01; // rule out the trivial all-zero Superchip match
+        img[0x0100] = 0x85; // STA $3F (x2 -- 3F needs 2+ occurrences)
+        img[0x0101] = 0x3F;
+        img[0x0200] = 0x85;
+        img[0x0201] = 0x3F;
+        assert!(matches!(detect(&img).unwrap(), Cartridge::Bank3F(_)));
+    }
+
+    #[test]
+    fn detect_resolves_3e_via_sta_3e_and_repeated_sta_3f_signature() {
+        let mut img = [0u8; 0x2000];
+        img[0x00] = 0x01; // rule out the trivial all-zero Superchip match
+        img[0x0100] = 0x85; // STA $3E
+        img[0x0101] = 0x3E;
+        img[0x0200] = 0x85; // STA $3F (x2)
+        img[0x0201] = 0x3F;
+        img[0x0300] = 0x85;
+        img[0x0301] = 0x3F;
+        assert!(matches!(detect(&img).unwrap(), Cartridge::Bank3E(_)));
+    }
+
+    #[test]
+    fn detect_resolves_f0_at_64kib() {
+        assert!(matches!(
+            detect(&[0u8; 0x10000]).unwrap(),
+            Cartridge::BankF0(_)
+        ));
     }
 }

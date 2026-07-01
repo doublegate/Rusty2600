@@ -76,7 +76,14 @@ impl Bus {
                 board.cpu_write(addr, val);
             }
         } else {
-            // A12 = 0 -> Console
+            // A12 = 0 -> Console. Real cart edge connectors are wired to every
+            // address line, not just A12: 3F/3E/UA/0840/FE all bankswitch on
+            // writes the console routes to TIA/RIOT, so the board gets a
+            // look too (default no-op for the overwhelming majority of boards
+            // that only care about their own $1000+ window).
+            if let Some(board) = &mut self.board {
+                board.snoop_write(addr, val);
+            }
             if addr & 0x0080 == 0 {
                 // A7 = 0 -> TIA
                 self.tia.cpu_write(addr, val);
