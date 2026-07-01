@@ -5,9 +5,28 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v1.8.0 "Oracle" — the eighth release of the
+**Current release:** v1.9.0 "Scriptable" — the ninth release of the
 `v1.1.0 -> v2.0.0` RustyNES-parity line (see `to-dos/ROADMAP.md` for the
-full plan and `CHANGELOG.md`'s `[1.8.0]` entry). Closes `T-0602-007`:
+full plan and `CHANGELOG.md`'s `[1.9.0]` entry). Adds a new
+`rusty2600-script` crate: a real, tested Lua scripting engine (`mlua`
+native backend, off by default) exposing a deliberately-smaller-than-
+RustyNES `emu` table (`peek`/`poke`/`cpu`/`onFrame`/`setJoystick`/
+`setConsoleSwitch`/`drawText`/`drawRect`/`drawPixel`/`pause`/`saveState`/
+`loadState`) over a host-agnostic `ScriptBus` trait seam, gated by a
+`WritesLocked` determinism lock (folds RetroAchievements hardcore mode
+today; `.r26m` movie and rollback-netplay locks are documented, not
+stubbed, future additions). **This release lands the engine only** — it
+is **not yet wired into `rusty2600-frontend`** (no `scripting` feature
+flag, no live `ScriptBus` implementation, no overlay compositing, no
+`onFrame` hook tied to `EmuCore::run_frame`); a `v1.9.x` follow-up does
+that wiring, the same pattern `rusty2600-thumb` (`[1.6.0]`) and `.r26m`
+movies (`[1.7.0]`) already established for this project. A `piccolo`
+wasm-fallback backend is also deferred (`piccolo` is materially less
+mature than `mlua`; the `emu`/`ScriptBus` design is backend-agnostic so
+this stays a scoped follow-up, not a rewrite). See `docs/scripting.md`
+for the full architecture and scope.
+
+Earlier in the line: `v1.8.0 "Oracle"` closed `T-0602-007`:
 `GoldenLogDiffer` now bundles a genuine externally-oracled golden CPU
 trace (`tests/golden/klaus_functional_test_gopher2600.trace`, 20,000
 retired instructions of the Klaus functional test, captured by running
@@ -27,7 +46,7 @@ differential-oracle method against specific known-hard titles, the same
 technique that found the real Frogger WSYNC-jitter and Pitfall II
 RIOT-timer bugs. See `docs/testing-strategy.md` for the full detail.
 
-Earlier in the line: `v1.7.0 "Chronicle"` added a `.r26m` TAS movie
+Earlier still: `v1.7.0 "Chronicle"` added a `.r26m` TAS movie
 format (`rusty2600-core::movie`, `no_std`-compatible): a start point
 (fresh seeded power-on per ADR 0006, or an embedded save-state blob — a
 branch point is exactly this) plus a per-frame `MovieFrame` input log
@@ -154,6 +173,7 @@ ROM. See `docs/riot.md` for the full writeup;
 | `rusty2600-gfx-shaders` | shader sources | New in v1.4.0: `no_std`, zero-dependency-besides-serde WGSL source constants (`CompositeArtifact`, `CrtScanline`) + the `PassKind` selector enum, consumed by `rusty2600-frontend::shader_pass`'s wgpu orchestration. Both passes derive everything from `textureDimensions()`/`@builtin(position)` — no per-pass uniform buffers needed. |
 | `rusty2600-cheevos` | RetroAchievements FFI | Vendors the `rcheevos` C library (MIT); safe `RaClient` wrapper adapted from RustyNES's own `rustynes-cheevos` (console-agnostic except the memory map + one console-ID constant). `ra_addr_to_riot` maps RA's flat address space directly onto the RIOT's 128 bytes of RAM. Native-only (`#![cfg(not(target_arch = "wasm32"))]`); 7 tests passing, including real FFI smoke tests (v0.7.0). |
 | `rusty2600-test-harness` | accuracy oracle | Real as of v0.8.0: `Sentinel`/`run_cpu_until_sentinel` (the shared Layer 2 runner both bundled Klaus oracles now use), a real `AccuracyScore`-gated `tests/accuracy_battery.rs` (2/2, 100%), and a tolerance-aware `SnapComparator`. **`T-0602-007` closed (v1.8.0)**: `GoldenLogDiffer` now bundles a genuine externally-oracled golden CPU trace (`tests/golden/klaus_functional_test_gopher2600.trace`, 20,000 instructions captured from Gopher2600's `hardware/cpu` package) — `bundled()` reports `true`, `tests/golden_log_test.rs` confirms `first_divergence() == None` against Rusty2600's own CPU. `run_until_complete` (Layer 3, full-`System`) remains — and stays — a stub: `T-0602-006` is a permanent scope boundary, no freely-redistributable TIA/RIOT test-ROM corpus exists (researched again this release; see `docs/testing-strategy.md`). |
+| `rusty2600-script` | Lua scripting engine | New in v1.9.0: `mlua` native backend (off by default), a deliberately-smaller-than-RustyNES `emu` table (`peek`/`poke`/`cpu`/`onFrame`/`setJoystick`/`setConsoleSwitch`/`drawText`/`drawRect`/`drawPixel`/`pause`/`saveState`/`loadState`) over a host-agnostic `ScriptBus` trait, gated by `WritesLocked` (folds RetroAchievements hardcore mode today; `.r26m` movie/netplay locks are documented future additions, not stub fields). 18 tests passing. `std`-only, `unsafe`-permitted (the one exception besides `rusty2600-cheevos`, both for C-FFI reasons). **Not yet wired into `rusty2600-frontend`** — no `scripting` feature flag, no live `ScriptBus` impl, no overlay compositing yet; see `docs/scripting.md` for the full scope and the `v1.9.x` wiring plan. A `piccolo` wasm-fallback backend is also deferred. |
 
 ## Accuracy (per-suite pass counts)
 
@@ -167,8 +187,8 @@ ROM. See `docs/riot.md` for the full writeup;
 | TIA timing / draw ROMs | test-ROM corpus | permanently unavailable (`T-0602-006`) — no freely-redistributable corpus exists; see `docs/testing-strategy.md` |
 | Stella regression corpus | test-ROM corpus | same as above (`T-0602-006`) |
 | **Accuracy battery (AccuracyCoin-equivalent)** | battery | **2 / 2 (100%)** — stood up v0.8.0, `tests/accuracy_battery.rs`, CI-enforced via the existing `--features test-roms` step, ≥90% v1.0 threshold |
-| **Workspace test suite** | `cargo test --workspace` | **238 / 238** (unchanged — the new golden-trace test is `--features test-roms`-gated) |
-| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **242 / 242** (+1 vs. v1.7.0 for the new golden-trace test) |
+| **Workspace test suite** | `cargo test --workspace` | **256 / 256** (+18 vs. v1.8.0 for the new `rusty2600-script` engine tests) |
+| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **260 / 260** |
 | `rusty2600-frontend` (`--features hd-pack`) | `cargo test -p rusty2600-frontend --features hd-pack` | **70 / 70** (+3 sprite-pack loader tests; `hd-pack` off by default, not part of the two workspace-wide counts above) |
 
 ## Board / mapper matrix

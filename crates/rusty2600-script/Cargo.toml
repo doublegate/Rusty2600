@@ -1,0 +1,25 @@
+[package]
+name = "rusty2600-script"
+description = "Lua scripting for Rusty2600 (native mlua backend, off by default)"
+version = "1.9.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+# mlua vendors and builds Lua 5.4 via a C compiler (the `vendored` feature),
+# matching how `rusty2600-cheevos` already vendors `rcheevos` — no unsafe of
+# OUR own is needed (mlua's public API is safe Rust; it confines its FFI
+# internally), so this crate keeps the workspace's default `unsafe_code =
+# "warn"` lint rather than needing an override like `rusty2600-cheevos`'s.
+# `std`-only: this is the one scripting/host-integration crate in the
+# workspace, not a `no_std` chip crate, and is never linked into the
+# `no_std` gate build (`cargo build -p rusty2600-core --no-default-features
+# --target thumbv7em-none-eabihf`).
+[lints]
+workspace = true
+
+[dependencies]
+mlua = { version = "0.10", features = ["lua54", "vendored"] }

@@ -1,7 +1,7 @@
 [package]
 name = "rusty2600-cheevos"
 description = "Native-only RetroAchievements (rcheevos) FFI wrapper for Rusty2600"
-version = "1.8.0"
+version = "1.9.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

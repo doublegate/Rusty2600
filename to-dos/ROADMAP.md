@@ -7,57 +7,25 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current release: v1.8.0 "Oracle"** — the eighth release of the
+**Current release: v1.9.0 "Scriptable"** — the ninth release of the
 `v1.1.0 -> v2.0.0` RustyNES-parity line (see "Version -> Phase mapping
-(v1.1.0 -> v2.0.0)" below for the full plan). Closes `T-0602-007`:
-`GoldenLogDiffer` now bundles a genuine externally-oracled golden CPU
-trace (20,000 instructions of the Klaus functional test, captured via
-Gopher2600's `hardware/cpu` package run directly against the same ROM),
-`bundled()` reports `true`, and a new integration test confirms
-`first_divergence() == None` — two independently-implemented 6502 cores
-agreeing register-for-register and cycle-for-cycle. `T-0602-006` (a
-TIA-timing test-ROM corpus for Layer 3) stays a permanent stub: researched
-again this release, no freely-redistributable 2600-specific TIA/RIOT
-test-ROM corpus exists (Gopher2600's own README admits the same). TIA/RIOT
-accuracy work continues via the differential-oracle method against
-specific known-hard titles. See `docs/testing-strategy.md` and
-`CHANGELOG.md`'s `[1.8.0]` entry. Earlier: `v1.7.0 "Chronicle"` added a
-`.r26m` TAS movie format (`rusty2600-core::movie`): a start point (fresh
-seeded power-on per ADR 0006, or an embedded save-state blob — a branch
-point is exactly this) plus a per-frame `MovieFrame` input log, built on
-`[1.1.0]`'s save-state substrate. Also adds a TAStudio-lite piano-roll
-panel (`debugger/tastudio_panel.rs`, jump-to-frame via the existing
-rewind ring) plus two riders (`access_counter`, `memory_compare_panel`).
-Live per-frame auto-recording into `EmuCore::run_frame` is honestly
-deferred — see `docs/movie.md` and `CHANGELOG.md`'s `[1.7.0]` entry.
-Earlier still: `v1.6.0 "Coprocessor"` added a new `rusty2600-thumb` crate:
-a real ARM7TDMI Thumb-1 interpreter ported from Gopher2600's Go
-implementation (not Stella's C++ `Thumbulator`) — registers, N/Z/C/V
-status flags, a generic `ThumbMemory` trait seam, an approximate N/S/I
-cycle + MAM prefetch-latch timing model, and all 19 Thumb-1
-instruction-format classes, with 27 conformance tests. That release
-landed the interpreter core only — see `docs/thumb.md` and
-`CHANGELOG.md`'s `[1.6.0]` entry. Before that: `v1.5.0 "Full Catalog"`
-implemented `Bank4A50`
-(`T-0402-014`, BestEffort): three independently relocatable ROM/RAM
-segments plus a previous-access-gated hotspot state machine ported
-faithfully from Stella's `Cartridge4A50::checkBankSwitch`, wired into
-`detect()`'s 64K/128K branches via `is_probably_4a50()` — closing the
-catalogue to 23 of 25 schemes. AR/Supercharger (`T-0402-015`) was
-deliberately NOT attempted that release — see `CHANGELOG.md`'s `[1.5.0]`
-entry for the full scope-cut rationale. `v1.4.0 "Signal"` added a
-composable post-process shader stack (new `rusty2600-gfx-shaders` crate,
-`CrtScanline` + an honestly-labeled `CompositeArtifact` approximation,
-toggleable from Settings, empty-stack default byte-identical) plus the
-data-model half of the 2600-appropriate HD-pack analog (`sprite_pack`,
-`hd-pack` feature — its live rendering splice is honestly deferred pending
-a TIA object-ID mask); `v1.3.0 "Scope"` added debugger depth plus the
-long-deferred RetroAchievements achievement-list/login/toast UI
-(`T-0802-005`, DONE); `v1.2.0 "Foresight"` added run-ahead built on
-`[1.1.0]`'s save-state snapshot primitives; `v1.1.0 "Persistence"` shipped
-save-states (`rusty2600-core::save_state`, ADR 0007) + a rewind rework,
-plus fixes for three real frontend bugs found during manual verification —
-see `CHANGELOG.md`'s `[1.1.0]`-`[1.7.0]` entries. Phase 0 (foundation)
+(v1.1.0 -> v2.0.0)" below for the full plan). Adds a new
+`rusty2600-script` crate: a real, tested Lua scripting engine (`mlua`
+native backend, off by default) — a deliberately-smaller-than-RustyNES
+`emu` table over a host-agnostic `ScriptBus` trait, gated by a
+`WritesLocked` determinism lock (folds RetroAchievements hardcore mode
+today; movie/netplay locks are documented future additions, not stub
+fields). **This release lands the engine only** — not yet wired into
+`rusty2600-frontend` (no `scripting` feature, no live `ScriptBus` impl, no
+overlay compositing); a `v1.9.x` follow-up does that wiring, the same
+pattern `rusty2600-thumb` (`[1.6.0]`) and `.r26m` movies (`[1.7.0]`)
+already established. A `piccolo` wasm-fallback backend is also deferred.
+See `docs/scripting.md` and `CHANGELOG.md`'s `[1.9.0]` entry.
+
+Full release-by-release detail (v1.1.0 through the current release) lives
+in `docs/STATUS.md`'s "Current release" section and `CHANGELOG.md` — not
+duplicated here to avoid this file drifting out of sync with the
+canonical status doc. Phase 0 (foundation)
 through the full Curated-tier board set (Phase 4) are complete. Phase 7
 (BestEffort breadth) has landed 13 of the ~15-scheme BestEffort long tail
 cataloged in `docs/cart.md` (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA,
@@ -167,8 +135,8 @@ the `v0.x.0` line.
 | v1.5.0 "Full Catalog" | `Bank4A50` (`T-0402-014`, DONE): three independently relocatable ROM/RAM segments + a previous-access-gated hotspot state machine — closes 23 of 25 cataloged cart schemes. AR/Supercharger (`T-0402-015`) deliberately NOT attempted this release (its "fast-load" mode alone needs a bank-config decode, a 5-distinct-access delayed-write protocol, and a synthesized dummy BIOS stub — substantially larger than every other scheme here) |
 | v1.6.0 → v1.6.x "Coprocessor" (patch train) | A new `rusty2600-thumb` crate: a real ARM7TDMI Thumb-1 interpreter (ported from Gopher2600's Go implementation, all 19 instruction-format classes, 27 conformance tests) for the DPC+/CDF/CDFJ/CDFJ+ family (`T-0401-006`). `v1.6.0` (DONE) lands the interpreter core only — no `Board`/`Cartridge` wiring yet (`docs/thumb.md`). `v1.6.1+` wires DPC+, then CDF, then CDFJ/CDFJ+ into `detect()` one family at a time — closing the catalogue to 24/25, leaving only AR/Supercharger (`T-0402-015`) as its own separately-scoped follow-up to reach 25/25 |
 | v1.7.0 "Chronicle" | `.r26m` TAS movie format (`rusty2600-core::movie`, DONE): a start point (fresh seeded power-on or an embedded save-state blob — a branch point is exactly this) + a per-frame `MovieFrame` input log, built on v1.1.0's snapshot substrate. TAStudio-lite piano-roll panel (jump-to-frame via the existing rewind ring, branch points as separate `.r26m` files) + two riders (`access_counter`, `memory_compare_panel`). Live per-frame auto-recording into `EmuCore::run_frame` honestly deferred (`docs/movie.md`) |
-| **v1.8.0 "Oracle"** (current) | Accuracy battery depth, grown honestly rather than claiming an inflated pass rate. `T-0602-007` (DONE): a genuine externally-oracled golden CPU trace bundled for `GoldenLogDiffer` (20,000 instructions vs. an independent Gopher2600 CPU-package run, `first_divergence() == None`). `T-0602-006` (researched, stays a permanent stub): no freely-redistributable TIA/RIOT test-ROM corpus exists — confirmed again this release; TIA/RIOT accuracy work continues via the differential-oracle method against specific known-hard titles, not a canned corpus |
-| v1.9.0 "Scriptable" | Lua scripting (`rusty2600-script`: `mlua` native + `piccolo` wasm fallback) |
+| v1.8.0 "Oracle" | Accuracy battery depth, grown honestly rather than claiming an inflated pass rate. `T-0602-007` (DONE): a genuine externally-oracled golden CPU trace bundled for `GoldenLogDiffer` (20,000 instructions vs. an independent Gopher2600 CPU-package run, `first_divergence() == None`). `T-0602-006` (researched, stays a permanent stub): no freely-redistributable TIA/RIOT test-ROM corpus exists — confirmed again this release; TIA/RIOT accuracy work continues via the differential-oracle method against specific known-hard titles, not a canned corpus |
+| **v1.9.0 → v1.9.x "Scriptable"** (v1.9.0 current) | Lua scripting (`rusty2600-script`: `mlua` native backend). `v1.9.0` (DONE) lands the engine only — a real, tested `emu` API + `ScriptBus` seam, `WritesLocked` determinism gate — not yet wired into `rusty2600-frontend` (`docs/scripting.md`). `v1.9.1+` wires it into the frontend (live `ScriptBus` impl, `scripting` feature flag, overlay compositing, `onFrame` hook) and, time permitting, adds the `piccolo` wasm fallback |
 | v1.10.0 → v1.10.x "Rollback" (train) | Rollback netplay (`rusty2600-netplay`), 2-player-only by deliberate scope cut vs. RustyNES's 2-4-player mesh |
 | v1.11.0 → v1.11.x "Handheld" (train) | Android build (`rusty2600-mobile` UniFFI bridge + `rusty2600-android`) — sideloadable, not store-submitted |
 | v1.12.0 → v1.12.x "Pocket" (train) | iOS build (`rusty2600-ios`, reusing the `rusty2600-mobile` bridge), including a genuinely new virtual-analog-paddle UX design — TestFlight-equivalent, not App-Store-submitted |

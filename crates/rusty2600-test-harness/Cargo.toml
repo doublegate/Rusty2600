@@ -1,6 +1,6 @@
 [package]
 name = "rusty2600-test-harness"
-version = "1.8.0"
+version = "1.9.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -12,8 +12,8 @@ test-roms = []          # compiles the committed CC0/public-domain suites + inte
 commercial-roms = []    # the local-dump oracle (ROMs gitignored; commit only screenshots/.snap)
 
 [dependencies]
-rusty2600-core = { path = "../rusty2600-core", version = "1.8.0" }
-rusty2600-cpu = { path = "../rusty2600-cpu", version = "1.8.0" }
+rusty2600-core = { path = "../rusty2600-core", version = "1.9.0" }
+rusty2600-cpu = { path = "../rusty2600-cpu", version = "1.9.0" }
 
 [dev-dependencies]
 insta = "1"

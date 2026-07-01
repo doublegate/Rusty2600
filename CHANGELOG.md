@@ -6,6 +6,67 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-07-01 - "Scriptable"
+
+A new `rusty2600-script` crate: a real, tested Lua scripting engine, off
+by default. The engine lands in this release; frontend wiring is an
+explicitly-scoped follow-up.
+
+### Added
+
+- **`rusty2600-script`** (new crate, `std`-only, `unsafe`-permitted — the
+  one exception besides `rusty2600-cheevos`, both for C-FFI reasons):
+  `mlua` native backend (vendors Lua 5.4, no system Lua install needed),
+  exposing a deliberately-smaller-than-RustyNES `emu` table:
+  - `emu.peek(addr)` / `emu.poke(addr, val)` — mirror
+    `rusty2600_core::Bus::peek`/`cpu_write`.
+  - `emu.cpu()` — a read-only 6507 register-file snapshot.
+  - `emu.onFrame(fn)` — a per-frame callback.
+  - `emu.setJoystick(port, direction, pressed)` /
+    `emu.setConsoleSwitch(name, value)` — the gated input-override
+    surface.
+  - `emu.drawText`/`drawRect`/`drawPixel` — script-driven overlay
+    primitives, accumulated per frame.
+  - `emu.pause()` / `emu.saveState()` / `emu.loadState(bytes)` — wraps the
+    existing `[1.1.0]` `SaveState` capture/restore.
+  - All of the above sit behind `ScriptBus`, a host-agnostic trait — this
+    crate never touches `rusty2600-core`/`rusty2600-frontend` types
+    directly; a host implements the trait over whatever real state it
+    owns.
+  - `WritesLocked`: the determinism gate every script-driven WRITE is
+    checked against. Folds exactly one real lock source today
+    (RetroAchievements hardcore mode) — `.r26m` movie and rollback-netplay
+    locks are documented, NOT stubbed, future additions, added when those
+    subsystems get real lock semantics of their own.
+  - 18 hand-authored tests: peek/poke round-trip, lock rejection for
+    `poke`/`setJoystick` (verifying no side effect occurs, not just that
+    an error is raised), joystick/console-switch recording and
+    unknown-name rejection, CPU snapshot exposure, `onFrame` firing across
+    multiple ticks, `pause`, save/load-state round-trip and bad-blob error
+    surfacing, and draw-primitive accumulation.
+
+### Notes
+
+- **This release lands the engine only.** `rusty2600-script` is not yet
+  wired into `rusty2600-frontend`: no `scripting` feature flag, no live
+  `ScriptBus` implementation over the real `Bus`/`Cpu`, no overlay
+  compositing in the render pipeline, no `onFrame` hook tied to
+  `EmuCore::run_frame`. A `v1.9.x` follow-up does that wiring — the same
+  pattern `rusty2600-thumb` (`[1.6.0]`, cart-board wiring deferred) and
+  `.r26m` movies (`[1.7.0]`, live recording deferred) already established
+  for this project. See `docs/scripting.md` for the full scope.
+- **A `piccolo` pure-Rust wasm-fallback backend is also deferred.**
+  `piccolo` is a materially less mature project than `mlua` (fewer
+  standard-library facilities, less battle-tested) — landing a second,
+  non-byte-parity scripting backend alongside a brand-new API surface in
+  the same pass risked shipping either half-tested. The `emu` table and
+  `ScriptBus` seam are designed backend-agnostically, so a `piccolo`
+  backend remains a genuine, scoped follow-up rather than a rewrite.
+- Explicitly out of scope (per the original plan): TAStudio-integrated
+  scripting, host-IPC (`comm.*`), SQLite-backed `userdata`.
+- 256 tests passing workspace-wide (+18 for the new `rusty2600-script`
+  engine tests), up from 238 at `[1.8.0]`; 260 with `--features test-roms`.
+
 ## [1.8.0] - 2026-07-01 - "Oracle"
 
 Accuracy battery depth, grown honestly: a genuine externally-oracled
