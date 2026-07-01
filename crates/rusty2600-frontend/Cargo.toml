@@ -23,10 +23,16 @@ name = "rusty2600"
 path = "src/main.rs"
 
 [features]
-# Two wasm32 frontends; exactly one is compiled (each provides a unique
-# `#[wasm_bindgen(start)]`). `wasm-winit` (default) is the full winit + wgpu +
-# egui experience; `wasm-canvas` is a lightweight canvas-2D embed. `help-tui`
-# adds the ratatui terminal help browser (native-only).
+# `wasm-winit`/`wasm-canvas` are currently IDENTICAL placeholder names for
+# the one wasm32 entry point that actually exists (`src/wasm.rs`, a
+# canvas-2D `requestAnimationFrame` bootstrap with real keyboard input —
+# see its module doc comment) — neither feature gates any code today
+# (both are empty `[]`). The names describe an intended FUTURE split: a
+# real winit + wgpu + egui browser build (matching the native binary, the
+# way RustyNES's own `wasm-winit` feature does) is not yet attempted. Don't
+# read the names as already-shipped capability; `docs/frontend.md`/the GH
+# Pages workflow track the real, current single-implementation state.
+# `help-tui` adds the ratatui terminal help browser (native-only).
 #
 # `emu-thread` runs `EmuCore` on a dedicated thread (paced by the audio ring
 # buffer's fill ratio) instead of stepping synchronously inside `render()`.

@@ -1,19 +1,56 @@
 name: Deploy Pages (demo + docs)
+
+# Builds the wasm32 frontend with trunk AND the workspace rustdoc, then
+# publishes BOTH to GitHub Pages in a single deployment
+# (https://doublegate.github.io/Rusty2600/):
+#
+#   /        the playable wasm demo (the canvas-2D bootstrap)
+#   /api/    the workspace API documentation (rustdoc)
+#
+# GitHub Pages allows only one deployment source per repo, so the demo and
+# the docs are assembled into one artifact and deployed together (the Pages
+# source must be "GitHub Actions", build_type: workflow — NOT a branch).
+#
+# Two jobs: `build` produces the demo, builds the docs, assembles the
+# combined `pages-artifact/`, and uploads it as a Pages artifact; `deploy`
+# publishes it. The build also runs on pull requests (deploy does NOT), so a
+# PR gets a build-correctness check without publishing a preview.
 on:
   push:
     branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/pages.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# Pages deploy needs these; everything else is read-only.
 permissions:
   contents: read
   pages: write
   id-token: write
+
+# Only one Pages deploy at a time; let an in-flight one finish rather than
+# cancelling (a half-applied Pages deploy is worse than a slow one).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
 jobs:
-  deploy:
+  build:
+    name: build demo + docs
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
       - name: Install Linux system dependencies
         # cpal (audio) needs ALSA; both the wasm demo build (its dependency
         # graph still resolves/builds native crates for host tools) and the
@@ -24,25 +61,67 @@ jobs:
             libasound2-dev libudev-dev \
             libxkbcommon-dev libwayland-dev \
             libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev
+
       - uses: dtolnay/rust-toolchain@1.96
         with:
           targets: wasm32-unknown-unknown
+
       - uses: taiki-e/install-action@trunk
-      # Build the wasm demo (trunk) at / and the rustdoc at /api/, then deploy ONE artifact.
-      # GOTCHA: keep crates/rusty2600-frontend/web/Trunk.toml's wasm-bindgen pin == Cargo.lock
-      # library version (grep -A1 'name = "wasm-bindgen"' Cargo.lock).
+
+      # Build the wasm demo (trunk) at /. `crates/rusty2600-frontend/web/Trunk.toml`
+      # already sets `public_url = "/Rusty2600/"` for the project-Pages subpath;
+      # GOTCHA: keep its `wasm-bindgen` tool pin == the Cargo.lock library version
+      # (grep -A1 'name = "wasm-bindgen"' Cargo.lock).
       - name: Build wasm demo
         working-directory: crates/rusty2600-frontend/web
         run: trunk build --release
-      - name: Build rustdoc
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-      - name: Assemble Pages artifact
+
+      - name: Build the workspace API docs (rustdoc)
+        # --no-deps keeps it to our own crates. No -D warnings here: the lint
+        # job in ci.yml already gates rustdoc, so the Pages build only needs
+        # the HTML and must not fail the deploy on a doc nit.
+        run: cargo doc --workspace --no-deps
+
+      - name: Assemble the Pages site (demo at /, rustdoc at /api/)
         run: |
+          set -euo pipefail
+          rm -rf pages-artifact
           mkdir -p pages-artifact/api
           cp -r crates/rusty2600-frontend/web/dist/. pages-artifact/
           cp -r target/doc/. pages-artifact/api/
-      - uses: actions/upload-pages-artifact@v3
+          # rustdoc emits no root index for a multi-crate workspace; add a
+          # redirect to the core crate's facade so /api/ lands somewhere useful.
+          cat > pages-artifact/api/index.html <<'HTML'
+          <!doctype html>
+          <meta charset="utf-8">
+          <meta http-equiv="refresh" content="0; url=rusty2600_core/index.html">
+          <title>Rusty2600 API documentation</title>
+          <a href="rusty2600_core/index.html">Rusty2600 API documentation</a>
+          HTML
+
+      - name: Configure Pages
+        # build_type is set to "workflow" (GitHub Actions source); enablement
+        # self-heals if Pages is ever disabled.
+        uses: actions/configure-pages@v6
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact (demo + docs)
+        uses: actions/upload-pages-artifact@v5
         with:
           path: pages-artifact
-      - uses: actions/deploy-pages@v4
+
+  deploy:
+    name: deploy to GitHub Pages
+    # Only publish from main / manual dispatch — PRs build (as a correctness
+    # check) but never deploy.
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
         id: deployment
+        uses: actions/deploy-pages@v5

@@ -1,35 +1,192 @@
-<!DOCTYPE html>
-<html>
-  <head>
+<!doctype html>
+<html lang="en">
+<head>
     <meta charset="utf-8" />
-    <title>Rusty2600 (WASM)</title>
-    <!-- Trunk will compile the rust crate and inject the wasm binding here -->
-    <link data-trunk rel="rust" data-target-name="rusty2600_frontend" href="../Cargo.toml" data-cargo-features="wasm-winit" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Rusty2600 — a cycle-accurate Atari 2600 / VCS emulator written in pure Rust, running live in your browser via WebAssembly." />
+    <title>Rusty2600 — cycle-accurate Atari 2600 emulator in your browser</title>
+
+    <!--
+        GitHub Pages host for the wasm32 frontend (the canvas-2D bootstrap in
+        `src/wasm.rs`). Live at https://doublegate.github.io/Rusty2600/
+    -->
+    <link data-trunk rel="rust" href="../Cargo.toml"
+          data-target-name="rusty2600_frontend" data-cargo-features="wasm-winit" />
+
     <style>
-      body, html {
-        margin: 0;
-        padding: 0;
-        width: 100%;
-        height: 100%;
-        background: #1e1e1e;
-        color: #fff;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        font-family: sans-serif;
-      }
-      canvas {
-        max-width: 100%;
-        max-height: 100%;
-      }
+        :root {
+            color-scheme: dark;
+            --bg: #181410;
+            --panel: #1f1a14;
+            --fg: #e7ddce;
+            --accent: #e8871e;
+            --accent-dim: #8a5420;
+            --border: #3a2f22;
+        }
+        html, body {
+            margin: 0;
+            padding: 0;
+            min-height: 100%;
+            background: var(--bg);
+            color: var(--fg);
+            font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        }
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+            padding: 24px;
+            text-align: center;
+        }
+        h1 { font-size: 22px; margin: 0; }
+        h1 .sub { opacity: 0.55; font-weight: normal; font-size: 15px; }
+        #controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; }
+        #controls label { display: flex; gap: 6px; align-items: center; }
+
+        /* The 2600's active display is 160x192; render at 3x with
+           nearest-neighbour so the pixels stay crisp, matching the
+           canvas-2D bootstrap's own pixel-exact output. */
+        #atari-canvas {
+            width: 480px;
+            height: 576px;
+            max-width: 92vw;
+            image-rendering: pixelated;
+            background: #000;
+            border: 3px solid var(--border);
+            border-radius: 4px;
+            box-shadow: 0 0 0 1px var(--accent-dim);
+        }
+
+        .hint { opacity: 0.65; font-size: 13px; max-width: 560px; line-height: 1.5; }
+        .hint code { color: var(--accent); }
+        .hint strong { color: var(--fg); }
+        a { color: var(--accent); }
+
+        #switches {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+            max-width: 560px;
+        }
+        .switch-btn {
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--panel);
+            color: var(--fg);
+            font: inherit;
+            font-size: 12px;
+            padding: 6px 12px;
+            cursor: pointer;
+        }
+        .switch-btn:hover { border-color: var(--accent-dim); }
+        .switch-btn:active, .switch-btn.held { background: var(--accent); color: #1a1206; border-color: var(--accent); }
+
+        kbd {
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            padding: 0 5px;
+            font-size: 12px;
+            background: var(--panel);
+        }
     </style>
-  </head>
-  <body>
-    <div>
-      <input type="file" id="rom-input" accept=".bin" />
+</head>
+<body>
+    <h1>Rusty2600 <span class="sub">— wasm32 (canvas-2D)</span></h1>
+
+    <div id="controls">
+        <label>Load ROM: <input id="rom-input" type="file" accept=".bin,.a26" /></label>
     </div>
-    <div id="rusty2600_canvas_container">
-        <canvas id="atari-canvas"></canvas>
+
+    <!-- The wasm `start()` fn blits the TIA framebuffer here each frame. -->
+    <canvas id="atari-canvas" width="160" height="192"></canvas>
+
+    <!--
+        Console switches: SWCHB. Reset/Select are momentary (held while the
+        button is pressed); Color/B&W and both Difficulty switches are
+        latching toggles (a single click flips them), matching the same
+        `InputState::apply_action` press-edge semantics F1-F5 already drive.
+        Wired through the wasm `set_console_switch(name, pressed)` export.
+    -->
+    <div id="switches">
+        <button class="switch-btn" id="btn-select" type="button">Select <kbd>F1</kbd></button>
+        <button class="switch-btn" id="btn-reset" type="button">Reset <kbd>F2</kbd></button>
+        <button class="switch-btn" id="btn-color" type="button">Color/B&amp;W <kbd>F3</kbd></button>
+        <button class="switch-btn" id="btn-diff-left" type="button">P0 Difficulty <kbd>F4</kbd></button>
+        <button class="switch-btn" id="btn-diff-right" type="button">P1 Difficulty <kbd>F5</kbd></button>
     </div>
-  </body>
+
+    <p class="hint">
+        <strong>Player 1:</strong> arrow keys = joystick, <kbd>Z</kbd> = fire.
+        <strong>Player 2:</strong> <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> = joystick,
+        <kbd>Q</kbd> = fire. Console switches also respond to <kbd>F1</kbd>-<kbd>F5</kbd>
+        (see the buttons above) — the exact same key layout as the native desktop build.
+        Select a <code>.bin</code>/<code>.a26</code> ROM above to begin. Check the devtools
+        console for the boot log.
+    </p>
+    <p class="hint">
+        This is the lightweight canvas-2D bootstrap, not the full native
+        experience: no audio yet, and no in-browser debugger overlay. The
+        native desktop build (Linux/macOS/Windows) adds real-time audio, the
+        full `debug-hooks` debugger, save-states/rewind/run-ahead, RetroAchievements,
+        and more — see the README for the full feature set.
+    </p>
+
+    <p class="hint">
+        <a href="https://github.com/doublegate/Rusty2600">github.com/doublegate/Rusty2600</a>
+        &nbsp;·&nbsp;
+        <a href="api/">API documentation</a>
+    </p>
+
+    <!--
+        Console-switch buttons -> the wasm `set_console_switch` export.
+        Bindings load asynchronously (trunk's wasm-bindgen glue exposes them
+        on `window.wasmBindings`), so every call is guarded — a click before
+        the wasm is ready is simply dropped.
+    -->
+    <script>
+        (function () {
+            "use strict";
+
+            function bindings() { return window.wasmBindings || null; }
+
+            function wireMomentary(id, name) {
+                var el = document.getElementById(id);
+                if (!el) { return; }
+                var press = function (e) {
+                    e.preventDefault();
+                    var b = bindings();
+                    if (b && b.set_console_switch) { b.set_console_switch(name, true); }
+                    el.classList.add("held");
+                };
+                var release = function (e) {
+                    e.preventDefault();
+                    var b = bindings();
+                    if (b && b.set_console_switch) { b.set_console_switch(name, false); }
+                    el.classList.remove("held");
+                };
+                el.addEventListener("pointerdown", press);
+                el.addEventListener("pointerup", release);
+                el.addEventListener("pointerleave", release);
+            }
+
+            function wireToggle(id, name) {
+                var el = document.getElementById(id);
+                if (!el) { return; }
+                el.addEventListener("click", function (e) {
+                    e.preventDefault();
+                    var b = bindings();
+                    if (b && b.set_console_switch) { b.set_console_switch(name, true); }
+                });
+            }
+
+            wireMomentary("btn-select", "select");
+            wireMomentary("btn-reset", "reset");
+            wireToggle("btn-color", "color");
+            wireToggle("btn-diff-left", "left_difficulty");
+            wireToggle("btn-diff-right", "right_difficulty");
+        })();
+    </script>
+</body>
 </html>
