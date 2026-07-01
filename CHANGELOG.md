@@ -6,6 +6,78 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-01 - "Breadth" (Batches 1-2)
+
+The first installment of the BestEffort bankswitch long tail (the plan's
+staged patch train toward Stella-adjacent cart-scheme parity): 7 new
+schemes across two batches, plus a Bus/Board architecture extension needed
+to model several of them at all. All BestEffort tier per ADR 0003 —
+register-decode + boot-smoke tested only, never accuracy-oracle-gated.
+
+### Added
+
+- **Batch 1 (classic homebrew):**
+  - **F0 (Dynacom Megaboy):** 64 KiB ROM, 16×4K banks, a single
+    SEQUENTIAL-ADVANCE hotspot at `$1FF0` (wraps 15 → 0) — unlike every
+    other F-series scheme, the game can't jump to an arbitrary bank.
+  - **E0 (Parker Bros):** 8 KiB ROM, four 1 KiB segments; the first three
+    independently selectable among 8 banks each, the fourth permanently
+    fixed to the last bank.
+  - **3F (Tigervision):** variable-size ROM, bank selected by writing the
+    desired bank number to ANY address whose low byte is `$3F` — not a
+    `$1000+` cart-window hotspot at all.
+  - **3E (Tigervision + RAM, Boulder Dash):** `3F` plus a `$3E` hotspot
+    selecting a RAM bank instead of ROM.
+- **Batch 2 (CPUWIZ homebrew family):**
+  - **EF/EFSC:** 64 KiB ROM, 16×4K banks, direct-select hotspots
+    `$1FE0-$1FEF` (unlike F0's sequential-advance at the same size); EFSC
+    adds the standard 128 B Superchip RAM overlay.
+  - **DF/DFSC:** 128 KiB ROM, 32×4K banks, direct-select hotspots
+    `$1FC0-$1FDF`, same Superchip option.
+  - **BF/BFSC:** 256 KiB ROM, 64×4K banks, direct-select hotspots
+    `$1F80-$1FBF`, same Superchip option.
+- **`Board::snoop_write(addr, val)`:** a new default-no-op hook, called from
+  `Bus::cpu_write` for every write the console routes to TIA/RIOT space
+  (not just the cart window) — matching real hardware, where a cartridge's
+  edge connector is wired to every address line. Required for 3F/3E's
+  `$3E`/`$3F` hotspots, which live deep in TIA/RIOT-mirrored zero-page
+  space, not `$1000+`.
+- All 7 new schemes wired into `detect()`'s automatic dispatch, in the same
+  relative priority Stella's own `CartDetector` uses at each size, so a
+  same-size collision with a Curated scheme (F0/EF vs nothing at 64 KiB;
+  E0/3E/3F vs plain F8 at 8 KiB; 3E/3F vs plain F4 at 32 KiB) is never
+  silently misdetected. 128 KiB and 256 KiB images with no matching
+  signature now return `None` rather than guessing, since the only other
+  schemes at those sizes (SB, 4A50) aren't implemented yet.
+
+### Changed
+
+- Enabled serde's `alloc` feature workspace-wide (needed for `Vec<u8>`
+  serialize/deserialize in this `no_std + alloc` crate).
+
+### Fixed
+
+- A `clippy::large_stack_frames` failure surfaced from inlining a 64 KiB
+  array into the `Cartridge` enum (an enum is sized to its largest
+  variant, so one large variant inflates every stack frame that moves a
+  `Cartridge`/`Bus`/`System` by value). Fixed by storing large-ROM boards'
+  data as `Vec<u8>` instead of a fixed array — applies to `BankF0`,
+  `Bank3F`, `Bank3E`, `BankEF`, `BankDF`, and `BankBF`.
+
+### Notes
+
+- **Deliberately deferred, not overlooked:** UA, 0840, FE, SB, X07, and
+  4A50 all bankswitch on CPU *reads* of TIA/RIOT-mirrored addresses, not
+  just writes — `Board::snoop_write` doesn't cover them. FE additionally
+  needs the snooped *value* (not just the address) to pick a bank. This is
+  a bigger interface question (the board must be able to REDIRECT a read,
+  not just observe it, since these hotspots overlap real RIOT RAM / TIA
+  registers) than the write-only case this release solved cleanly — scoped
+  as a follow-up ticket (`T-0402-006`/`011`) rather than rushed.
+- Batches 3-5 (DPC-family/fractional-datafetcher schemes, ARM/peripheral-
+  integrated carts, and multicart wrappers) remain for subsequent v0.4.x
+  releases.
+
 ## [0.3.0] - 2026-07-01 - "Curated"
 
 Closes out the full Curated-tier cart-scheme set the plan scoped for this
