@@ -93,6 +93,7 @@ look different, they visibly break.
 | **Run-Ahead** *(v1.2.0)* | Speculatively simulates a few frames ahead to hide a game's internal input lag, built on the save-state snapshot primitives — off by default, `0..=4` frames, adjustable live from Settings |
 | **Shader Stack** *(v1.4.0)* | A composable post-process stack (`rusty2600-gfx-shaders`) — CRT scanline darkening and an honestly-labeled composite-artifact color-bleed approximation, toggleable from Settings; empty stack (the default) is byte-identical to the direct blit |
 | **4A50 Bankswitching** *(v1.5.0)* | Three independently relocatable ROM/RAM segments plus a previous-access-gated hotspot state machine, ported faithfully from Stella's `Cartridge4A50` — BestEffort tier |
+| **ARM7TDMI Thumb Interpreter** *(v1.6.0)* | A real Thumb-1 interpreter (`rusty2600-thumb`) ported from Gopher2600's Go implementation — registers, N/Z/C/V flags, all 19 instruction-format classes; the substrate the DPC+/CDF/CDFJ/CDFJ+ coprocessor family will wire into starting `v1.6.1` |
 | **Accuracy Battery** | A real `AccuracyScore`-gated battery (`rusty2600-test-harness`), CI-enforced, growing honestly rather than claiming an inflated pass rate |
 | **WebAssembly** | Runs in-browser via `wasm-winit` (full winit/wgpu/egui) or a lightweight `wasm-canvas` embed mode |
 | **Pure Rust** | `winit` + `wgpu` + `cpal` + `egui` frontend; a safe `no_std + alloc` chip stack behind a one-directional crate graph |
@@ -135,10 +136,12 @@ scheme react to accesses the console routes to TIA/RIOT space, not just the
 `$1000+` cart window — needed for the 3F/3E/UA/0840/FE/X07/SB/4A50 families
 (4A50 also uses a smaller in-window instance of its hotspot state machine at
 `$1F00-$1FFF`). Only AR/Supercharger and the ARM-driven DPC+/CDF/CDFJ/CDFJ+
-family (which needs a full ARM7TDMI Thumb interpreter) remain, each
-deliberately deferred as a substantially larger, separately-scoped
-undertaking — see [`docs/cart.md`](docs/cart.md) for the full catalogue and
-tiering.
+family remain. The latter's ARM7TDMI Thumb-1 interpreter substrate
+(`rusty2600-thumb`) now exists (v1.6.0) but isn't wired into any `Board`
+yet — that's the `v1.6.x` patch train, one coprocessor family at a time.
+AR/Supercharger stays its own separately-scoped follow-up — see
+[`docs/cart.md`](docs/cart.md) and [`docs/thumb.md`](docs/thumb.md) for the
+full catalogue, tiering, and interpreter architecture.
 
 ### Modern features
 
@@ -319,6 +322,7 @@ numbers as deltas across changes, not absolute cross-machine guarantees.
 | [`docs/scheduler.md`](docs/scheduler.md) | The master-clock lockstep scheduler in detail |
 | [`docs/cpu.md`](docs/cpu.md) / [`docs/tia.md`](docs/tia.md) / [`docs/riot.md`](docs/riot.md) | Per-chip specs |
 | [`docs/cart.md`](docs/cart.md) | The full bankswitch catalogue and Core/Curated/BestEffort tiering |
+| [`docs/thumb.md`](docs/thumb.md) | The ARM7TDMI Thumb-1 interpreter (`rusty2600-thumb`): architecture, scope, deviations from the Go reference |
 | [`docs/frontend.md`](docs/frontend.md) | The frontend crate's shape and behavior |
 | [`docs/testing-strategy.md`](docs/testing-strategy.md) | The layered accuracy-oracle methodology |
 | [`docs/performance.md`](docs/performance.md) | Measured Criterion baselines and profiling guidance |

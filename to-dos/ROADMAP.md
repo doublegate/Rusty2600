@@ -7,16 +7,23 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current release: v1.5.0 "Full Catalog"** — the fifth release of the
+**Current release: v1.6.0 "Coprocessor"** — the sixth release of the
 `v1.1.0 -> v2.0.0` RustyNES-parity line (see "Version -> Phase mapping
-(v1.1.0 -> v2.0.0)" below for the full plan). Implements `Bank4A50`
+(v1.1.0 -> v2.0.0)" below for the full plan). Adds a new `rusty2600-thumb`
+crate: a real ARM7TDMI Thumb-1 interpreter ported from Gopher2600's Go
+implementation (not Stella's C++ `Thumbulator`) — registers, N/Z/C/V
+status flags, a generic `ThumbMemory` trait seam, an approximate N/S/I
+cycle + MAM prefetch-latch timing model, and all 19 Thumb-1
+instruction-format classes, with 27 conformance tests. This release lands
+the interpreter core only — see `docs/thumb.md` and `CHANGELOG.md`'s
+`[1.6.0]` entry. Earlier: `v1.5.0 "Full Catalog"` implemented `Bank4A50`
 (`T-0402-014`, BestEffort): three independently relocatable ROM/RAM
 segments plus a previous-access-gated hotspot state machine ported
 faithfully from Stella's `Cartridge4A50::checkBankSwitch`, wired into
 `detect()`'s 64K/128K branches via `is_probably_4a50()` — closing the
-catalogue to 23 of 25 schemes. AR/Supercharger (`T-0402-015`) is
-deliberately NOT attempted in this release — see `CHANGELOG.md`'s `[1.5.0]`
-entry for the full scope-cut rationale. Earlier: `v1.4.0 "Signal"` added a
+catalogue to 23 of 25 schemes. AR/Supercharger (`T-0402-015`) was
+deliberately NOT attempted that release — see `CHANGELOG.md`'s `[1.5.0]`
+entry for the full scope-cut rationale. `v1.4.0 "Signal"` added a
 composable post-process shader stack (new `rusty2600-gfx-shaders` crate,
 `CrtScanline` + an honestly-labeled `CompositeArtifact` approximation,
 toggleable from Settings, empty-stack default byte-identical) plus the
@@ -28,14 +35,15 @@ long-deferred RetroAchievements achievement-list/login/toast UI
 `[1.1.0]`'s save-state snapshot primitives; `v1.1.0 "Persistence"` shipped
 save-states (`rusty2600-core::save_state`, ADR 0007) + a rewind rework,
 plus fixes for three real frontend bugs found during manual verification —
-see `CHANGELOG.md`'s `[1.1.0]`-`[1.4.0]` entries. Phase 0 (foundation)
+see `CHANGELOG.md`'s `[1.1.0]`-`[1.5.0]` entries. Phase 0 (foundation)
 through the full Curated-tier board set (Phase 4) are complete. Phase 7
 (BestEffort breadth) has landed 13 of the ~15-scheme BestEffort long tail
 cataloged in `docs/cart.md` (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA,
 0840, FE, SB, X07, 4A50 — 23 of 25 total schemes in the LOCAL catalogue),
 leaving only AR/Supercharger (`T-0402-015`) and the ARM-driven DPC+/CDF/
-CDFJ/CDFJ+ family (`T-0401-006`) — both substantially larger undertakings
-than the rest of the breadth work, deliberately deferred rather than rushed.
+CDFJ/CDFJ+ family (`T-0401-006`) — the latter's interpreter substrate
+(`rusty2600-thumb`) now exists but isn't yet wired into any `Board`, that
+wiring being the `v1.6.x` patch train, one family at a time.
 `Board::snoop_write`/`snoop_read` (added v0.4.0/v0.4.1) underpin all of
 UA/0840/FE/SB/X07/4A50. **Phase 5 (frontend) is fully complete** — the real
 `debug-hooks` debugger (6507/TIA/RIOT/memory panels, breakpoints/step/
@@ -134,8 +142,8 @@ the `v0.x.0` line.
 | v1.2.0 "Foresight" | Run-ahead (`rusty2600-frontend::runahead`, off by default, `0..=4` frames), built on v1.1.0's snapshot/restore primitives; a `Tia::scanline` overflow panic fixed along the way |
 | v1.3.0 "Scope" | Debugger depth: watch/conditional-breakpoint expression engine, callstack, a TIA per-scanline event/write-scatter viewer, a player/missile/ball position view — plus the long-deferred RetroAchievements achievement-list/login/toast UI (`T-0802-005`, DONE) |
 | v1.4.0 "Signal" | A composable shader/filter stack (`rusty2600-gfx-shaders`: `CrtScanline` + an honestly-labeled `CompositeArtifact` approximation) + the data-model half of a right-sized sprite-replacement overlay (`sprite_pack`, `hd-pack` feature — live rendering splice deferred pending a TIA object-ID mask) |
-| **v1.5.0 "Full Catalog"** (current) | `Bank4A50` (`T-0402-014`, DONE): three independently relocatable ROM/RAM segments + a previous-access-gated hotspot state machine — closes 23 of 25 cataloged cart schemes. AR/Supercharger (`T-0402-015`) deliberately NOT attempted this release (its "fast-load" mode alone needs a bank-config decode, a 5-distinct-access delayed-write protocol, and a synthesized dummy BIOS stub — substantially larger than every other scheme here) |
-| v1.6.0 → v1.6.x "Coprocessor" (patch train) | A new `rusty2600-thumb` crate: an ARM7TDMI Thumb interpreter (ported from Gopher2600's Go implementation) for the DPC+/CDF/CDFJ/CDFJ+ family (`T-0401-006`) — closes the catalogue to 24/25, leaving only AR/Supercharger (`T-0402-015`) as its own separately-scoped follow-up to reach 25/25 |
+| v1.5.0 "Full Catalog" | `Bank4A50` (`T-0402-014`, DONE): three independently relocatable ROM/RAM segments + a previous-access-gated hotspot state machine — closes 23 of 25 cataloged cart schemes. AR/Supercharger (`T-0402-015`) deliberately NOT attempted this release (its "fast-load" mode alone needs a bank-config decode, a 5-distinct-access delayed-write protocol, and a synthesized dummy BIOS stub — substantially larger than every other scheme here) |
+| **v1.6.0 → v1.6.x "Coprocessor"** (patch train, v1.6.0 current) | A new `rusty2600-thumb` crate: a real ARM7TDMI Thumb-1 interpreter (ported from Gopher2600's Go implementation, all 19 instruction-format classes, 27 conformance tests) for the DPC+/CDF/CDFJ/CDFJ+ family (`T-0401-006`). **v1.6.0 lands the interpreter core only** — no `Board`/`Cartridge` wiring yet (`docs/thumb.md`). `v1.6.1+` wires DPC+, then CDF, then CDFJ/CDFJ+ into `detect()` one family at a time — closing the catalogue to 24/25, leaving only AR/Supercharger (`T-0402-015`) as its own separately-scoped follow-up to reach 25/25 |
 | v1.7.0 "Chronicle" | TAS movie format (`.r26m`) + a TAStudio-lite panel, built on v1.1.0's snapshot substrate |
 | v1.8.0 "Oracle" | Accuracy battery depth: real, license-clear TIA-timing test-ROM fixtures (`T-0602-006`) and a genuine externally-oracled golden CPU trace (`T-0602-007`), grown honestly rather than claiming an inflated pass rate |
 | v1.9.0 "Scriptable" | Lua scripting (`rusty2600-script`: `mlua` native + `piccolo` wasm fallback) |

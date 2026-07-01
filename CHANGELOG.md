@@ -6,6 +6,67 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-07-01 - "Coprocessor"
+
+A new `rusty2600-thumb` crate: a real ARM7TDMI Thumb-1 interpreter, the
+substrate the DPC+/CDF/CDFJ/CDFJ+ coprocessor family will wire into.
+
+### Added
+
+- **`rusty2600-thumb`** (new crate, `no_std + alloc`,
+  `#![forbid(unsafe_code)]`, zero dependency on any other Rusty2600 crate):
+  a real ARM7TDMI Thumb-1 interpreter ported from Gopher2600's Go
+  implementation (`hardware/memory/cartridge/arm/`), not Stella's C++
+  `Thumbulator` — its memory-safety-first style maps far more naturally
+  onto this project's own `#![forbid(unsafe_code)]` house style.
+  - `registers.rs` — the 16-register file, with the "stored PC is always
+    `next fetch address + 2`" pipeline bookkeeping ported faithfully from
+    the reference.
+  - `status.rs` — N/Z/C/V flags (`bitflags`-backed), `condition()` for all
+    14 real Thumb-1 branch condition codes.
+  - `memory.rs` — the `ThumbMemory` trait (mirrors Gopher2600's
+    `SharedMemory`), the generic seam a future `Board` implements, plus a
+    typed `Fault` enum (illegal/unimplemented/null/misaligned) returned as
+    a `Result`, not a Go-style panic-and-log.
+  - `cycles.rs` + `mam.rs` — the N/S/I cycle model and MAM
+    (Memory Accelerator Module) prefetch-latch approximation, ported
+    faithfully and documented as an approximation (matching the
+    reference's own admitted uncertainty about some of its constants).
+  - `thumb.rs` — the actual Thumb-1 decode/execute, all 19 instruction-format
+    classes from the ARM7TDMI Data Sheet, plus 27 hand-authored conformance
+    tests exercising every format class (shifts including shift-by-zero
+    edge cases, ALU operations, hi-register ops + `BX`-to-return, every
+    load/store addressing mode, push/pop including LR/PC, multiple
+    load-store including the base-register-in-list edge case, branches,
+    and `SWI` faulting rather than panicking).
+
+### Notes
+
+- **This release lands the interpreter core only.** `rusty2600-thumb` is
+  not yet wired into any `rusty2600-cart` `Board`/`Cartridge` variant — no
+  `detect()` change, no new bankswitch scheme available to users yet. The
+  `v1.6.x` patch train wires DPC+, then CDF, then CDFJ/CDFJ+ into `detect()`
+  one family at a time (`T-0401-006`), each supplying its own `ThumbMemory`
+  implementation (register map, RNG/timer peripherals,
+  `tick_coprocessor()` driving `Arm7Tdmi::step()`). See `docs/thumb.md` for
+  the full architecture and scope.
+- **Deliberately out of scope for this crate**: Thumb-2 (32-bit encoding)
+  and ARMv7-M/Cortex-M0 support (the Harmony/Melody boards this targets are
+  ARM7TDMI/Thumb-1 only), the `rng`/`timer` peripheral packages and
+  `architecture` register-map package (cartridge-specific, deferred to the
+  `v1.6.x` wiring pass), a disassembler, and the `callfn`/`ARMinterrupt`
+  direct-ARM32-call mechanism (an out-of-scope cartridge integration hook;
+  reported as a fault here instead).
+- The N/S/I cycle-stretching model is a genuinely approximate hardware
+  timing model even in the reference implementation (float-based cycle
+  counts; Gopher2600's own comments admit some constants are unverified)
+  — this crate does not claim cycle-exactness for the coprocessor path,
+  only a faithful port of the same approximation, consistent with this
+  project's "never present approximate output as exact" rule.
+- 217 tests passing workspace-wide (220 with `--features test-roms`; +27
+  for the new `rusty2600-thumb` conformance suite), up from 190/193 at
+  `[1.5.0]`.
+
 ## [1.5.0] - 2026-07-01 - "Full Catalog"
 
 `Bank4A50`, the most stateful bankswitch scheme in the catalogue to date —

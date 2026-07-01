@@ -6,6 +6,7 @@ members = [
     "crates/rusty2600-tia",
     "crates/rusty2600-riot",
     "crates/rusty2600-cart",
+    "crates/rusty2600-thumb",
     "crates/rusty2600-cheevos",
     "crates/rusty2600-frontend",
     "crates/rusty2600-gfx-shaders",
@@ -13,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.5.0"
+version = "1.6.0"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"
