@@ -58,18 +58,15 @@ correctly.
 
 ### homebrew/
 
-Current corpus: **109/110 rendered** (2026-07-01, v0.3.0 in progress).
+Current corpus: **110/110 rendered** (2026-07-01, v0.5.0).
 
-- **`Zippy the Porcupine (NTSC)`** — 64 KiB ROM; needs one of the 64 KiB
-  BestEffort schemes (`F0`, `EF`/`EFSC`, or `X07` — `docs/cart.md`), none of
-  which are implemented yet. `detect()` correctly returns `None` for it
-  (the honesty gate: no scheme claimed, none delivered) rather than
-  guessing — `dump_frame` panics on the `Unsupported` `Err`, which is the
-  expected/correct failure mode until one of those schemes lands.
+- **`Zippy the Porcupine (NTSC)`** — 64 KiB ROM; previously unsupported
+  (needed one of `F0`/`EF`/`EFSC`/`X07`, none implemented as of v0.3.0).
+  Now renders: `F0` landed in v0.4.0's BestEffort Batch 1.
 
 ### commercial/
 
-Current corpus: **15/16 rendered** (2026-07-01, v0.3.0 in progress). See
+Current corpus: **15/16 rendered** (2026-07-01, v0.5.0). See
 `tests/roms/README.md` for the local ROM staging convention.
 
 - **`BurgerTime (USA)`** — regenerated after `T-0401-009`'s ROM-DB
@@ -96,3 +93,9 @@ Current corpus: **15/16 rendered** (2026-07-01, v0.3.0 in progress). See
   the size buckets `detect()` currently resolves; needs BestEffort-tier
   breadth work (v0.4.x) once its bankswitch scheme is identified. Expected
   `Unsupported` failure until then.
+
+Re-verified 2026-07-01 (v0.5.0): the Pitfall II blank-frame residual
+(`T-0601-008`) and the Communist Mutants detection gap are both still
+present exactly as described above — neither regressed nor improved by
+v0.4.x/v0.5.0's frontend and cart-breadth work, since neither's root cause
+(the RIOT-timer wait loop / the missing size-bucket scheme) was touched.
