@@ -1365,6 +1365,261 @@ impl Board for BankX07 {
     }
 }
 
+/// 4A50 (John "Supercat" Payson's scheme, e.g. some homebrew titles): a
+/// 128 KiB ROM image (32/64 KiB dumps tiled to fill it, matching Stella's own
+/// constructor) plus 32 KiB of on-cart RAM, split into three independently
+/// relocatable segments, each individually mapped to ROM or RAM:
+///
+/// - `$1000-$17FF` (2K, `slice_low`): ROM reads come from the FIRST 64 KiB of
+///   the image (no `+0x10000` offset); RAM reads/writes are unoffset into the
+///   32 KiB RAM array.
+/// - `$1800-$1DFF` (1.5K, `slice_middle`): ROM reads come from the SECOND
+///   64 KiB of the image (`+0x10000`).
+/// - `$1E00-$1EFF` (256 B, `slice_high`): ROM reads also come from the second
+///   64 KiB (`+0x10000`).
+/// - `$1F00-$1FFF` (256 B): always the LAST 256 B of the (tiled) 128 KiB
+///   image — never switches ROM/RAM — but doubles as this scheme's hotspot
+///   trigger region (see below).
+///
+/// Bankswitching is driven by a `(previous access's value, previous access's
+/// address)` state machine (`last_data`/`last_address`, updated after EVERY
+/// access to ANY address, cart-window or not) rather than a fixed hotspot
+/// address: most hotspots only arm when the immediately preceding access read
+/// or wrote a value matching `(value & 0xe0) == 0x60` from an address that
+/// was either in the cart window or in RIOT zero-page (`< 0x200`). Given that,
+/// the NEXT access's address (checked in `$1000..=$1FFF`-mirrored TIA/RIOT
+/// space, i.e. below `$1000`) decides what switches, per Stella's
+/// `checkBankSwitch` (`address & 0x0f00`/`0x0f40`/`0x0f50` patterns for the
+/// three segments plus four "helper" address-bit-toggle hotspots) — this is
+/// exactly the case [`Board::snoop_read`]/[`Board::snoop_write`] exist for. A
+/// second, unconditional set of zero-page hotspots (`$74-$7F`/`$F4-$FF`)
+/// additionally arms straight off the accessed VALUE, matching Stella's
+/// zero-page hotspot chain. Within the cart window, only the `$1F00-$1FFF`
+/// region has its own (smaller) instance of this same previous-access-gated
+/// check, toggling bits of `slice_high` directly.
+///
+/// Confirmed against Stella's `Cartridge4A50.cxx`/`.hxx` — including that
+/// scheme's own doc comment noting it "hasn't been fully implemented, and may
+/// never be" (missing hi-res helper functions and `$1E00` page-wrap, per
+/// Stella's own author). This port is a faithful, equally-scoped translation
+/// of exactly the behavior Stella itself implements — not a superset. Only
+/// one known test ROM exists for this scheme (per Stella's own comment), so
+/// this stays `BestEffort` tier indefinitely; see `docs/cart.md`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Bank4A50 {
+    /// Always the full 128 KiB, tiled from a 32/64 KiB input image if needed
+    /// (matches Stella's own constructor).
+    rom: alloc::vec::Vec<u8>,
+    /// 32 KiB of on-cart RAM.
+    ram: alloc::vec::Vec<u8>,
+    slice_low: u16,
+    slice_middle: u16,
+    slice_high: u16,
+    is_rom_low: bool,
+    is_rom_middle: bool,
+    is_rom_high: bool,
+    last_data: u8,
+    last_address: u16,
+}
+
+impl Bank4A50 {
+    const IMAGE_SIZE: usize = 0x2_0000; // 128 KiB
+    const RAM_SIZE: usize = 0x8000; // 32 KiB
+
+    /// Build from a 32, 64, or 128 KiB image, tiled to fill the full 128 KiB
+    /// address space Stella's own constructor always allocates. Returns
+    /// `None` for any other size.
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        let size = rom.len();
+        if size != 0x8000 && size != 0x1_0000 && size != Self::IMAGE_SIZE {
+            return None;
+        }
+        let mut image = alloc::vec![0u8; Self::IMAGE_SIZE];
+        for chunk in image.chunks_exact_mut(size) {
+            chunk.copy_from_slice(rom);
+        }
+        Some(Self {
+            rom: image,
+            ram: alloc::vec![0u8; Self::RAM_SIZE],
+            slice_low: 0,
+            slice_middle: 0,
+            slice_high: 0,
+            is_rom_low: true,
+            is_rom_middle: true,
+            is_rom_high: true,
+            // Matches Stella's `reset()`: a sentinel that can never satisfy
+            // `(last_data & 0xe0) == 0x60` until a real access sets it.
+            last_data: 0xff,
+            last_address: 0xffff,
+        })
+    }
+
+    /// Whether the previous access satisfies the `(value & 0xe0) == 0x60`
+    /// gate (from a cart-window OR RIOT-zero-page address) that most of this
+    /// scheme's hotspots require, per Stella's `checkBankSwitch`/`peek`/`poke`.
+    const fn hotspots_active(&self) -> bool {
+        (self.last_data & 0xe0) == 0x60
+            && (self.last_address >= 0x1000 || self.last_address < 0x200)
+    }
+
+    fn bank_rom_lower(&mut self, value: u16) {
+        self.is_rom_low = true;
+        self.slice_low = value << 11;
+    }
+    fn bank_ram_lower(&mut self, value: u16) {
+        self.is_rom_low = false;
+        self.slice_low = value << 11;
+    }
+    fn bank_rom_middle(&mut self, value: u16) {
+        self.is_rom_middle = true;
+        self.slice_middle = value << 11;
+    }
+    fn bank_ram_middle(&mut self, value: u16) {
+        self.is_rom_middle = false;
+        self.slice_middle = value << 11;
+    }
+    fn bank_rom_high(&mut self, value: u16) {
+        self.is_rom_high = true;
+        self.slice_high = value << 8;
+    }
+    fn bank_ram_high(&mut self, value: u16) {
+        self.is_rom_high = false;
+        self.slice_high = value << 8;
+    }
+
+    /// Port of Stella's `Cartridge4A50::checkBankSwitch`: only called for
+    /// accesses to addresses below `$1000` (TIA/RIOT-mirrored space, i.e.
+    /// from [`Board::snoop_read`]/[`Board::snoop_write`]). Two independent
+    /// hotspot chains: the first (gated by [`Self::hotspots_active`]) covers
+    /// the three main segment-select hotspots plus four address-bit-toggle
+    /// "helper" hotspots; the second (unconditional) covers a zero-page
+    /// hotspot pair/quad keyed off the ACCESSED VALUE rather than address.
+    fn check_bank_switch(&mut self, address: u16, value: u8) {
+        if self.hotspots_active() {
+            if address & 0x0f00 == 0x0c00 {
+                self.bank_rom_high(address & 0xff);
+            } else if address & 0x0f00 == 0x0d00 {
+                self.bank_ram_high(address & 0x7f);
+            } else if address & 0x0f40 == 0x0e00 {
+                self.bank_rom_lower(address & 0x1f);
+            } else if address & 0x0f40 == 0x0e40 {
+                self.bank_ram_lower(address & 0xf);
+            } else if address & 0x0f40 == 0x0f00 {
+                self.bank_rom_middle(address & 0x1f);
+            } else if address & 0x0f50 == 0x0f40 {
+                self.bank_ram_middle(address & 0xf);
+            } else if address & 0x0f00 == 0x0400 {
+                self.slice_low ^= 0x800;
+            } else if address & 0x0f00 == 0x0500 {
+                self.slice_low ^= 0x1000;
+            } else if address & 0x0f00 == 0x0800 {
+                self.slice_middle ^= 0x800;
+            } else if address & 0x0f00 == 0x0900 {
+                self.slice_middle ^= 0x1000;
+            }
+        }
+
+        let value16 = u16::from(value);
+        if address & 0xf75 == 0x74 {
+            self.bank_rom_high(value16);
+        } else if address & 0xf75 == 0x75 {
+            self.bank_ram_high(value16 & 0x7f);
+        } else if address & 0xf7c == 0x78 {
+            if value16 & 0xf0 == 0 {
+                self.bank_rom_lower(value16 & 0xf);
+            } else if value16 & 0xf0 == 0x40 {
+                self.bank_ram_lower(value16 & 0xf);
+            } else if value16 & 0xf0 == 0x90 {
+                self.bank_rom_middle((value16 & 0xf) | 0x10);
+            } else if value16 & 0xf0 == 0xc0 {
+                self.bank_ram_middle(value16 & 0xf);
+            }
+        }
+    }
+
+    /// Record this access as the "previous" one for the NEXT access's
+    /// hotspot check, matching Stella's unconditional `myLastData =
+    /// value; myLastAddress = address & 0x1fff;` at the end of both
+    /// `peek`/`poke`.
+    fn record_access(&mut self, address: u16, value: u8) {
+        self.last_data = value;
+        self.last_address = address & 0x1fff;
+    }
+}
+
+impl Board for Bank4A50 {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        let a = addr & 0x1fff;
+        let value = if a & 0x1800 == 0x1000 {
+            if self.is_rom_low {
+                self.rom[usize::from(a & 0x7ff) + usize::from(self.slice_low)]
+            } else {
+                self.ram[usize::from(a & 0x7ff) + usize::from(self.slice_low)]
+            }
+        } else if (0x1800..=0x1dff).contains(&a) {
+            if self.is_rom_middle {
+                self.rom[usize::from(a & 0x7ff) + usize::from(self.slice_middle) + 0x1_0000]
+            } else {
+                self.ram[usize::from(a & 0x7ff) + usize::from(self.slice_middle)]
+            }
+        } else if a & 0x1f00 == 0x1e00 {
+            if self.is_rom_high {
+                self.rom[usize::from(a & 0xff) + usize::from(self.slice_high) + 0x1_0000]
+            } else {
+                self.ram[usize::from(a & 0xff) + usize::from(self.slice_high)]
+            }
+        } else {
+            // The only remaining case in a 13-bit cart-window address is
+            // `$1F00..=$1FFF` (fixed last 256 B of ROM, also this segment's
+            // hotspot-trigger region).
+            let value = self.rom[usize::from(a & 0xff) + 0x1_ff00];
+            if self.hotspots_active() {
+                self.slice_high = (self.slice_high & 0xf0ff) | ((a & 0x8) << 8) | ((a & 0x70) << 4);
+            }
+            value
+        };
+        self.record_access(a, value);
+        value
+    }
+
+    fn cpu_write(&mut self, addr: u16, val: u8) {
+        let a = addr & 0x1fff;
+        if a & 0x1800 == 0x1000 {
+            if !self.is_rom_low {
+                self.ram[usize::from(a & 0x7ff) + usize::from(self.slice_low)] = val;
+            }
+        } else if (0x1800..=0x1dff).contains(&a) {
+            if !self.is_rom_middle {
+                self.ram[usize::from(a & 0x7ff) + usize::from(self.slice_middle)] = val;
+            }
+        } else if a & 0x1f00 == 0x1e00 {
+            if !self.is_rom_high {
+                self.ram[usize::from(a & 0xff) + usize::from(self.slice_high)] = val;
+            }
+        } else if self.hotspots_active() {
+            // `$1F00..=$1FFF`: ROM is fixed (never written), but still arms
+            // the same `slice_high`-bit-toggle hotspot as the read path.
+            self.slice_high = (self.slice_high & 0xf0ff) | ((a & 0x8) << 8) | ((a & 0x70) << 4);
+        }
+        self.record_access(a, val);
+    }
+
+    fn tier(&self) -> Tier {
+        Tier::BestEffort
+    }
+
+    fn snoop_read(&mut self, addr: u16, val: u8) {
+        self.check_bank_switch(addr, val);
+        self.record_access(addr, val);
+    }
+
+    fn snoop_write(&mut self, addr: u16, val: u8) {
+        self.check_bank_switch(addr, val);
+        self.record_access(addr, val);
+    }
+}
+
 /// DPC (Pitfall II's "Display Processor Chip"): 8 KiB program ROM as two
 /// 4 KiB F8-style banks (`$1FF8`/`$1FF9` hotspots, same convention as
 /// [`BankF8`]) + a 2 KiB fixed display-data ROM + 8 hardware "data fetchers"
@@ -1658,6 +1913,10 @@ pub enum Cartridge {
     /// X07 (AtariAge multicart scheme): 64 KiB ROM, 16x4K banks, dual
     /// hotspot patterns in TIA-mirrored space (BestEffort tier)
     BankX07(BankX07),
+    /// 4A50 (Supercat): 128 KiB ROM (32/64 KiB tiled) + 32 KiB RAM, three
+    /// independently relocatable ROM/RAM segments, previous-access-gated
+    /// hotspots in both cart-window and TIA-mirrored space (BestEffort tier)
+    Bank4A50(Bank4A50),
 }
 
 impl Board for Cartridge {
@@ -1684,6 +1943,7 @@ impl Board for Cartridge {
             Self::BankFe(b) => b.cpu_read(addr),
             Self::BankSb(b) => b.cpu_read(addr),
             Self::BankX07(b) => b.cpu_read(addr),
+            Self::Bank4A50(b) => b.cpu_read(addr),
         }
     }
 
@@ -1710,6 +1970,7 @@ impl Board for Cartridge {
             Self::BankFe(b) => b.cpu_write(addr, val),
             Self::BankSb(b) => b.cpu_write(addr, val),
             Self::BankX07(b) => b.cpu_write(addr, val),
+            Self::Bank4A50(b) => b.cpu_write(addr, val),
         }
     }
 
@@ -1736,6 +1997,7 @@ impl Board for Cartridge {
             Self::BankFe(b) => b.tier(),
             Self::BankSb(b) => b.tier(),
             Self::BankX07(b) => b.tier(),
+            Self::Bank4A50(b) => b.tier(),
         }
     }
 
@@ -1762,6 +2024,7 @@ impl Board for Cartridge {
             Self::BankFe(b) => b.tick(),
             Self::BankSb(b) => b.tick(),
             Self::BankX07(b) => b.tick(),
+            Self::Bank4A50(b) => b.tick(),
         }
     }
 
@@ -1788,6 +2051,7 @@ impl Board for Cartridge {
             Self::BankFe(b) => b.tick_coprocessor(),
             Self::BankSb(b) => b.tick_coprocessor(),
             Self::BankX07(b) => b.tick_coprocessor(),
+            Self::Bank4A50(b) => b.tick_coprocessor(),
         }
     }
 
@@ -1814,6 +2078,7 @@ impl Board for Cartridge {
             Self::BankFe(b) => b.snoop_write(addr, val),
             Self::BankSb(b) => b.snoop_write(addr, val),
             Self::BankX07(b) => b.snoop_write(addr, val),
+            Self::Bank4A50(b) => b.snoop_write(addr, val),
         }
     }
 
@@ -1840,6 +2105,7 @@ impl Board for Cartridge {
             Self::BankFe(b) => b.snoop_read(addr, val),
             Self::BankSb(b) => b.snoop_read(addr, val),
             Self::BankX07(b) => b.snoop_read(addr, val),
+            Self::Bank4A50(b) => b.snoop_read(addr, val),
         }
     }
 }
@@ -2062,6 +2328,37 @@ fn is_probably_x07(rom: &[u8]) -> bool {
     SIGNATURES.iter().any(|sig| contains_bytes(rom, sig))
 }
 
+/// Port of Stella's `CartDetector::isProbably4A50`: a 4A50 cart stores
+/// `$4A50` (its own namesake address) at the NMI vector, which in this
+/// scheme's rev-1 layout always lives in the last page of ROM at
+/// `$1FFA-$1FFB` — checked here as the raw image's last-6th/-5th bytes
+/// (relative-from-end indexing, so it works whether `rom` is the 32/64/128
+/// KiB dump `detect()` actually sees). Falling back to a second heuristic:
+/// the program's RESET vector points into the last page (`$1Fxx`) AND its
+/// first instruction there is a 3-byte absolute `NOP $6Exx`/`NOP $6Fxx`
+/// (opcode `$0C`, target high byte `$6E`/`$6F`) — like Stella, this second
+/// check indexes the FIXED absolute offsets `$FFFC`/`$FFFD`, so it's only
+/// meaningful (and only ever reached via `detect()`) for 64 KiB+ images.
+fn is_probably_4a50(rom: &[u8]) -> bool {
+    let len = rom.len();
+    if len < 6 {
+        return false;
+    }
+    if rom[len - 6] == 0x50 && rom[len - 5] == 0x4A {
+        return true;
+    }
+    if len <= 0xFFFE {
+        return false;
+    }
+    let reset_hi = rom[0xFFFD];
+    let reset_lo = rom[0xFFFC];
+    if reset_hi & 0x1F != 0x1F {
+        return false;
+    }
+    let target = usize::from(reset_hi) * 256 + usize::from(reset_lo);
+    target + 2 < len && rom[target] == 0x0C && (rom[target + 2] & 0xFE) == 0x6E
+}
+
 /// Detect the bankswitch scheme from a ROM image and build the board.
 ///
 /// Same-size same-catalogue collisions (CV vs plain 2K/4K, Superchip vs
@@ -2159,14 +2456,16 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
         }
         // 64 KiB: checked in the same relative priority Stella's own
         // CartDetector uses at this size among the schemes implemented here
-        // (3E, 3F, EF, X07, then default F0) — EFF/CDF/4A50 (also possible
-        // at 64 KiB per Stella) aren't implemented yet, so they're simply
-        // skipped in the chain (same pattern already used for 3EX).
+        // (3E, 3F, 4A50, EF, X07, then default F0) — EFF/CDF/3EX (also
+        // possible at 64 KiB per Stella) aren't implemented yet, so they're
+        // simply skipped in the chain (same pattern already used elsewhere).
         0x10000 => {
             if is_probably_3e(rom) {
                 Bank3E::new(rom, 32).map(Cartridge::Bank3E)
             } else if is_probably_3f(rom) {
                 Bank3F::new(rom).map(Cartridge::Bank3F)
+            } else if is_probably_4a50(rom) {
+                Bank4A50::new(rom).map(Cartridge::Bank4A50)
             } else if let Some(sc) = ef_family_tail_signature(rom, b'E') {
                 let ef = BankEF::new(rom)?;
                 Some(Cartridge::BankEF(if sc { ef.with_superchip() } else { ef }))
@@ -2180,10 +2479,11 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
         }
         // 128 KiB: 3E / 3F (Tigervision) checked first — matching Stella's
         // own priority order at this size — then DF (CPUWIZ) via its tail
-        // signature; falls back to SB (BestEffort), matching Stella's own
-        // chain at this size, which defaults straight to SB once 3E/DF/3F/
-        // 4A50/CDF are ruled out (`T-0402-011`, DONE — 4A50/CDF remain
-        // unimplemented and are simply skipped, same as 64 KiB above).
+        // signature, then 4A50; falls back to SB (BestEffort), matching
+        // Stella's own chain at this size, which defaults straight to SB once
+        // 3E/DF/3F/4A50/CDF are ruled out (`T-0402-011`/`T-0402-014`, DONE —
+        // CDF/3EX remain unimplemented and are simply skipped, same as 64 KiB
+        // above).
         0x20000 => {
             if is_probably_3e(rom) {
                 Bank3E::new(rom, 32).map(Cartridge::Bank3E)
@@ -2192,6 +2492,8 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
                 Some(Cartridge::BankDF(if sc { df.with_superchip() } else { df }))
             } else if is_probably_3f(rom) {
                 Bank3F::new(rom).map(Cartridge::Bank3F)
+            } else if is_probably_4a50(rom) {
+                Bank4A50::new(rom).map(Cartridge::Bank4A50)
             } else {
                 BankSb::new(rom).map(Cartridge::BankSb)
             }
@@ -2228,14 +2530,23 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
         // T-0402-006 (DONE): FE — dispatched above at 8 KiB via
         // is_probably_fe(), guarded by !is_probably_f8_signature().
         // T-0402-011 (DONE): SB, X07 — dispatched above at 64/128/256 KiB.
-        // TODO(T-0402-014): 4A50 (BestEffort) — needs three independently
-        // relocatable ROM/RAM windows plus a previous-access-dependent
-        // hotspot (Stella's `Cartridge4A50::checkBankSwitch`), substantially
-        // more state than the other snoop-based schemes; scoped separately.
-        // TODO(T-0402-015): AR/Supercharger (BestEffort) — tape/audio-based
-        // loading is architecturally unlike every other scheme here (no
-        // fixed ROM image to bankswitch; needs a WAV/multiload decoder);
-        // scoped separately, not a quick addition.
+        // T-0402-014 (DONE): 4A50 — dispatched above at 64/128 KiB via
+        // is_probably_4a50(); three independently relocatable ROM/RAM
+        // segments plus a previous-access-dependent hotspot state machine
+        // (Stella's `Cartridge4A50::checkBankSwitch`), ported faithfully onto
+        // `Board::snoop_read`/`snoop_write` (below `$1000`) plus a smaller
+        // in-window instance of the same check (`$1F00-$1FFF`).
+        // TODO(T-0402-015): AR/Supercharger (BestEffort) — deliberately NOT
+        // attempted in the same pass as 4A50 above (`v1.5.0`): even
+        // "fast-load" (ROM-image-only, skipping the real tape-audio "sound-
+        // load" mode entirely) needs a bank-config decode, a delayed-write
+        // protocol keyed on 5 DISTINCT bus accesses (needing accumulation
+        // across `snoop_read`/`snoop_write`/`cpu_read`/`cpu_write` combined,
+        // since Stella tracks this via a global CPU-side counter this crate
+        // has no equivalent of), AND a synthesized dummy 6502 BIOS stub
+        // whose exact bytes (Stella's `ourDummyROMCode`/`scrom.asm`) haven't
+        // been sourced yet — a substantially larger, still-separately-scoped
+        // item versus every other scheme in this catalogue, including 4A50.
         // TODO(T-0401-006): DPC+, CDF/CDFJ/CDFJ+ (BestEffort) — both need a
         // full ARM7TDMI Thumb interpreter via tick_coprocessor (see
         // Gopher2600's arm.go/thumb.go for the reference implementation);
@@ -2954,5 +3265,89 @@ mod tests {
         img[0x101] = 0x0D;
         img[0x102] = 0x08;
         assert!(matches!(detect(&img).unwrap(), Cartridge::BankX07(_)));
+    }
+
+    #[test]
+    fn bank4a50_defaults_to_rom_slice_zero_in_low_segment() {
+        let mut img = alloc::vec![0u8; 0x10000]; // 64 KiB
+        img[0x0000] = 0x11; // slice_low default is 0, no +0x10000 offset
+        let mut board = Bank4A50::new(&img).unwrap();
+        assert_eq!(board.tier(), Tier::BestEffort);
+        // $1000-$17FF: ROM, slice_low = 0 -> the image's very first byte.
+        assert_eq!(board.cpu_read(0x1000), 0x11);
+    }
+
+    #[test]
+    fn bank4a50_fixed_last_page_reads_end_of_tiled_image() {
+        let mut img = alloc::vec![0u8; 0x8000]; // 32 KiB, tiled x4 to fill 128 KiB
+        let last = img.len() - 1;
+        img[last] = 0x99; // lands at the tiled image's very last byte
+        let mut board = Bank4A50::new(&img).unwrap();
+        assert_eq!(board.cpu_read(0x1FFF), 0x99);
+    }
+
+    #[test]
+    fn bank4a50_hotspot_switches_rom_lower_segment() {
+        let mut img = alloc::vec![0u8; 0x10000]; // 64 KiB
+        img[0x2800] = 0xAB; // lands at slice_low = 5 << 11 after the switch
+        let mut board = Bank4A50::new(&img).unwrap();
+        assert_eq!(board.cpu_read(0x1000), img[0], "default slice_low is 0");
+        // Arm the hotspot gate: a cart-window access whose value satisfies
+        // (value & 0xe0) == 0x60 (`hotspots_active`'s condition).
+        board.cpu_write(0x1000, 0x60);
+        // Enable 2K of ROM at $1000-$17FF, slice index 5 (address bits 0-4) —
+        // `address & 0x0f40 == 0x0e00` (TIA/RIOT-mirrored space).
+        board.snoop_write(0x0E05, 0);
+        assert_eq!(board.cpu_read(0x1000), 0xAB);
+    }
+
+    #[test]
+    fn bank4a50_hotspot_switches_ram_lower_segment_and_round_trips() {
+        let img = alloc::vec![0u8; 0x10000]; // 64 KiB
+        let mut board = Bank4A50::new(&img).unwrap();
+        board.cpu_write(0x1000, 0x60); // arm the hotspot gate
+        // Enable 2K of RAM at $1000-$17FF, slice index 3 —
+        // `address & 0x0f40 == 0x0e40`.
+        board.snoop_write(0x0E43, 0);
+        board.cpu_write(0x1000, 0x77);
+        assert_eq!(board.cpu_read(0x1000), 0x77, "RAM segment round-trips");
+    }
+
+    #[test]
+    fn bank4a50_zero_page_hotspot_selects_rom_lower_from_value_unconditionally() {
+        // The second checkBankSwitch chain arms straight off the accessed
+        // VALUE at a fixed zero-page address pattern — no prior "armed"
+        // access needed, unlike the main chain above.
+        let mut img = alloc::vec![0u8; 0x10000];
+        img[0x0800] = 0xCD; // slice index 1 << 11 = 0x800
+        let mut board = Bank4A50::new(&img).unwrap();
+        board.snoop_write(0x0078, 0x01); // address & 0xf7c == 0x78, value & 0xf0 == 0
+        assert_eq!(board.cpu_read(0x1000), 0xCD);
+    }
+
+    #[test]
+    fn detect_resolves_4a50_via_nmi_vector_signature() {
+        let mut img64 = alloc::vec![0u8; 0x10000];
+        let len64 = img64.len();
+        img64[len64 - 6] = 0x50;
+        img64[len64 - 5] = 0x4A;
+        assert!(matches!(detect(&img64).unwrap(), Cartridge::Bank4A50(_)));
+
+        let mut img128 = alloc::vec![0u8; 0x20000];
+        let len128 = img128.len();
+        img128[len128 - 6] = 0x50;
+        img128[len128 - 5] = 0x4A;
+        assert!(matches!(detect(&img128).unwrap(), Cartridge::Bank4A50(_)));
+    }
+
+    #[test]
+    fn detect_resolves_4a50_via_boot_nop_signature() {
+        let mut img = alloc::vec![0u8; 0x10000];
+        img[0xFFFD] = 0xFF; // reset_hi & 0x1f == 0x1f
+        img[0xFFFC] = 0x00; // reset_lo
+        // target = 0xFF00: a 3-byte absolute NOP ($0C) targeting $6Exx.
+        img[0xFF00] = 0x0C;
+        img[0xFF02] = 0x6E;
+        assert!(matches!(detect(&img).unwrap(), Cartridge::Bank4A50(_)));
     }
 }

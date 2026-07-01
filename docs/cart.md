@@ -123,36 +123,64 @@ Per ref-docs/research-report.md §8.2.
 same-catalogue collision — 2K/4K (`BankCV`), 8K/16K/32K (Superchip vs plain
 F8/F6/F4), 8K (`BankE0`/`Bank3E`/`Bank3F`/`BankUA`/`BankFe`/`Bank0840` vs
 plain F8), 16K (`BankE7` vs plain `BankF6`), 32K (`Bank3E`/`Bank3F` vs plain
-F4), 64K (`Bank3E`/`Bank3F`/`BankEF`/`BankX07` vs `BankF0`), 128K
-(`Bank3E`/`BankDF`/`Bank3F` vs `BankSb`), and 256K (`Bank3E`/`BankBF`/`Bank3F`
-vs `BankSb`) — `detect()` runs hotspot-pattern heuristics first
+F4), 64K (`Bank3E`/`Bank3F`/`Bank4A50`/`BankEF`/`BankX07` vs `BankF0`), 128K
+(`Bank3E`/`BankDF`/`Bank3F`/`Bank4A50` vs `BankSb`), and 256K
+(`Bank3E`/`BankBF`/`Bank3F` vs `BankSb`) — `detect()` runs hotspot-pattern
+heuristics first
 (`is_probably_cv`/`is_probably_superchip`/`is_probably_e7`/`is_probably_e0`/
 `is_probably_3e`/`is_probably_3f`/`is_probably_ua`/`is_probably_fe`/
-`is_probably_0840`/`is_probably_x07`, ported from Stella's
+`is_probably_0840`/`is_probably_x07`/`is_probably_4a50`, ported from Stella's
 `CartDetector.cxx`, plus `ef_family_tail_signature`/
 `is_probably_ef_by_opcode` for the EF/DF/BF "CPUWIZ" family, checked in the
 same priority order Stella itself uses at each size) and only falls back to
 the more common plain scheme if none match — or, at 128K/256K, to `BankSb`
 (Superbank), matching Stella's own chain, which defaults straight to SB at
-these two sizes once 3E/DF/3F are ruled out (`T-0401-009`, `T-0402-001..004`,
-`T-0402-006`, `T-0402-008..011`, all DONE).
+these two sizes once 3E/DF/3F/4A50 are ruled out (`T-0401-009`,
+`T-0402-001..004`, `T-0402-006`, `T-0402-008..011`, `T-0402-014`, all DONE).
 
 FE (Activision SCABS/Decathlon/Robot Tank/Space Shuttle/Thwocker) is now
 implemented (`BankFe`, `T-0402-006`) via `Board::snoop_read`/`snoop_write`'s
 `val` parameter — unlike E0/3E/3F/UA/0840 (which only need the ACCESS
 ADDRESS), FE needs the snooped VALUE too, since the bank is derived from the
 value written to `$01FE`'s companion stack-frame byte, not the address
-itself. SB and X07 (`T-0402-011`, DONE) are also address/value-snoop-based;
-4A50 remains unimplemented (`T-0402-014`) — it needs three independently
-relocatable ROM/RAM windows plus a previous-access-dependent hotspot
-(Stella's `Cartridge4A50::checkBankSwitch`), substantially more state than
-the other snoop-based schemes here. AR/Supercharger (`T-0402-015`) and
-DPC+/CDF/CDFJ/CDFJ+ (`T-0401-006`, needing a full ARM7TDMI Thumb
-interpreter) remain unimplemented and are architecturally unlike everything
-else in this catalogue — both are scoped as separate, larger undertakings,
-not quick additions. The tiered TODOs above track the remaining board
-families; the honesty gate's oracle set must be extended in lockstep so the
-pass-rate stays truthful as boards land.
+itself. SB and X07 (`T-0402-011`, DONE) are also address/value-snoop-based.
+
+**4A50 is now implemented** (`Bank4A50`, `T-0402-014`, v1.5.0) — the most
+stateful snoop-based scheme in the catalogue: three independently
+relocatable ROM/RAM segments (`slice_low`/`slice_middle`/`slice_high`) plus
+a previous-access-gated hotspot state machine, ported faithfully from
+Stella's `Cartridge4A50::checkBankSwitch`. Unlike FE/SB/X07 (which only
+react to accesses BELOW `$1000`), 4A50 also has its own smaller instance of
+the same previous-access check INSIDE the cart window, at `$1F00-$1FFF`
+(always the fixed last 256 B of ROM) — so both `Board::snoop_read`/
+`snoop_write` AND the tail of `Board::cpu_read`/`cpu_write` participate in
+its hotspot logic. `detect()` resolves it via `is_probably_4a50()` (ported
+from Stella's `CartDetector::isProbably4A50`): either the scheme's own
+namesake `$4A50` at the NMI vector (`$1FFA-$1FFB`, checked as the raw
+image's relative-from-end bytes so it works pre-tiling), or a fallback
+heuristic (the RESET vector points into the last page and its first
+instruction there is a 3-byte absolute `NOP $6Exx`/`NOP $6Fxx`). Per
+Stella's own doc comment, this scheme "hasn't been fully implemented, and
+may never be" even there (missing hi-res helper functions and `$1E00`
+page-wrap) — this port is an equally-scoped, faithful translation of
+exactly what Stella itself implements, not a superset, and stays
+`BestEffort` tier indefinitely (only one known test ROM exists for it).
+
+AR/Supercharger (`T-0402-015`) and DPC+/CDF/CDFJ/CDFJ+ (`T-0401-006`,
+needing a full ARM7TDMI Thumb interpreter) remain unimplemented and are
+architecturally unlike everything else in this catalogue — both are scoped
+as separate, larger undertakings, not quick additions. AR in particular was
+deliberately NOT attempted alongside 4A50 in v1.5.0 despite being staged in
+the same release plan: even its "fast-load" (ROM-image-only) mode needs a
+bank-config decode, a delayed-write protocol keyed on 5 DISTINCT bus
+accesses (Stella tracks this via a global CPU-side counter this crate has
+no equivalent of — would need to be built from `snoop_read`/`snoop_write`/
+`cpu_read`/`cpu_write` combined), and a synthesized dummy 6502 BIOS stub
+whose exact bytes (Stella's `ourDummyROMCode`/`scrom.asm`) haven't been
+sourced yet — substantially larger than 4A50 or any other scheme here. The
+tiered TODOs above track the remaining board families; the honesty gate's
+oracle set must be extended in lockstep so the pass-rate stays truthful as
+boards land.
 
 ### `Board::snoop_write`/`snoop_read` — bankswitching outside the cart window
 

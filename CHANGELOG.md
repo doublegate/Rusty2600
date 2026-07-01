@@ -6,6 +6,55 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-07-01 - "Full Catalog"
+
+`Bank4A50`, the most stateful bankswitch scheme in the catalogue to date —
+closing it to 23 of 25 schemes.
+
+### Added
+
+- **`Bank4A50`** (`crates/rusty2600-cart`, `T-0402-014`, BestEffort tier):
+  three independently relocatable ROM/RAM segments (`$1000-$17FF` 2K,
+  `$1800-$1DFF` 1.5K, `$1E00-$1EFF` 256B) plus a fixed 256B trailer
+  (`$1F00-$1FFF`, always the last 256B of the tiled 128 KiB image), driven
+  by a previous-access-gated hotspot state machine ported faithfully from
+  Stella's `Cartridge4A50::checkBankSwitch`. Most hotspots only arm when the
+  immediately preceding access read or wrote a value matching
+  `(value & 0xe0) == 0x60` from a cart-window or RIOT-zero-page address —
+  handled below `$1000` via `Board::snoop_read`/`snoop_write` (the same
+  hooks 3F/3E/UA/0840/FE/SB/X07 already use for TIA/RIOT-mirrored-space
+  bankswitching), plus a smaller in-window instance of the same check at
+  `$1F00-$1FFF` inside `cpu_read`/`cpu_write`. `detect()` resolves it via
+  `is_probably_4a50()` (ported from Stella's `CartDetector::isProbably4A50`)
+  at the 64K/128K size branches: the scheme's own namesake `$4A50` at the
+  NMI vector, falling back to a reset-vector-targets-a-`NOP $6Exx`/`$6Fxx`
+  heuristic. 32/64 KiB dumps tile to fill the full 128 KiB image, matching
+  Stella's own constructor.
+
+### Notes
+
+- **AR/Supercharger (`T-0402-015`) deliberately NOT attempted this
+  release**, despite being staged alongside 4A50 in the release plan. Even
+  its "fast-load" (ROM-image-only) mode — skipping the real tape-audio
+  "sound-load" path entirely, which needs a WAV/multiload decoder and is
+  clearly out of scope regardless — needs a bank-config decode, a
+  delayed-write protocol keyed on 5 DISTINCT bus accesses (Stella tracks
+  this via a global CPU-side access counter this crate has no equivalent
+  of; would need to be reconstructed from `snoop_read`/`snoop_write`/
+  `cpu_read`/`cpu_write` combined, since together they cover the whole
+  6507 address bus), and a synthesized dummy 6502 BIOS stub whose exact
+  bytes (Stella's `ourDummyROMCode`/`scrom.asm`) haven't been sourced yet.
+  Substantially larger than 4A50 or any other scheme in this catalogue —
+  staying its own separately-scoped follow-up rather than being rushed.
+- Per Stella's own doc comment, 4A50 itself "hasn't been fully implemented,
+  and may never be" even there (missing hi-res helper functions and
+  `$1E00` page-wrap, and only one known test ROM exists for it). This port
+  is an equally-scoped, faithful translation of exactly what Stella
+  implements — not a superset — and stays `BestEffort` tier indefinitely.
+- 190 tests passing workspace-wide (193 with `--features test-roms`; +7 for
+  `Bank4A50`'s register-decode, boot-smoke, and `detect()` signature
+  tests), up from 183/186 at `[1.4.0]`.
+
 ## [1.4.0] - 2026-07-01 - "Signal"
 
 A composable post-process shader stack, plus the data model half of the

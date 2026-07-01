@@ -33,8 +33,8 @@ bit-exact and passes the trimmed SingleStepTests `6502` corpus
 corpus verified weekly in CI.
 
 Beyond reference accuracy, Rusty2600 is a real emulation platform, not just a
-timing-accurate core: **22 of the console's 25 catalogued bankswitch
-schemes** (all 8 Curated-tier schemes plus 12 BestEffort schemes) wired into
+timing-accurate core: **23 of the console's 25 catalogued bankswitch
+schemes** (all 8 Curated-tier schemes plus 13 BestEffort schemes) wired into
 automatic detection, a real **debugger** (live 6507/TIA/RIOT/memory panels,
 breakpoints, a standalone disassembler), a real **RetroAchievements**
 backend (`rcheevos`-vendored, per-frame achievement tracking and hardcore
@@ -85,13 +85,14 @@ look different, they visibly break.
 | Feature | Description |
 |---|---|
 | **Cycle-Accurate Core** | Integer TIA-color-clock lockstep scheduler; the 6507 (documented + undocumented opcodes) cycle-exact against SingleStepTests (233/233 opcodes) and Bruce Clark's exhaustive decimal-mode test |
-| **22 of 25 Bankswitch Schemes** | 2K/4K/F8/F6/F4/CV/FA/Superchip/DPC/E7 (all 8 Curated-tier) + F0/E0/3F/3E/EF/DF/BF/UA/0840/FE/SB/X07 (12 BestEffort) — classified behind a CI-enforced Core/Curated/BestEffort honesty gate (ADR 0003) |
+| **23 of 25 Bankswitch Schemes** | 2K/4K/F8/F6/F4/CV/FA/Superchip/DPC/E7 (all 8 Curated-tier) + F0/E0/3F/3E/EF/DF/BF/UA/0840/FE/SB/X07/4A50 (13 BestEffort) — classified behind a CI-enforced Core/Curated/BestEffort honesty gate (ADR 0003) |
 | **Real Debugger** | Live 6507/TIA/RIOT/memory panels, breakpoints/step/continue, a side-effect-free memory peek, a standalone disassembler — default-on |
 | **Debugger Depth** *(v1.3.0)* | A watch/conditional-breakpoint expression engine, a live JSR/RTS call stack, a per-scanline TIA write-scatter viewer, and a player/missile/ball position panel |
 | **RetroAchievements** | Native `rcheevos` integration: login, a live achievement list, leaderboards, rich presence, per-frame achievement tracking, hardcore mode, and a recent-unlocks toast list (off by default) |
 | **Save-States + Rewind** *(v1.1.0)* | A versioned binary snapshot format (ADR 0007) reusing the core's own `serde` derives; a rewind ring built on the same format |
 | **Run-Ahead** *(v1.2.0)* | Speculatively simulates a few frames ahead to hide a game's internal input lag, built on the save-state snapshot primitives — off by default, `0..=4` frames, adjustable live from Settings |
 | **Shader Stack** *(v1.4.0)* | A composable post-process stack (`rusty2600-gfx-shaders`) — CRT scanline darkening and an honestly-labeled composite-artifact color-bleed approximation, toggleable from Settings; empty stack (the default) is byte-identical to the direct blit |
+| **4A50 Bankswitching** *(v1.5.0)* | Three independently relocatable ROM/RAM segments plus a previous-access-gated hotspot state machine, ported faithfully from Stella's `Cartridge4A50` — BestEffort tier |
 | **Accuracy Battery** | A real `AccuracyScore`-gated battery (`rusty2600-test-harness`), CI-enforced, growing honestly rather than claiming an inflated pass rate |
 | **WebAssembly** | Runs in-browser via `wasm-winit` (full winit/wgpu/egui) or a lightweight `wasm-canvas` embed mode |
 | **Pure Rust** | `winit` + `wgpu` + `cpal` + `egui` frontend; a safe `no_std + alloc` chip stack behind a one-directional crate graph |
@@ -99,9 +100,9 @@ look different, they visibly break.
 Planned via the iterative `v1.x.0` line toward `v2.0.0` — see
 [`to-dos/ROADMAP.md`](to-dos/ROADMAP.md) for the full plan, and
 [`CHANGELOG.md`](CHANGELOG.md) for exactly what's shipped in each release:
-closing the remaining 3 bankswitch schemes (4A50, AR/Supercharger, the
-ARM-driven DPC+/CDF/CDFJ/CDFJ+ family), TAS movie tooling, Lua scripting,
-rollback netplay, and Android/iOS builds. The sprite-pack data model
+closing the remaining 2 bankswitch schemes (AR/Supercharger, the ARM-driven
+DPC+/CDF/CDFJ/CDFJ+ family), TAS movie tooling, Lua scripting, rollback
+netplay, and Android/iOS builds. The sprite-pack data model
 (`sprite_pack`, `hd-pack` feature) shipped in v1.4.0; its live rendering
 splice awaits a TIA object-ID mask.
 
@@ -127,15 +128,17 @@ splice awaits a TIA object-ID mask.
 ### Cartridges
 
 All 8 Curated-tier schemes (2K, 4K, F8, F6, F4, CV, FA/CBS-RAM, Superchip,
-DPC, E7) plus 12 of 15 BestEffort schemes (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC,
-BF/BFSC, UA, 0840, FE, SB, X07) are implemented and wired into automatic
-`detect()`. Two `Board` hooks (`snoop_write`/`snoop_read`) let a scheme react
-to accesses the console routes to TIA/RIOT space, not just the `$1000+` cart
-window — needed for the 3F/3E/UA/0840/FE/X07/SB families. Only 4A50,
-AR/Supercharger, and the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family (which needs a
-full ARM7TDMI Thumb interpreter) remain, each deliberately deferred as a
-substantially larger, separately-scoped undertaking — see
-[`docs/cart.md`](docs/cart.md) for the full catalogue and tiering.
+DPC, E7) plus 13 of 15 BestEffort schemes (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC,
+BF/BFSC, UA, 0840, FE, SB, X07, 4A50) are implemented and wired into
+automatic `detect()`. Two `Board` hooks (`snoop_write`/`snoop_read`) let a
+scheme react to accesses the console routes to TIA/RIOT space, not just the
+`$1000+` cart window — needed for the 3F/3E/UA/0840/FE/X07/SB/4A50 families
+(4A50 also uses a smaller in-window instance of its hotspot state machine at
+`$1F00-$1FFF`). Only AR/Supercharger and the ARM-driven DPC+/CDF/CDFJ/CDFJ+
+family (which needs a full ARM7TDMI Thumb interpreter) remain, each
+deliberately deferred as a substantially larger, separately-scoped
+undertaking — see [`docs/cart.md`](docs/cart.md) for the full catalogue and
+tiering.
 
 ### Modern features
 
