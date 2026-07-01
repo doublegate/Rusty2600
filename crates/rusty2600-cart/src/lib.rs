@@ -114,6 +114,17 @@ pub trait Board {
     fn snoop_write(&mut self, addr: u16, val: u8) {
         let _ = (addr, val);
     }
+
+    /// Observe a CPU read of a NON-cart-window address (`addr & 0x1000 ==
+    /// 0`), called AFTER the Bus computes the value TIA/RIOT would return
+    /// (passed as `val`) — the board only OBSERVES, it never redirects the
+    /// read; UA/0840 just need the access address, while FE additionally
+    /// needs the observed value itself (a JSR return-address byte pushed to
+    /// the stack, which happens to sit at `$01FE`, encodes which bank to
+    /// switch to). Default no-op, same reasoning as [`Self::snoop_write`].
+    fn snoop_read(&mut self, addr: u16, val: u8) {
+        let _ = (addr, val);
+    }
 }
 
 /// 2 KiB ROM, mirrored into the upper half of the 4 KiB window. Core tier.
@@ -1077,6 +1088,104 @@ impl Board for BankBF {
     }
 }
 
+/// UA (UA Ltd. / Brazilian Digivision): 8 KiB ROM as two 4 KiB banks,
+/// switched by accessing `$220`/`$240` (or the Digivision variant's
+/// `$2C0`/`$FB0`) — addresses in TIA-mirrored space, not the cart window,
+/// so bank switching relies on [`Board::snoop_read`]/[`Board::snoop_write`]
+/// rather than `cpu_read`/`cpu_write` (real hardware: the cart observes
+/// these accesses but never changes what TIA/RIOT return for them). Default
+/// start bank is 0 (Stella's `CartridgeEnhanced` default). BestEffort tier.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BankUA {
+    #[serde(with = "serde_bytes_array")]
+    rom: [u8; 0x2000],
+    bank: u8,
+}
+
+impl BankUA {
+    /// Build from an 8 KiB image. Returns `None` if the slice is not 8 KiB.
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        Some(Self {
+            rom: rom.try_into().ok()?,
+            bank: 0,
+        })
+    }
+
+    #[allow(clippy::missing_const_for_fn)]
+    fn hotspot(&mut self, addr: u16) {
+        match addr & 0x1260 {
+            0x0220 => self.bank = 0,
+            0x0240 => self.bank = 1,
+            _ => {}
+        }
+    }
+}
+
+impl Board for BankUA {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        let a = addr & 0x0FFF;
+        self.rom[usize::from(self.bank) * 0x1000 + a as usize]
+    }
+    fn cpu_write(&mut self, _addr: u16, _val: u8) {}
+    fn tier(&self) -> Tier {
+        Tier::BestEffort
+    }
+    fn snoop_read(&mut self, addr: u16, _val: u8) {
+        self.hotspot(addr);
+    }
+    fn snoop_write(&mut self, addr: u16, _val: u8) {
+        self.hotspot(addr);
+    }
+}
+
+/// 0840 (EconoBank): 8 KiB ROM as two 4 KiB banks, switched by accessing
+/// `$800`/`$840` — again TIA-mirrored space, using the same snoop-based
+/// mechanism as [`BankUA`]. BestEffort tier.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Bank0840 {
+    #[serde(with = "serde_bytes_array")]
+    rom: [u8; 0x2000],
+    bank: u8,
+}
+
+impl Bank0840 {
+    /// Build from an 8 KiB image. Returns `None` if the slice is not 8 KiB.
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        Some(Self {
+            rom: rom.try_into().ok()?,
+            bank: 0,
+        })
+    }
+
+    #[allow(clippy::missing_const_for_fn)]
+    fn hotspot(&mut self, addr: u16) {
+        match addr & 0x1840 {
+            0x0800 => self.bank = 0,
+            0x0840 => self.bank = 1,
+            _ => {}
+        }
+    }
+}
+
+impl Board for Bank0840 {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        let a = addr & 0x0FFF;
+        self.rom[usize::from(self.bank) * 0x1000 + a as usize]
+    }
+    fn cpu_write(&mut self, _addr: u16, _val: u8) {}
+    fn tier(&self) -> Tier {
+        Tier::BestEffort
+    }
+    fn snoop_read(&mut self, addr: u16, _val: u8) {
+        self.hotspot(addr);
+    }
+    fn snoop_write(&mut self, addr: u16, _val: u8) {
+        self.hotspot(addr);
+    }
+}
+
 /// DPC (Pitfall II's "Display Processor Chip"): 8 KiB program ROM as two
 /// 4 KiB F8-style banks (`$1FF8`/`$1FF9` hotspots, same convention as
 /// [`BankF8`]) + a 2 KiB fixed display-data ROM + 8 hardware "data fetchers"
@@ -1355,6 +1464,12 @@ pub enum Cartridge {
     /// BF (CPUWIZ): 256 KiB ROM, 64x4K banks, direct-select hotspots
     /// (BestEffort tier)
     BankBF(BankBF),
+    /// UA (UA Ltd. / Digivision): 8 KiB ROM, 2x4K banks, snoop-based
+    /// hotspots in TIA-mirrored space (BestEffort tier)
+    BankUA(BankUA),
+    /// 0840 (EconoBank): 8 KiB ROM, 2x4K banks, snoop-based hotspots
+    /// (BestEffort tier)
+    Bank0840(Bank0840),
 }
 
 impl Board for Cartridge {
@@ -1376,6 +1491,8 @@ impl Board for Cartridge {
             Self::BankEF(b) => b.cpu_read(addr),
             Self::BankDF(b) => b.cpu_read(addr),
             Self::BankBF(b) => b.cpu_read(addr),
+            Self::BankUA(b) => b.cpu_read(addr),
+            Self::Bank0840(b) => b.cpu_read(addr),
         }
     }
 
@@ -1397,6 +1514,8 @@ impl Board for Cartridge {
             Self::BankEF(b) => b.cpu_write(addr, val),
             Self::BankDF(b) => b.cpu_write(addr, val),
             Self::BankBF(b) => b.cpu_write(addr, val),
+            Self::BankUA(b) => b.cpu_write(addr, val),
+            Self::Bank0840(b) => b.cpu_write(addr, val),
         }
     }
 
@@ -1418,6 +1537,8 @@ impl Board for Cartridge {
             Self::BankEF(b) => b.tier(),
             Self::BankDF(b) => b.tier(),
             Self::BankBF(b) => b.tier(),
+            Self::BankUA(b) => b.tier(),
+            Self::Bank0840(b) => b.tier(),
         }
     }
 
@@ -1439,6 +1560,8 @@ impl Board for Cartridge {
             Self::BankEF(b) => b.tick(),
             Self::BankDF(b) => b.tick(),
             Self::BankBF(b) => b.tick(),
+            Self::BankUA(b) => b.tick(),
+            Self::Bank0840(b) => b.tick(),
         }
     }
 
@@ -1460,6 +1583,8 @@ impl Board for Cartridge {
             Self::BankEF(b) => b.tick_coprocessor(),
             Self::BankDF(b) => b.tick_coprocessor(),
             Self::BankBF(b) => b.tick_coprocessor(),
+            Self::BankUA(b) => b.tick_coprocessor(),
+            Self::Bank0840(b) => b.tick_coprocessor(),
         }
     }
 
@@ -1481,6 +1606,31 @@ impl Board for Cartridge {
             Self::BankEF(b) => b.snoop_write(addr, val),
             Self::BankDF(b) => b.snoop_write(addr, val),
             Self::BankBF(b) => b.snoop_write(addr, val),
+            Self::BankUA(b) => b.snoop_write(addr, val),
+            Self::Bank0840(b) => b.snoop_write(addr, val),
+        }
+    }
+
+    fn snoop_read(&mut self, addr: u16, val: u8) {
+        match self {
+            Self::Rom2K(b) => b.snoop_read(addr, val),
+            Self::Rom4K(b) => b.snoop_read(addr, val),
+            Self::BankF8(b) => b.snoop_read(addr, val),
+            Self::BankF6(b) => b.snoop_read(addr, val),
+            Self::BankF4(b) => b.snoop_read(addr, val),
+            Self::BankCV(b) => b.snoop_read(addr, val),
+            Self::BankFA(b) => b.snoop_read(addr, val),
+            Self::BankDpc(b) => b.snoop_read(addr, val),
+            Self::BankE7(b) => b.snoop_read(addr, val),
+            Self::BankF0(b) => b.snoop_read(addr, val),
+            Self::BankE0(b) => b.snoop_read(addr, val),
+            Self::Bank3F(b) => b.snoop_read(addr, val),
+            Self::Bank3E(b) => b.snoop_read(addr, val),
+            Self::BankEF(b) => b.snoop_read(addr, val),
+            Self::BankDF(b) => b.snoop_read(addr, val),
+            Self::BankBF(b) => b.snoop_read(addr, val),
+            Self::BankUA(b) => b.snoop_read(addr, val),
+            Self::Bank0840(b) => b.snoop_read(addr, val),
         }
     }
 }
@@ -1618,6 +1768,45 @@ fn is_probably_ef_by_opcode(rom: &[u8]) -> bool {
     SIGNATURES.iter().any(|sig| contains_bytes(rom, sig))
 }
 
+/// Port of Stella's `CartDetector::isProbablyUA`: search for known UA /
+/// Brazilian-Digivision bankswitch-hotspot opcode encodings.
+fn is_probably_ua(rom: &[u8]) -> bool {
+    const SIGNATURES: [[u8; 3]; 6] = [
+        [0x8D, 0x40, 0x02], // STA $240 (Funky Fish, Pleiades)
+        [0xAD, 0x40, 0x02], // LDA $240
+        [0xBD, 0x1F, 0x02], // LDA $21F,X (Gingerbread Man)
+        [0x2C, 0xC0, 0x02], // BIT $2C0 (Time Pilot)
+        [0x8D, 0xC0, 0x02], // STA $2C0 (Fathom, Vanguard)
+        [0xAD, 0xC0, 0x02], // LDA $2C0 (Mickey)
+    ];
+    SIGNATURES.iter().any(|sig| contains_bytes(rom, sig))
+        || count_bytes_at_least(rom, &[0x2C, 0xB0, 0x0F], 1) // BIT $FB0 (Digivision Beamrider)
+}
+
+/// Port of Stella's `CartDetector::isProbably0840`: at least two occurrences
+/// of a known 0840 bankswitch-hotspot opcode encoding (a single access
+/// wouldn't need to bankswitch at all).
+fn is_probably_0840(rom: &[u8]) -> bool {
+    const SIGNATURES_3: [[u8; 3]; 3] = [
+        [0xAD, 0x00, 0x08], // LDA $0800
+        [0xAD, 0x40, 0x08], // LDA $0840
+        [0x2C, 0x00, 0x08], // BIT $0800
+    ];
+    if SIGNATURES_3
+        .iter()
+        .any(|sig| count_bytes_at_least(rom, sig, 2))
+    {
+        return true;
+    }
+    const SIGNATURES_4: [[u8; 4]; 2] = [
+        [0x0C, 0x00, 0x08, 0x4C], // NOP $0800; JMP ...
+        [0x0C, 0xFF, 0x0F, 0x4C], // NOP $0FFF; JMP ...
+    ];
+    SIGNATURES_4
+        .iter()
+        .any(|sig| count_bytes_at_least(rom, sig, 2))
+}
+
 /// Detect the bankswitch scheme from a ROM image and build the board.
 ///
 /// Same-size same-catalogue collisions (CV vs plain 2K/4K, Superchip vs
@@ -1643,15 +1832,16 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
         0x1000 => Rom4K::new(rom).map(Cartridge::Rom4K),
         0x2000 => {
             // 8 KiB: checked in the same priority order Stella's own
-            // CartDetector uses at this size (SC, E0, 3E, 3F, ... default
-            // F8) — Superchip (F8SC) via its RAM-shadow signature, E0
-            // (Parker Bros) and 3E/3F (Tigervision) via their hotspot-opcode
-            // signatures, falling back to plain F8 (Curated, the far more
-            // common scheme). FE (Activision SCABS) still needs detection —
-            // it isn't implemented yet (needs the address-bus-snoop
-            // extension `snoop_write` provides, plus read-side snooping
-            // `T-0402-xxx` doesn't have yet).
-            // TODO(T-0401-001): FE (BestEffort) detection for 8 KiB images.
+            // CartDetector uses at this size (SC, E0, 3E, 3F, UA, FE, 0840,
+            // ... default F8) — Superchip (F8SC) via its RAM-shadow
+            // signature, E0 (Parker Bros)/3E/3F (Tigervision)/UA/0840 via
+            // their hotspot-opcode signatures, falling back to plain F8
+            // (Curated, the far more common scheme). FE (Activision SCABS)
+            // still needs detection — it's the one remaining scheme at this
+            // size that needs the snooped VALUE (not just the address) to
+            // pick a bank, a bit more involved than UA/0840's address-only
+            // decode (`T-0402-006`).
+            // TODO(T-0402-006): FE (BestEffort) detection for 8 KiB images.
             if is_probably_superchip(rom) {
                 BankF8::new(rom)
                     .map(BankF8::with_superchip)
@@ -1662,6 +1852,10 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
                 Bank3E::new(rom, 32).map(Cartridge::Bank3E)
             } else if is_probably_3f(rom) {
                 Bank3F::new(rom).map(Cartridge::Bank3F)
+            } else if is_probably_ua(rom) {
+                BankUA::new(rom).map(Cartridge::BankUA)
+            } else if is_probably_0840(rom) {
+                Bank0840::new(rom).map(Cartridge::Bank0840)
             } else {
                 BankF8::new(rom).map(Cartridge::BankF8)
             }
@@ -1767,7 +1961,16 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
         // T-0402-008/009/010 (DONE): EF/EFSC, DF/DFSC, BF/BFSC — dispatched
         // above at 64/128/256 KiB via ef_family_tail_signature() (and EF's
         // opcode fallback for pre-marker-convention images).
+        // T-0402-012/013 (DONE): UA, 0840 — dispatched above at 8 KiB via
+        // is_probably_ua()/is_probably_0840(), using the new snoop_read hook
+        // (they only need the ACCESS ADDRESS, not the value, so a simpler
+        // case than FE below).
         // T-0401-005 (DONE): DPC (Pitfall II, Curated) — see the 0x2800..=0x2900 arm above.
+        // TODO(T-0402-006): FE (BestEffort) — needs the snooped VALUE (not
+        // just the address) to pick a bank; scoped separately from UA/0840.
+        // TODO(T-0402-011): SB, X07, 4A50 (BestEffort) — need snoop_read too,
+        // but at sizes (64/128/256 KiB) that already have a `None` fallback
+        // rather than a wrong-guess default.
         // TODO(T-0401-006): DPC+ (BestEffort) via tick_coprocessor.
         // TODO(T-0401-007): pirate / homebrew BMC schemes (BestEffort).
         _ => None,
@@ -2358,5 +2561,56 @@ mod tests {
         // silently guess wrong; `None` is the honest answer.
         assert!(detect(&alloc::vec![0u8; 0x20000]).is_none());
         assert!(detect(&alloc::vec![0u8; 0x40000]).is_none());
+    }
+
+    #[test]
+    fn bank_ua_snoop_selects_bank_via_read_or_write() {
+        let mut img = [0u8; 0x2000];
+        img[0] = 0xAA; // bank 0
+        img[0x1000] = 0xBB; // bank 1
+        let mut board = BankUA::new(&img).unwrap();
+        assert_eq!(board.tier(), Tier::BestEffort);
+        assert_eq!(board.cpu_read(0x1000), 0xAA, "default start bank is 0");
+        board.snoop_read(0x0240, 0); // an observed READ of $240 also switches
+        assert_eq!(board.cpu_read(0x1000), 0xBB);
+        board.snoop_write(0x0220, 0); // an observed WRITE of $220 switches back
+        assert_eq!(board.cpu_read(0x1000), 0xAA);
+    }
+
+    #[test]
+    fn bank_0840_snoop_selects_bank_via_read_or_write() {
+        let mut img = [0u8; 0x2000];
+        img[0] = 0xAA;
+        img[0x1000] = 0xBB;
+        let mut board = Bank0840::new(&img).unwrap();
+        assert_eq!(board.tier(), Tier::BestEffort);
+        assert_eq!(board.cpu_read(0x1000), 0xAA);
+        board.snoop_read(0x0840, 0);
+        assert_eq!(board.cpu_read(0x1000), 0xBB);
+        board.snoop_write(0x0800, 0);
+        assert_eq!(board.cpu_read(0x1000), 0xAA);
+    }
+
+    #[test]
+    fn detect_resolves_ua_via_opcode_signature() {
+        let mut img = [0u8; 0x2000];
+        img[0x00] = 0x01; // rule out the trivial all-zero Superchip match
+        img[0x100] = 0x8D; // STA $240
+        img[0x101] = 0x40;
+        img[0x102] = 0x02;
+        assert!(matches!(detect(&img).unwrap(), Cartridge::BankUA(_)));
+    }
+
+    #[test]
+    fn detect_resolves_0840_via_repeated_opcode_signature() {
+        let mut img = [0u8; 0x2000];
+        img[0x00] = 0x01; // rule out the trivial all-zero Superchip match
+        img[0x100] = 0xAD; // LDA $0800 (x2 -- 0840 needs 2+ occurrences)
+        img[0x101] = 0x00;
+        img[0x102] = 0x08;
+        img[0x200] = 0xAD;
+        img[0x201] = 0x00;
+        img[0x202] = 0x08;
+        assert!(matches!(detect(&img).unwrap(), Cartridge::Bank0840(_)));
     }
 }

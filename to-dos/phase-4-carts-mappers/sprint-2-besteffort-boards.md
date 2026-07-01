@@ -40,17 +40,25 @@ boot-smoke tested only, never accuracy-oracle-gated.
   matching real hardware, where the cartridge edge connector is wired to
   every address line, not just A12. This unblocks 3F/3E now and UA/0840/FE
   later (`T-0402-006`).
-- [ ] `T-0402-006` (deferred, needs `snoop_read` too): UA, 0840, and FE all
-  bankswitch on accesses to TIA/RIOT-mirrored addresses like `snoop_write`
-  targets, but ALL THREE also snoop on READS, not just writes (their
-  Stella `peek()` overrides call the same `checkSwitchBank` reads do) — FE
-  additionally uses the snooped VALUE itself (the JSR return-address byte
-  sitting at `$01FE` mid-stack-push) to pick the bank, not just the access
-  address. Needs a `snoop_read(addr) -> Option<u8>`-shaped hook (the board
-  must be able to REDIRECT the read, not just observe it, since these
-  hotspots overlap real RIOT RAM / TIA registers) — a bigger interface
-  question than the write-only case `T-0402-005` solved cleanly. Scoped as
-  its own ticket rather than rushed.
+- [x] `T-0402-006` (DONE for UA/0840; FE deferred): Extended `Board` with a
+  `snoop_read(addr, val)` hook (default no-op) and wired `Bus::cpu_read`
+  (`crates/rusty2600-core/src/bus.rs`) to call it AFTER computing the value
+  TIA/RIOT would return for a non-cart-window address. Turned out simpler
+  than first scoped: Stella's `CartridgeUA`/`Cartridge0840::peek()`
+  overrides exist ONLY to OBSERVE the access and trigger the bankswitch
+  side effect — they still return exactly what TIA/RIOT would have
+  returned anyway, so no "redirect the read" capability was needed, just
+  an observe-after-the-fact hook (the write-side mirror of
+  `snoop_write`). Implemented `BankUA` (8 KiB, 2×4K banks, hotspots
+  `$220`/`$240`, plus the Digivision `$2C0`/`$FB0` variant) and `Bank0840`
+  (8 KiB, 2×4K banks, hotspots `$800`/`$840`) on top of it; both wired into
+  `detect()` at 8 KiB via `is_probably_ua`/`is_probably_0840` (ported from
+  Stella), checked after 3E/3F and before falling back to plain F8. FE
+  remains deferred: it additionally needs the snooped VALUE (the JSR
+  return-address byte sitting at `$01FE` mid-stack-push) to pick the bank,
+  which `snoop_read`'s existing `val` parameter actually already supports
+  — FE's remaining work is just its own register-decode logic, not a
+  further interface change.
 - [x] `T-0402-007` (DONE): Found a `clippy::large_stack_frames` failure
   while adding `BankF0`'s 64 KiB array inline in the `Cartridge` enum (an
   enum is sized to its largest variant, so a 64 KiB variant inflates every
@@ -86,10 +94,13 @@ boot-smoke tested only, never accuracy-oracle-gated.
   `ef_family_write`/`ef_family_hotspot`) rather than three near-duplicate
   copies, since the three schemes differ only in size/bank-count/hotspot
   base.
-- [ ] `T-0402-011` (deferred, same `snoop_read` blocker as `T-0402-006`):
-  SB (Superbank), X07, and 4A50 — the remaining Batch 2 schemes — all
-  snoop CPU READS of TIA/RIOT-mirrored addresses (`$0800-$0FFF` for SB,
-  almost all of `$0000-$0FFF` for X07/4A50), not just writes. `detect()`
+- [ ] `T-0402-011` (deferred, `snoop_read` now exists — this is just
+  unstarted, not blocked): SB (Superbank), X07, and 4A50 — the remaining
+  Batch 2 schemes. SB's and X07's own `checkSwitchBank` logic (re-read
+  after `T-0402-006`) picks the bank purely from the ACCESS ADDRESS, same
+  shape as `BankUA`/`Bank0840` — likely straightforward now that
+  `snoop_read` exists. 4A50 installs a full TIA/RIOT "delegate" covering
+  `$0000-$0FFF`, a bigger scope worth checking separately. `detect()`
   currently returns `None` (not a guess) for any 128/256 KiB image without
   a 3E/3F/DF/BF signature, rather than silently misdetecting an SB image.
 

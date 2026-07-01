@@ -50,7 +50,7 @@ impl Bus {
             }
         } else {
             // A12 = 0 -> Console
-            if addr & 0x0080 == 0 {
+            let val = if addr & 0x0080 == 0 {
                 // A7 = 0 -> TIA
                 self.tia.cpu_read(addr)
             } else if addr & 0x0200 == 0 {
@@ -59,7 +59,14 @@ impl Bus {
             } else {
                 // A7 = 1, A9 = 1 -> RIOT I/O and Timers
                 self.riot.cpu_read(addr)
+            };
+            // See snoop_write's rationale: UA/0840/FE bankswitch on reads
+            // the console routes to TIA/RIOT, observing the resulting value
+            // (never redirecting it).
+            if let Some(board) = &mut self.board {
+                board.snoop_read(addr, val);
             }
+            val
         };
 
         self.open_bus = val;
