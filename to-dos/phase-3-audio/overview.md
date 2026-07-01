@@ -29,8 +29,15 @@ Out: the frontend audio sink / DRC / device picker (Phase 5); any EQ/effects
 
 ## Sprints
 
-- Sprint 1 — poly counters + AUDC modes + mixer (stub — add
-  `sprint-1-poly-and-mixer.md` with `T-0301-NNN` when Phase 2 is ~complete).
+- Sprint 1 (`sprint-1-tia-audio.md`) — the classic TIASOUND-style two-channel
+  poly-counter synthesizer. Done pre-v0.2.0.
+- Sprint 2 (`sprint-2-hardware-accurate-model.md`) — this phase's actual
+  bit-exactness goal. Investigating AUDC 0xA/0xB (v0.2.0) found Sprint 1's
+  model is a confirmed simplification of what Stella's current source
+  implements (a two-counter pulse/noise feedback network, two-phase clocking
+  at fixed per-scanline positions, not a 16-entry mode table on a
+  free-running modulo counter) — see
+  `ref-docs/2026-07-01-supplemental-audio-hardware-model.md`.
 
 ## Risks
 

@@ -198,11 +198,30 @@ TIASOUND, which Stella uses):
 | 14 | divide-by-93 pure tone | **CPU/114** |
 | 15 | 5-bit poly → divide-by-93 | **CPU/114** |
 
-AUDC `0xA`/`0xB` behave distinctly from the Stella manual due to clock/data
-alignment — pin them bit-exactly against TIASOUND/Stella, not the prose docs
-(research report §14, open question 2). Output is **non-linear by volume** (AUDV
-selects 1 of 16 impedance levels), and the two channels mix. Per
-ref-docs/research-report.md §6.2.
+**This table (and `crates/rusty2600-tia/src/audio.rs`'s current 16-entry
+match on `AUDC`) is the classic TIASOUND model, confirmed to be a
+simplification, not what Stella's current source actually implements.**
+Investigating AUDC `0xA`/`0xB` specifically (research report §14, open
+question 2) surfaced a much larger finding — see
+`ref-docs/2026-07-01-supplemental-audio-hardware-model.md` for the full
+writeup. In short: Stella's `AudioChannel.cxx` splits `AUDC`'s 4 bits into
+two independent 2-bit noise/pulse-feedback fields driving two counters
+(`myPulseCounter`, `myNoiseCounter`), clocked via two phases (`phase0`/
+`phase1`) that fire at four *fixed* color-clock positions per scanline (9,
+37, 81, 149 — not an evenly-spaced or simple-modulo pattern), with volume
+sampled and averaged every color clock rather than read out once per tick.
+0xA/0xB only make sense as specific field combinations in that model — there
+is no clean patch to the existing lookup table that fixes just those two
+entries. Full audio-clocking accuracy needs a dedicated rearchitecture (see
+`to-dos/phase-3-audio/sprint-2-hardware-accurate-model.md`), not a two-mode
+pin — deliberately deferred rather than rushed, same as the collision-HBLANK
+gap above.
+
+Output mixing: this doc previously said "non-linear by volume" while
+`audio.rs`'s own module doc says "the 2600 mix is a simple linear sum of the
+two 4-bit volumes" — those two statements conflict; resolving which is
+correct is folded into the same rearchitecture ticket above rather than
+guessed at here. Per ref-docs/research-report.md §6.2.
 
 ## Timing
 
