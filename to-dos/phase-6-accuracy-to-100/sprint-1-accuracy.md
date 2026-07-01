@@ -24,15 +24,17 @@
   across all four prescales, plus confirmed the underflow-cycle read/write
   question resolves structurally from the scheduler's existing tick-then-
   access ordering (no RIOT-specific fix needed).
-- [ ] `T-0601-006`: Strip the NES-lineage IRQ/NMI service-sequence +
-  `irq_level`/`nmi_level`/`poll_nmi`/`poll_irq` surface from
-  `crates/rusty2600-cpu/src/{cpu,lib,bus}.rs` (mapper-IRQ, APU frame-counter/
-  DMC IRQ, PPU-driven NMI, branch-delays-IRQ microcode — all inherited from
-  the RustyNES port, confirmed dead since `rusty2600-core` never overrides
-  any of these trait methods). Keep only behavior that's genuinely universal
-  6502/6507 timing independent of interrupts (the taken-branch C3 dummy-PC
-  read). Re-run the full SingleStepTests audit + Klaus functional/decimal
-  suites after to confirm no regression (`docs/cpu.md`).
+- [x] `T-0601-006`: Strip the NES-lineage IRQ/NMI vestige. Done (v0.2.0):
+  found the crate actually carried a SECOND, entirely dead, never-compiled
+  RustyNES CPU implementation (`cpu.rs`/`bus.rs`/`disasm.rs`/`status.rs`,
+  ~3,560 lines, no `mod` declarations wired any of it in) — deleted
+  outright. The one live file (`lib.rs`) had only leftover NES-flavored
+  comment prose (no actual dead code/fields) attached to correct, needed
+  universal 6502 behavior; fixed 4 comment blocks to describe the
+  2600-relevant case instead. Also split `lib.rs` into `status.rs`/`bus.rs`/
+  `cpu.rs` + a thin `lib.rs`, matching RustyNES's own live file layout.
+  Re-ran the full SingleStepTests audit + Klaus functional/decimal suites
+  after: zero regression (`docs/cpu.md`).
 - [ ] `T-0601-007` (unscheduled — deliberately deferred, see `docs/tia.md`
   §Collisions): extend the TIA's object-position / pixel-coordinate model
   from the current 0..159 visible-window space to the full 0..227 raw

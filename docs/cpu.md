@@ -41,21 +41,29 @@ never the OS RNG.
   on `BRK` but never fired by hardware. The only timing mechanisms are polling
   the RIOT timer or `WSYNC`.
 
-  **Known vestige (`T-0601-006`, targeted v0.2.0):** `crates/rusty2600-cpu/src/`
-  (`cpu.rs`, `lib.rs`, `bus.rs`) still carries a substantial NES-lineage
-  IRQ/NMI service-sequence + `irq_level`/`nmi_level`/`poll_nmi`/`poll_irq`
-  surface (mapper-IRQ, APU frame-counter/DMC IRQ, PPU-driven NMI, branch-delays-
-  IRQ microcode, referencing nesdev wiki / AccuracyCoin / TriCNES / Mesen2 —
-  all NES concepts) inherited wholesale from the RustyNES port and never
-  stripped for the 6507. It is confirmed **dead, not live**: `rusty2600-core`
-  never overrides any of these trait methods, so every one resolves to the
-  crate's own default impl (`false` / no-op), and the SingleStepTests audit
-  (which doesn't exercise interrupts) already passes 100%. It costs no
-  correctness today, but it contradicts this doc, is confusing to a reader,
-  and is real removable weight — strip it in v0.2.0, keeping only the
-  behavior that's genuinely universal 6502 timing regardless of interrupts
-  (e.g. the taken-branch C3 dummy-PC read, which is real hardware behavior on
-  any 6502/6507 and has nothing to do with IRQ polling).
+  **Resolved (`T-0601-006`, v0.2.0).** The crate directory used to also
+  carry a *second*, entirely separate, never-compiled CPU implementation
+  inherited wholesale from the RustyNES port during the initial scaffold —
+  `cpu.rs` (2,720 lines, literally headed "Ricoh 2A03 CPU"), `bus.rs` (429
+  lines, a `Bus` trait referencing a `scheduler::M2Phase` type that doesn't
+  exist in this crate), `disasm.rs` (365 lines), and `status.rs` (46 lines).
+  None were ever reachable — `lib.rs` had no `mod cpu;`/`mod bus;`/etc. — so
+  none of their IRQ/NMI/mapper-IRQ/APU-frame-IRQ/branch-delays-IRQ surface
+  (referencing nesdev wiki / AccuracyCoin / TriCNES / Mesen2, all NES
+  concepts) was ever live. Deleted outright. The one *live* file
+  (`lib.rs`, 2,172 lines) carried only leftover NES-flavored **comment
+  prose** attached to otherwise-correct, still-needed universal 6502
+  behavior (the RMW dummy-read/dummy-write double-access pattern, the
+  branch cycle-counting path, `RTI`'s status-flag restore) — no actual
+  IRQ/NMI code, fields, or logic. Fixed those four comment blocks to
+  describe the 2600-relevant case (e.g. the RIOT's `INTIM` clear-on-read
+  side effect, TIA write-strobe double-strobing) instead of NES registers.
+
+  While resolving this, also split the single 2,172-line `lib.rs` into the
+  focused file layout RustyNES's own live CPU crate uses (matching this
+  project's split-by-concern convention): `status.rs` (the `Status` flags),
+  `bus.rs` (the `CpuBus` trait), `cpu.rs` (the `Cpu` struct + dispatch +
+  opcodes), with `lib.rs` reduced to module declarations and re-exports.
 - **Address mirroring is severe.** With only 13 address lines decoded, and the
   TIA/RIOT each decoding only a few low lines, the same registers appear at many
   mirror addresses, and the cart hotspots live in the same cramped map. The CPU
