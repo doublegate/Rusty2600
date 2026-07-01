@@ -22,8 +22,8 @@ and `docs/architecture.md` fact 4.
 it, and the **CPU stack overlaps this region** (the 6502 `$0100` stack page maps
 into the RIOT RAM mirror). The `Bus` therefore has no `wram` field. Power-on RAM
 contents are randomized from the **seeded** PRNG in the owning `System`
-(determinism contract, `docs/adr/0004`), never the OS RNG. Per
-ref-docs/research-report.md §7.
+(determinism contract, `docs/adr/0004`; the seeding mechanism itself is
+`docs/adr/0006`), never the OS RNG. Per ref-docs/research-report.md §7.
 
 ## I/O ports
 

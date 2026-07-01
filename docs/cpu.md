@@ -28,8 +28,10 @@ The register file (`Cpu` in `rusty2600-cpu`):
 | `p` (`Status`) | 8 | `C Z I D B U V N`; bit 5 (`U`) reads 1, `B` exists only in the pushed copy |
 | `cycles` | 64 | total CPU cycles since power-on (for the golden-log differ) |
 
-Power-on register values are randomized from the **seeded** PRNG in the owning
-`System` (determinism contract, `docs/adr/0004`), never the OS RNG.
+Power-on register values (`A`/`X`/`Y` — reset does not touch these) are
+randomized from the **seeded** PRNG in the owning `System` (determinism
+contract, `docs/adr/0004`; the seeding mechanism itself is `docs/adr/0006`),
+never the OS RNG.
 
 ## Consequences of the 6507 packaging
 

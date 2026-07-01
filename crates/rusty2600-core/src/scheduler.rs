@@ -89,13 +89,52 @@ pub struct System {
     color_clocks: u64,
 }
 
+/// A minimal deterministic byte generator for seeding power-on RAM/register
+/// state (ADR 0006) — SplitMix64, chosen only for being a tiny, dependency-
+/// free, well-known-good bit mixer; not a cryptographic or statistical-
+/// quality requirement, just "same seed -> same bytes, different seed ->
+/// different bytes" (the determinism contract, ADR 0004).
+struct SplitMix64(u64);
+
+impl SplitMix64 {
+    const fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+}
+
 impl System {
-    /// Power on with a determinism seed (drives the phase alignment).
+    /// Power on with a determinism seed (drives the phase alignment AND the
+    /// power-on RAM/register randomization, ADR 0006 — real hardware powers
+    /// up with indeterminate RAM/register contents, but "indeterminate" must
+    /// still be a deterministic function of the seed, never the OS RNG, per
+    /// ADR 0004).
     #[must_use]
     pub fn new(seed: u64) -> Self {
+        let mut cpu = Cpu::new();
+        let mut bus = Bus::new();
+
+        let mut rng = SplitMix64(seed);
+        // RIOT RAM (128 B, the console's only general RAM): fill 16 bytes at
+        // a time from each `next_u64()` call.
+        for chunk in bus.riot.ram.chunks_mut(8) {
+            let bytes = rng.next_u64().to_le_bytes();
+            chunk.copy_from_slice(&bytes[..chunk.len()]);
+        }
+        // A/X/Y: real 6502/6507 reset does NOT touch these, so their power-on
+        // value is whatever was last driven on the bus — seed it too rather
+        // than leaving it at a fixed 0 every run.
+        let axy = rng.next_u64().to_le_bytes();
+        cpu.a = axy[0];
+        cpu.x = axy[1];
+        cpu.y = axy[2];
+
         Self {
-            cpu: Cpu::new(),
-            bus: Bus::new(),
+            cpu,
+            bus,
             // `seed % CPU_DIVISOR` is in `0..3`, so the narrowing cannot truncate.
             phase: u8::try_from(seed % u64::from(CPU_DIVISOR)).unwrap_or(0),
             color_clocks: 0,
@@ -155,6 +194,39 @@ mod tests {
         let a = System::new(42);
         let b = System::new(42);
         assert_eq!(a.phase, b.phase);
+    }
+
+    // ADR 0006: power-on RAM/register state is seeded-random, not a fixed
+    // constant and not the OS RNG — same seed must reproduce byte-identically
+    // (the determinism contract, ADR 0004), matching Stella's `ramrandom=
+    // <seed>` model rather than true hardware nondeterminism.
+    #[test]
+    fn seeded_power_on_ram_is_deterministic() {
+        let a = System::new(1234);
+        let b = System::new(1234);
+        assert_eq!(a.bus.riot.ram, b.bus.riot.ram);
+        assert_eq!((a.cpu.a, a.cpu.x, a.cpu.y), (b.cpu.a, b.cpu.x, b.cpu.y));
+    }
+
+    #[test]
+    fn different_seeds_produce_different_power_on_ram() {
+        let a = System::new(1);
+        let b = System::new(2);
+        assert_ne!(
+            a.bus.riot.ram, b.bus.riot.ram,
+            "different seeds should not coincidentally produce identical RAM"
+        );
+    }
+
+    // Regression guard against reverting to the old `[0; 128]` /
+    // `Cpu::new()`-hardcoded-zero power-on state this ADR replaced.
+    #[test]
+    fn power_on_state_is_not_all_zero() {
+        let sys = System::new(0xDEAD_BEEF);
+        assert!(
+            sys.bus.riot.ram.iter().any(|&b| b != 0),
+            "seeded RAM should not be all-zero"
+        );
     }
 
     #[test]
