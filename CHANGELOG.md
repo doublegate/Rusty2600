@@ -6,6 +6,76 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-07-02 - "Coprocessor Online"
+
+Closes the final open item from `[2.1.0]`'s follow-up work: wires DPC+ —
+the first of the Harmony/Melody ARM-coprocessor cart families — into
+`rusty2600-cart::detect()`, using the `rusty2600-thumb` interpreter that
+has existed unconsumed since `[1.6.0]`.
+
+### Added
+
+- **`BankDpcPlus`** (`T-0401-006`, BestEffort tier) — a full port of
+  Gopher2600's Go `dpcplus` package (not Stella's C++, matching this
+  project's established precedent for ARM-adjacent code). The complete
+  `$00..=$7F` register window: RNG, 8 plain + 8 windowed + 8 fractional
+  data fetchers, `FastFetch` `LDA #immediate` redirection, and the `$5A`
+  CALLFUNCTION register.
+  - `DpcPlusArmMemory` implements `rusty2600_thumb::ThumbMemory` over the
+    board's driver/custom/data/freq ROM+RAM segments at Gopher2600's own
+    Harmony-architecture addresses (Flash `0x0000_0000`, SRAM
+    `0x4000_0000`).
+  - The ARM entry point (`$5A` write of `254`/`255`) runs
+    `Arm7Tdmi::step()` in a loop, **synchronously, from within
+    `cpu_write`** — this needed no `Bus`/scheduler change at all, since
+    DPC+'s CALLFUNCTION is call-and-run-to-completion, not a per-clock
+    tick. A generous, documented step-count safety cap guards against a
+    runaway/buggy ROM.
+  - Detected via content signature (the ASCII string `"DPC+"` occurring
+    twice, matching Stella's own `isProbablyDPCplus`), not size alone — a
+    6-bank DPC+ image is the same 32 KiB several other schemes already
+    use.
+  - **Verified with a real hand-assembled Thumb-1 program** (`MOV`/`LDR`
+    PC-relative/`STRB`/`BX LR`, opcodes hand-derived and cross-checked
+    against `rusty2600-thumb`'s own format encoders) that actually
+    executes via the interpreter and writes a byte into data RAM through
+    a genuine `STRB` instruction — proving the ARM coprocessor actually
+    runs, not just that registers decode.
+  - 12 new tests (295 total on default features, up from 283; 299 with
+    `--features test-roms`).
+
+### Notes
+
+- **Honestly deferred, not silently dropped**: DPC+'s music-mode
+  continuous-time audio (the reference's `Step(clock)`-driven phase
+  accumulator) is not implemented — register plumbing round-trips
+  correctly, but waveform sampling always reads index 0, so DPC+
+  music-mode audio is silent/incorrect on that one channel. This is a
+  `rusty2600-tia` audio-timing follow-up, not a cart-catalogue one.
+  Function-call service `2` ("copy value to fetcher, N times") is ported
+  with Gopher2600's own address formula verbatim, including what looks
+  like a copy-paste artifact (`Hi` is also advanced by the loop index,
+  so it does not fill a contiguous block) — Stella can't cross-check this
+  specific service (it runs the real ARM driver rather than
+  short-circuiting it), so it's ported exactly rather than "corrected" on
+  a guess.
+- CDF/CDFJ/CDFJ+ (the other three Harmony/Melody families) remain their
+  own future, separately-scoped follow-up.
+- **Doc fix, found during this release's reconciliation**: `docs/cart.md`'s
+  scheme-catalogue tally line said "15 BestEffort (25 schemes)," but the
+  table itself has always had 16 BestEffort rows (26 total) — a stale
+  count predating F0/3F/3E being split into three distinct rows from the
+  source research report's combined "F0 / 3F-variants" draft entry.
+  Corrected the tally, not the catalogue — no scheme was added or
+  removed by this fix. **24 of 26 schemes** are now implemented and wired
+  into `detect()`, leaving E7 (`T-0401-002`, a pre-existing, unrelated
+  gap) and CDF/CDFJ/CDFJ+ (this release's own deliberately-deferred
+  scope) as the two remaining entries.
+- No `Board`/`Bus` architecture changes were needed for this release
+  (unlike `[2.1.0]`'s AR/Supercharger, which added
+  `Board::take_oob_pokes()`) — DPC+'s synchronous call-and-return
+  CALLFUNCTION model fit the existing `cpu_write` hook directly.
+
 ## [2.1.0] - 2026-07-02 - "Follow-Through"
 
 Closes four of the follow-up gaps `[2.0.0]`'s reconciliation pass carried

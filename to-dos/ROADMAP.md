@@ -7,33 +7,39 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current release: v2.1.0 "Follow-Through"** — a post-`v2.0.0` follow-up
-release closing four of the gaps the `[2.0.0]` reconciliation pass
-explicitly carried forward: AR/Supercharger (`T-0402-015`, closing the
-cart catalogue to 24/25), real TIA paddle timing (`T-0501-010`, a faithful
-port of Stella's `AnalogReadout` RC model, wired end-to-end through
-native/Android/iOS), and frontend wiring for both Lua scripting
-(`scripting` feature) and rollback netplay (`netplay` feature) — both off
-by default, native-only, closing the `[1.9.0]`/`[1.10.0]` frontend-wiring
-gaps. Landed via three independent, parallel implementation efforts, each
-independently gate-verified before merging. Still open, deliberately not
-rushed: DPC+/CDF/CDFJ/CDFJ+ ARM-coprocessor wiring (closing the catalogue
-to 25/25), overlay compositing for scripting, STUN/NAT traversal + WebRTC
-for netplay, and the `[1.12.0]`-carried-forward Xcode-verified iOS
-build/run. See `CHANGELOG.md`'s `[2.1.0]` entry for full detail.
+**Current release: v2.2.0 "Coprocessor Online"** — closes the final open
+item from `[2.1.0]`'s follow-up work: `BankDpcPlus` (`T-0401-006`) wires
+DPC+, the first Harmony/Melody ARM-coprocessor family, into `detect()`
+using the `rusty2600-thumb` interpreter that had existed unconsumed since
+`[1.6.0]`. A full port of Gopher2600's Go `dpcplus` package, including a
+real `ThumbMemory` impl and a synchronous ARM-execution entry point,
+verified with a real hand-assembled Thumb-1 program that executes and
+writes to data RAM via a genuine `STRB`. DPC+ music-mode audio is
+honestly deferred; CDF/CDFJ/CDFJ+ remain their own future follow-up. Also
+fixes a stale scheme-catalogue tally in `docs/cart.md` (the table has
+always had 26 entries, not 25). See `CHANGELOG.md`'s `[2.2.0]` entry for
+full detail.
 
-Full release-by-release detail (v1.1.0 through v2.0.0) lives in
+Earlier: `v2.1.0 "Follow-Through"` closed three other `[2.0.0]`-carried-
+forward gaps — AR/Supercharger, real TIA paddle timing (wired end-to-end
+through native/Android/iOS), and frontend wiring for both Lua scripting
+and rollback netplay (both off by default, native-only). Landed via three
+independent, parallel implementation efforts. See `CHANGELOG.md`'s
+`[2.1.0]` entry.
+
+Full release-by-release detail (v1.1.0 through v2.1.0) lives in
 `docs/STATUS.md`'s "Current release" section and `CHANGELOG.md` — not
 duplicated here to avoid this file drifting out of sync with the
 canonical status doc. Phase 0 (foundation)
 through the full Curated-tier board set (Phase 4) are complete. Phase 7
-(BestEffort breadth) has landed 15 of the ~15-scheme BestEffort long tail
+(BestEffort breadth) has landed 15 of the 16-scheme BestEffort long tail
 cataloged in `docs/cart.md` (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA,
-0840, FE, SB, X07, 4A50, AR/Supercharger — 24 of 25 total schemes in the
-LOCAL catalogue), leaving only the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family
-(`T-0401-006`) — its interpreter substrate (`rusty2600-thumb`) exists but
-isn't yet wired into any `Board`, that wiring remaining its own
-separately-scoped follow-up, one family at a time.
+0840, FE, SB, X07, 4A50, AR/Supercharger, DPC+ — 24 of 26 total schemes in
+the LOCAL catalogue), leaving only E7 (`T-0401-002`, Curated tier, a
+pre-existing unrelated gap) and the CDF/CDFJ/CDFJ+ family (`T-0401-006`) —
+their interpreter substrate (`rusty2600-thumb`) exists and DPC+ proved the
+wiring pattern, but CDF/CDFJ/CDFJ+ remain their own separately-scoped
+follow-up, one family at a time.
 `Board::snoop_write`/`snoop_read` (added v0.4.0/v0.4.1) underpin all of
 UA/0840/FE/SB/X07/4A50/AR. **Phase 5 (frontend) is fully complete** — the real
 `debug-hooks` debugger (6507/TIA/RIOT/memory panels, breakpoints/step/
@@ -157,21 +163,25 @@ follow-up work, per the plan's own explicit gate criteria.
 ## Beyond v2.0.0
 
 This roadmap's `v1.1.0 -> v2.0.0` arc is complete; `v2.1.0` "Follow-Through"
-closed four of the carried-forward gaps (AR/Supercharger, real TIA paddle
-timing, and frontend wiring for both `rusty2600-script`/`rusty2600-netplay`
-— see `CHANGELOG.md`'s `[2.1.0]` entry). Open follow-up work remaining
-(see each item's own release notes for full context): the DPC+/CDF/CDFJ/
-CDFJ+ family (`T-0401-006`, substrate exists in `rusty2600-thumb` since
-`v1.6.0`) to close the cart catalogue to 25/25; netplay's STUN/hole-punch
-NAT traversal and WebRTC transport, plus per-player console
-switches/paddles; scripting's overlay-compositing render step and the
-`piccolo` wasm fallback; on-device save-state UI and physical-hardware
-verification for the Android app; a real Xcode build, Simulator run, and
-device verification for the iOS app on an actual Mac; a paddle test ROM to
-cross-check the new RC-circuit simulation against real game behavior; and,
-beyond either mobile store's submission (explicitly deferred past
-`v2.0.0`), the HD-pack live rendering splice pending a TIA object-ID mask.
-None of these need a new numbered plan yet — each remains a well-scoped,
+and `v2.2.0` "Coprocessor Online" closed five of the carried-forward gaps
+(AR/Supercharger, real TIA paddle timing, frontend wiring for both
+`rusty2600-script`/`rusty2600-netplay`, and DPC+ ARM-coprocessor wiring —
+see `CHANGELOG.md`'s `[2.1.0]`/`[2.2.0]` entries). Open follow-up work
+remaining (see each item's own release notes for full context): the CDF/
+CDFJ/CDFJ+ family (`T-0401-006`, DPC+ proved the wiring pattern in
+`[2.2.0]`) plus E7 (`T-0401-002`, a pre-existing unrelated gap) to close
+the cart catalogue to 26/26; DPC+'s music-mode continuous-time audio
+(register plumbing works, waveform sampling isn't clock-driven yet, a
+`rusty2600-tia` follow-up); netplay's STUN/hole-punch NAT traversal and
+WebRTC transport, plus per-player console switches/paddles; scripting's
+overlay-compositing render step and the `piccolo` wasm fallback;
+on-device save-state UI and physical-hardware verification for the
+Android app; a real Xcode build, Simulator run, and device verification
+for the iOS app on an actual Mac; a paddle test ROM to cross-check the
+new RC-circuit simulation against real game behavior; and, beyond either
+mobile store's submission (explicitly deferred past `v2.0.0`), the
+HD-pack live rendering splice pending a TIA object-ID mask. None of these
+need a new numbered plan yet — each remains a well-scoped,
 independently shippable `v2.x.y`/`v2.x.0` release whenever picked up.
 
 ## How the phases map to the architecture

@@ -10,7 +10,7 @@
 <p align="center">
   <a href="https://github.com/doublegate/Rusty2600/actions"><img src="https://github.com/doublegate/Rusty2600/workflows/CI/badge.svg" alt="Build Status"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a>
-  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v2.1.0-blue.svg" alt="Version"></a>
+  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v2.2.0-blue.svg" alt="Version"></a>
   <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/rust-1.96-orange.svg" alt="Rust: 1.96"></a>
   <br>
   <a href="#compatibility-and-accuracy"><img src="https://img.shields.io/badge/accuracy%20battery-100%25%20(2%2F2)-brightgreen.svg" alt="Accuracy battery"></a>
@@ -33,8 +33,9 @@ bit-exact and passes the trimmed SingleStepTests `6502` corpus
 corpus verified weekly in CI.
 
 Beyond reference accuracy, Rusty2600 is a real emulation platform, not just a
-timing-accurate core: **24 of the console's 25 catalogued bankswitch
-schemes** (all 8 Curated-tier schemes plus 14 BestEffort schemes) wired into
+timing-accurate core: **24 of the console's 26 catalogued bankswitch
+schemes** (all 7-of-8 implemented Curated-tier schemes plus 15 BestEffort
+schemes) wired into
 automatic detection, a real **debugger** (live 6507/TIA/RIOT/memory panels,
 breakpoints, a standalone disassembler), a real **RetroAchievements**
 backend (`rcheevos`-vendored, per-frame achievement tracking and hardcore
@@ -85,7 +86,7 @@ look different, they visibly break.
 | Feature | Description |
 |---|---|
 | **Cycle-Accurate Core** | Integer TIA-color-clock lockstep scheduler; the 6507 (documented + undocumented opcodes) cycle-exact against SingleStepTests (233/233 opcodes) and Bruce Clark's exhaustive decimal-mode test |
-| **24 of 25 Bankswitch Schemes** | 2K/4K/F8/F6/F4/CV/FA/Superchip/DPC/E7 (all 8 Curated-tier) + F0/E0/3F/3E/EF/DF/BF/UA/0840/FE/SB/X07/4A50/AR-Supercharger (14 BestEffort) — classified behind a CI-enforced Core/Curated/BestEffort honesty gate (ADR 0003) |
+| **24 of 26 Bankswitch Schemes** | 2K/4K/F8/F6/F4/CV/FA/Superchip/DPC (7 of 8 Curated-tier; E7 pending) + F0/E0/3F/3E/EF/DF/BF/UA/0840/FE/SB/X07/4A50/AR-Supercharger/DPC+ (15 of 16 BestEffort; CDF/CDFJ/CDFJ+ pending) — classified behind a CI-enforced Core/Curated/BestEffort honesty gate (ADR 0003) |
 | **Real Debugger** | Live 6507/TIA/RIOT/memory panels, breakpoints/step/continue, a side-effect-free memory peek, a standalone disassembler — default-on |
 | **Debugger Depth** *(v1.3.0)* | A watch/conditional-breakpoint expression engine, a live JSR/RTS call stack, a per-scanline TIA write-scatter viewer, and a player/missile/ball position panel |
 | **RetroAchievements** | Native `rcheevos` integration: login, a live achievement list, leaderboards, rich presence, per-frame achievement tracking, hardcore mode, and a recent-unlocks toast list (off by default) |
@@ -93,27 +94,28 @@ look different, they visibly break.
 | **Run-Ahead** *(v1.2.0)* | Speculatively simulates a few frames ahead to hide a game's internal input lag, built on the save-state snapshot primitives — off by default, `0..=4` frames, adjustable live from Settings |
 | **Shader Stack** *(v1.4.0)* | A composable post-process stack (`rusty2600-gfx-shaders`) — CRT scanline darkening and an honestly-labeled composite-artifact color-bleed approximation, toggleable from Settings; empty stack (the default) is byte-identical to the direct blit |
 | **4A50 Bankswitching** *(v1.5.0)* | Three independently relocatable ROM/RAM segments plus a previous-access-gated hotspot state machine, ported faithfully from Stella's `Cartridge4A50` — BestEffort tier |
-| **ARM7TDMI Thumb Interpreter** *(v1.6.0)* | A real Thumb-1 interpreter (`rusty2600-thumb`) ported from Gopher2600's Go implementation — registers, N/Z/C/V flags, all 19 instruction-format classes; the substrate the DPC+/CDF/CDFJ/CDFJ+ coprocessor family will wire into starting `v1.6.1` |
+| **ARM7TDMI Thumb Interpreter** *(v1.6.0, wired v2.2.0)* | A real Thumb-1 interpreter (`rusty2600-thumb`) ported from Gopher2600's Go implementation — registers, N/Z/C/V flags, all 19 instruction-format classes. `v2.2.0` wired it into `BankDpcPlus`, verified running a real hand-assembled Thumb-1 program via a genuine `STRB` write to data RAM; CDF/CDFJ/CDFJ+ remain their own follow-up |
 | **TAS Movies** *(v1.7.0)* | A `.r26m` movie format (`rusty2600-core::movie`) — a seeded power-on or embedded save-state start point plus a per-frame input log — and a TAStudio-lite piano-roll debugger panel with jump-to-frame and branch points |
 | **Accuracy Battery** | A real `AccuracyScore`-gated battery (`rusty2600-test-harness`), CI-enforced, growing honestly rather than claiming an inflated pass rate. *(v1.8.0)* `GoldenLogDiffer` now bundles a genuine externally-oracled golden CPU trace (20,000 instructions vs. an independent Gopher2600 run) |
 | **Lua Scripting Engine** *(v1.9.0, wired v2.1.0)* | A real, tested `rusty2600-script` crate (`mlua` native backend, off by default): a deliberately-smaller-than-RustyNES `emu` API over a host-agnostic `ScriptBus` trait, gated by a `WritesLocked` determinism lock. `v2.1.0` wired a real `ScriptBus` impl into the frontend's render loop plus a `Tools -> Load/Unload Script` menu — overlay compositing for `drawText`/`drawRect`/`drawPixel` remains a follow-up |
 | **Rollback Netplay** *(v1.10.0, wired v2.1.0)* | A real, tested `rusty2600-netplay` crate: 2-player rollback netplay wrapping `ggrs` (GGPO-style), `resync()` built on the existing save-state substrate, input-delay/max-prediction-window matching GGPO convention, a genuine rollback-desync test. `v2.1.0` wired a real `Tools -> Netplay...` Connect dialog into the frontend, verified with a real two-local-peer UDP integration test — direct-IP/LAN only; STUN/NAT traversal and the WebRTC transport remain follow-ups |
 | **Real Paddle Input** *(v2.1.0)* | A faithful port of Stella's `AnalogReadout` dump-capacitor RC-circuit simulation — `INPT0..=INPT3` now respond to real analog paddle timing (NTSC-only) instead of a plain digital byte, wired end-to-end through native, Android, and iOS |
-| **AR/Supercharger Bankswitching** *(v2.1.0)* | A full "fast-load" port of Stella's `CartridgeAR`, including a byte-exact 294-byte dummy-BIOS port and the 5-distinct-access delayed-write RAM protocol — BestEffort tier, closing the cart catalogue to 24 of 25 schemes |
+| **AR/Supercharger Bankswitching** *(v2.1.0)* | A full "fast-load" port of Stella's `CartridgeAR`, including a byte-exact 294-byte dummy-BIOS port and the 5-distinct-access delayed-write RAM protocol — BestEffort tier |
+| **DPC+ ARM Coprocessor Bankswitching** *(v2.2.0)* | A full port of Gopher2600's `dpcplus` package — the complete register window, a real `ThumbMemory` impl, and a synchronous ARM-execution entry point driving `rusty2600-thumb`'s interpreter. BestEffort tier; DPC+ music-mode audio honestly deferred |
 | **Android** *(v1.11.0)* | A real, tested `rusty2600-mobile` UniFFI bridge crate reused from Kotlin — zero hand-written JNI/`unsafe` (a design win over the original plan). A real Gradle/Kotlin app, **verified running on a real emulator** (booted, installed, launched crash-free, a ROM loaded via the system file picker) |
 | **iOS** *(v1.12.0)* | Reuses the `rusty2600-mobile` bridge unchanged for a SwiftUI app (`ios/`) — genuinely tool-generated Swift bindings, real Metal/AVFoundation source, and a new touch-drag rotary paddle control. This sandbox has no Xcode toolchain, so the build is honestly unverified by compilation; a `v1.12.x` follow-up completes real Xcode/Simulator/device verification |
 | **WebAssembly** | Runs in-browser via a canvas-2D bootstrap (real keyboard input + Web Audio API output). `wasm-winit`/`wasm-canvas` are currently identical placeholder feature names for this one build; a full winit+wgpu+egui browser build matching the native binary is future work, not yet attempted (`docs/frontend.md`) |
 | **Pure Rust** | `winit` + `wgpu` + `cpal` + `egui` frontend; a safe `no_std + alloc` chip stack behind a one-directional crate graph |
 
-The `v1.1.0 -> v2.0.0` RustyNES-parity line is complete; `v2.1.0` closed
-four of the follow-up gaps it carried forward — see
+The `v1.1.0 -> v2.0.0` RustyNES-parity line is complete; `v2.1.0` and
+`v2.2.0` closed five of the follow-up gaps carried forward — see
 [`to-dos/ROADMAP.md`](to-dos/ROADMAP.md) for the full arc and
 [`CHANGELOG.md`](CHANGELOG.md) for exactly what shipped in each release.
-Open follow-up work (each its own well-scoped future release): closing the
-last bankswitch scheme (the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family), real
-Xcode-verified iOS build/run (this sandbox has no Xcode toolchain),
-netplay's STUN/NAT traversal + WebRTC transport, and scripting's overlay
-compositing. The sprite-pack data model (`sprite_pack`,
+Open follow-up work (each its own well-scoped future release): the
+CDF/CDFJ/CDFJ+ ARM-coprocessor families and E7, real Xcode-verified iOS
+build/run (this sandbox has no Xcode toolchain), netplay's STUN/NAT
+traversal + WebRTC transport, scripting's overlay compositing, and DPC+
+music-mode audio timing. The sprite-pack data model (`sprite_pack`,
 `hd-pack` feature) shipped in v1.4.0; its live rendering splice awaits a
 TIA object-ID mask. The `.r26m` movie format and TAStudio-lite panel
 shipped in v1.7.0; live per-frame auto-recording into the emu-thread's hot
@@ -140,20 +142,22 @@ path is honestly deferred (`docs/movie.md`).
 
 ### Cartridges
 
-All 8 Curated-tier schemes (2K, 4K, F8, F6, F4, CV, FA/CBS-RAM, Superchip,
-DPC, E7) plus 14 of 15 BestEffort schemes (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC,
-BF/BFSC, UA, 0840, FE, SB, X07, 4A50, AR/Supercharger) are implemented and
-wired into automatic `detect()`. Two `Board` hooks (`snoop_write`/
-`snoop_read`) let a scheme react to accesses the console routes to
-TIA/RIOT space, not just the `$1000+` cart window — needed for the
-3F/3E/UA/0840/FE/X07/SB/4A50/AR families (4A50 also uses a smaller
+7 of 8 Curated-tier schemes (2K, 4K, F8, F6, F4, CV, FA/CBS-RAM, Superchip,
+DPC; E7 remains unimplemented, `T-0401-002`) plus 15 of 16 BestEffort
+schemes (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA, 0840, FE, SB, X07,
+4A50, AR/Supercharger, DPC+) are implemented and wired into automatic
+`detect()` — 24 of 26 schemes in the LOCAL catalogue. Two `Board` hooks
+(`snoop_write`/`snoop_read`) let a scheme react to accesses the console
+routes to TIA/RIOT space, not just the `$1000+` cart window — needed for
+the 3F/3E/UA/0840/FE/X07/SB/4A50/AR families (4A50 also uses a smaller
 in-window instance of its hotspot state machine at `$1F00-$1FFF`; AR's
 BIOS handoff additionally uses a new `Board::take_oob_pokes()` hook to
-stage direct RIOT-RAM writes, mirroring Stella's `System::pokeOob`). Only
-the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family remains. Its ARM7TDMI Thumb-1
-interpreter substrate (`rusty2600-thumb`) exists (v1.6.0) but isn't wired
-into any `Board` yet — that wiring remains its own separately-scoped
-follow-up, one coprocessor family at a time — see
+stage direct RIOT-RAM writes, mirroring Stella's `System::pokeOob`).
+DPC+'s ARM7TDMI Thumb-1 interpreter (`rusty2600-thumb`, v1.6.0) is now
+wired in (v2.2.0) — verified running a real hand-assembled Thumb-1
+program via a genuine `STRB` write. Only CDF/CDFJ/CDFJ+ (the other three
+Harmony/Melody families) and E7 remain — that wiring stays its own
+separately-scoped follow-up, one family at a time — see
 [`docs/cart.md`](docs/cart.md) and [`docs/thumb.md`](docs/thumb.md) for the
 full catalogue, tiering, and interpreter architecture.
 

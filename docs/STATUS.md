@@ -5,45 +5,48 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v2.1.0 "Follow-Through" — a post-`v2.0.0` follow-up
-release closing four of the gaps the `[2.0.0]` reconciliation pass
-explicitly carried forward (see `CHANGELOG.md`'s `[2.1.0]` entry for full
-detail): AR/Supercharger, real TIA paddle timing, and frontend wiring for
-both Lua scripting and rollback netplay. Landed via three independent,
-parallel implementation efforts (non-overlapping crates, each
-independently gate-verified before merging).
+**Current release:** v2.2.0 "Coprocessor Online" — closes the final open
+item from `[2.1.0]`'s follow-up work: `rusty2600-cart`'s `BankDpcPlus`
+(`T-0401-006`, BestEffort tier) wires DPC+, the first Harmony/Melody
+ARM-coprocessor family, into `detect()` using the `rusty2600-thumb`
+interpreter that had existed unconsumed since `[1.6.0]`. A full port of
+Gopher2600's Go `dpcplus` package: the complete register window (RNG, 8
+plain + 8 windowed + 8 fractional data fetchers, `FastFetch` redirection),
+a real `ThumbMemory` impl at Gopher2600's own Harmony memory addresses,
+and a synchronous ARM-execution entry point (`$5A` write of `254`/`255`
+runs `Arm7Tdmi::step()` to completion within `cpu_write` — no `Bus`/
+scheduler change needed). **Verified with a real hand-assembled Thumb-1
+program** that executes via the interpreter and writes a byte into data
+RAM through a genuine `STRB` instruction, not just register-decode
+coverage. 295 tests passing on default features (299 with
+`--features test-roms`), up from 283 at `[2.1.0]`.
 
-**Status at 2.1.0, in one paragraph**: `rusty2600-cart`'s `BankAr`
-(`T-0402-015`) closes the cart catalogue to 24 of 25 schemes — a full
-fast-load port of Stella's `CartridgeAR` including a byte-exact dummy-BIOS
-port and a new reusable `Board::take_oob_pokes()` primitive. Real paddle
-input (`T-0501-010`) via a faithful port of Stella's `AnalogReadout`
-RC-circuit model, wired end-to-end through native, Android, and iOS —
-paddle games respond to paddle input for the first time on any Rusty2600
-platform (NTSC-only; PAL/SECAM timing is honestly unmodeled). Lua
-scripting (`scripting` feature) and rollback netplay (`netplay` feature)
-are both now wired into `rusty2600-frontend` — real `Tools` menu entries,
-off by default, native-only — closing the `[1.9.0]`/`[1.10.0]`
-frontend-wiring gaps; netplay verified with a real two-local-peer
-integration test actually synchronizing over UDP. 283 tests passing on
-default features (287 with `--features test-roms`), up from 268 at
-`[2.0.0]`; 86 passing with `--features scripting`, 82 with
-`--features netplay`. The additive-feature default-build invariant holds:
-both new features are native-only and off by default; the `no_std`
-`rusty2600-core` gate is unaffected.
+**Honestly deferred**: DPC+ music-mode continuous-time audio (register
+plumbing works; waveform sampling isn't driven by a per-clock timing
+equivalent yet — a `rusty2600-tia` audio-timing follow-up). CDF/CDFJ/
+CDFJ+ (the other three Harmony/Melody families) remain their own future,
+separately-scoped follow-up.
 
-**Explicit non-requirements carried forward, honestly**: DPC+/CDF/CDFJ/
-CDFJ+ ARM-coprocessor cart wiring (closing the catalogue to 25/25) was
-deliberately not attempted — a half-correct ARM coprocessor board would be
-worse than deferring again. Overlay compositing for scripting's
-`drawText`/`drawRect`/`drawPixel` isn't in the render pipeline yet. STUN/
-NAT traversal and the WebRTC transport for netplay remain deferred (need
-real external infra to verify); console switches/paddles still aren't
-modeled per-player. No paddle test ROM exists to cross-check the new RC
-simulation against real game behavior. Full Xcode-verified iOS build/run
-(`[1.12.0]`'s own carried-forward gap) is untouched by this release.
+**Doc correction found during this release**: `docs/cart.md`'s
+scheme-catalogue tally had said "15 BestEffort (25 schemes)" for some
+time, but the table itself has always had 16 BestEffort rows (26 total) —
+a stale count predating F0/3F/3E being split into three distinct rows.
+Corrected the tally, not the catalogue. **24 of 26 schemes** are now
+implemented and wired into `detect()`, leaving E7 (`T-0401-002`, a
+pre-existing, unrelated gap) and CDF/CDFJ/CDFJ+ as the two remaining
+entries.
 
-Full release-by-release detail for `[1.1.0]` through `[2.0.0]` (save-states,
+Earlier: `v2.1.0 "Follow-Through"` closed three other gaps `[2.0.0]`
+carried forward — AR/Supercharger (`BankAr`, a full port of Stella's
+`CartridgeAR`), real TIA paddle timing (`T-0501-010`, a faithful port of
+Stella's `AnalogReadout` RC-circuit model, wired end-to-end through
+native/Android/iOS), and frontend wiring for both Lua scripting
+(`scripting` feature) and rollback netplay (`netplay` feature, verified
+with a real two-local-peer UDP integration test) — all landed via three
+independent, parallel implementation efforts. See `CHANGELOG.md`'s
+`[2.1.0]` entry for full detail.
+
+Full release-by-release detail for `[1.1.0]` through `[2.1.0]` (save-states,
 run-ahead, debugger depth, the shader stack, `Bank4A50`, the
 `rusty2600-thumb` ARM interpreter, `.r26m` movies, the golden CPU trace,
 the `rusty2600-script` Lua engine, `rusty2600-netplay` rollback netplay,
@@ -51,19 +54,20 @@ and the Android/iOS mobile builds) lives in `CHANGELOG.md` — not
 duplicated here to avoid this section drifting out of sync with the
 authoritative per-release record as the line grows. The full 8-scheme
 Curated cart tier
-(v0.3.0) plus 15 BestEffort schemes (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC,
-BF/BFSC, UA, 0840, FE, SB, X07, 4A50, `[2.1.0]`'s AR/Supercharger) are
-implemented and wired into automatic `detect()` — 24 of the 25 schemes in
-the LOCAL catalogue (`docs/cart.md`). Two `Board` hooks, `snoop_write` and
-`snoop_read`, let bankswitch schemes react to accesses the console routes
-to TIA/RIOT space (not just the `$1000+` cart window) — FE, SB, X07, and
-AR all depend on them (AR additionally via `[2.1.0]`'s new
-`Board::take_oob_pokes()` hook, mirroring Stella's `System::pokeOob`).
-Only the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family (`T-0401-006`, needing the
-`rusty2600-thumb` interpreter wired into a `Board` — deliberately not
-rushed at `[2.1.0]`, since a half-correct ARM coprocessor board would be
-worse than deferring again) remains, closing the catalogue at 25/25 once
-landed. Phase 5 Frontend is **fully complete**:
+(v0.3.0) plus 15 of 16 BestEffort schemes (F0, E0, 3F, 3E, EF/EFSC,
+DF/DFSC, BF/BFSC, UA, 0840, FE, SB, X07, 4A50, `[2.1.0]`'s AR/Supercharger,
+`[2.2.0]`'s DPC+) are implemented and wired into automatic `detect()` —
+24 of the 26 schemes in the LOCAL catalogue (`docs/cart.md` — see its
+`[2.2.0]` correction note on the true 26-entry total). Two `Board` hooks,
+`snoop_write` and `snoop_read`, let bankswitch schemes react to accesses
+the console routes to TIA/RIOT space (not just the `$1000+` cart window)
+— FE, SB, X07, and AR all depend on them (AR additionally via `[2.1.0]`'s
+new `Board::take_oob_pokes()` hook, mirroring Stella's `System::pokeOob`).
+Only E7 (`T-0401-002`, a pre-existing, unrelated gap) and CDF/CDFJ/CDFJ+
+(the remaining three Harmony/Melody ARM families, `T-0401-006` —
+deliberately not rushed alongside DPC+, since a half-correct ARM
+coprocessor board would be worse than deferring again) remain. Phase 5
+Frontend is **fully complete**:
 rendering, audio, pacing, input, WASM/thread support, AND the real
 `debug-hooks` debugger (live 6507/TIA/RIOT/memory panels, breakpoints/step/
 continue, a side-effect-free `Bus::peek`/`peek_range`, a standalone
