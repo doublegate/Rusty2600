@@ -313,6 +313,13 @@ impl EmuCore {
         // Drain this frame's audio samples (DC-blocked + normalized) to the ring.
         let samples = core::mem::take(&mut self.system.bus.tia.audio_buffer);
         if !samples.is_empty() {
+            // `out` is only ever READ by the `push_samples` call below, which is native-only
+            // (wasm-winit audio is an explicitly deferred stretch goal — see `docs/frontend.md`'s
+            // wasm-winit status section) — so on wasm32 this is genuinely dead once computed.
+            // First surfaced by verifying `cargo clippy --target wasm32-unknown-unknown
+            // --no-default-features --features wasm-winit` (`[v2.8.0]`; this exact build/feature
+            // combination had not been clippy-checked before).
+            #[cfg_attr(target_arch = "wasm32", allow(clippy::collection_is_never_read))]
             let mut out = Vec::with_capacity(samples.len());
             for s in samples {
                 // Map [0, 30] to [-1.0, 1.0].

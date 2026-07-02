@@ -28,7 +28,10 @@
 //! stay off for this build (see `Cargo.toml`'s doc comments) — this file's `#[cfg(feature = ...)]`
 //! blocks for those simply don't compile in. `MenuAction::OpenRom` and `SaveConfig`/`SetRegion`'s
 //! `Config::save()` call are handled with wasm-specific paths (see their dispatch arms and
-//! `config.rs`'s wasm `save()` stub) since `rfd`/`directories` aren't available on this target.
+//! `config.rs`'s wasm `save()`/`load()`, which persist to `localStorage` as of `[v2.8.0]`) since
+//! `rfd`/`directories` aren't available on this target. `MenuAction::TouchInput` (wasm32-only,
+//! `[v2.8.0]`) drives `shell.rs`'s on-screen touch overlay into `host_input` the same way
+//! `latch_key` drives a real keyboard event.
 
 use std::cell::RefCell;
 #[cfg(not(target_arch = "wasm32"))]
@@ -438,7 +441,16 @@ impl ApplicationHandler for App {
                     egui_renderer,
                     core,
                     host_input: InputState::default(),
-                    shell: ShellState::default(),
+                    // The touch overlay defaults to VISIBLE on wasm32 (a touch-only device has no
+                    // other way to drive the emulator at all) — the blanket `ShellState::default()`
+                    // above leaves `touch_overlay_visible` at its `#[derive(Default)]` `false`,
+                    // which is the right default for every OTHER field but the wrong one for this
+                    // specific field, so it's flipped here explicitly (`View -> Touch overlay`
+                    // toggles it off for a desktop-browser wasm user with a real keyboard).
+                    shell: ShellState {
+                        touch_overlay_visible: true,
+                        ..ShellState::default()
+                    },
                     config,
                     fullscreen: false,
                     next_step_at: web_time::Instant::now(),
@@ -534,12 +546,8 @@ impl App {
         let input = ROM_INPUT.with(|cell| {
             let mut cell = cell.borrow_mut();
             if cell.is_none() {
-                let Some(window) = web_sys::window() else {
-                    return None;
-                };
-                let Some(document) = window.document() else {
-                    return None;
-                };
+                let window = web_sys::window()?;
+                let document = window.document()?;
                 let Ok(el) = document.create_element("input") else {
                     return None;
                 };
@@ -1348,6 +1356,12 @@ impl App {
                     let _ = active.config.save();
                 }
                 MenuAction::Quit => event_loop.exit(),
+                // The touch-overlay counterpart to `latch_key`: apply the touched button's action
+                // to `host_input` exactly the same way a real keyboard event does.
+                #[cfg(target_arch = "wasm32")]
+                MenuAction::TouchInput(input_action, pressed) => {
+                    active.host_input.apply_action(input_action, pressed);
+                }
                 #[cfg(feature = "scripting")]
                 MenuAction::LoadScript => {
                     if let Some(path) = rfd::FileDialog::new()

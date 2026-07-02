@@ -169,8 +169,16 @@ wire format was needed.
   never collide, and one game's whole save history is a single deletable/
   relocatable directory. `.r26s` matches the project's existing `.r26m`
   TAS-movie extension convention. Native-only — the wasm build has no
-  filesystem save path yet (a later release's scope, alongside
-  `localStorage`/IndexedDB persistence for Settings).
+  filesystem save path yet. Settings persistence (a plain string) landed via
+  `localStorage` in `v2.8.0` (see the `wasm` section below); save-state SLOT
+  persistence is deliberately deferred past `v2.8.0` — it needs per-slot
+  `localStorage` keys, an existence/timestamp substitute for
+  `SaveSlotInfo::probe`'s filesystem `stat` calls (`localStorage` has no
+  mtime), and real size budgeting (`localStorage` is typically ~5-10 MB per
+  origin; each slot is small on its own, but 8 slots is a real multiple), a
+  distinctly bigger lift than the single-key Settings value above. Landing
+  it well needs its own release rather than being squeezed in alongside
+  `v2.8.0`'s touch-control/Settings-usability headline.
 - **Menu status**: each slot's existence + last-modified timestamp is
   probed fresh every frame via plain filesystem `stat` calls
   (`SaveSlotInfo::probe`), deliberately AFTER the brief emu lock is
@@ -198,8 +206,49 @@ see its module doc and `Cargo.toml`'s `[features]` doc comment):
   below for why that switch hasn't happened yet). ROM loading routes
   through a hidden `<input type=file>`
   (`App::trigger_wasm_rom_picker`) rather than `rfd` (native-only, not even
-  a wasm32 dependency); `Config::save()` is a no-op stub on this target (real
-  `localStorage`/IndexedDB persistence is `v2.8.0` scope).
+  a wasm32 dependency).
+
+  **`v2.8.0` "Touchpoint" additions** (web parity wave 1 — all shared code
+  with the native build, verified via `cargo check`/`cargo clippy --target
+  wasm32-unknown-unknown` + native unit tests; NOT live-browser-verified for
+  the same reason rendering itself isn't, see the honest-status note below):
+  - **On-screen touch controls**: a D-pad + fire button + a console-switch
+    row (Select/Reset/Color/Difficulty), all plain egui `Button` widgets
+    (`ShellState::render_touch_overlay`, wasm32-only), feeding the exact same
+    `crate::input::InputState` the keyboard path populates via the new
+    `crate::input::TouchButton`/`TouchOverlayState` (pure press/hold/release +
+    latch-edge model, target-agnostic and unit-tested under the ordinary
+    native `cargo test --workspace` run). Defaults to visible (`View ->
+    Touch overlay` toggles it) since a touch-only device has no other way to
+    drive the emulator. KNOWN LIMITATION: egui-winit's default touch handling
+    tracks one synthesized pointer at a time, so simultaneous multi-finger
+    combos (holding a direction while also tapping Fire) are not guaranteed
+    to register both — a real egui/egui-winit constraint, unverifiable
+    either way in this project's sandbox (no real touchscreen), not
+    something this release introduces or works around (see
+    `render_touch_overlay`'s doc comment for the full reasoning).
+  - **Console-switch buttons**: already available "for free" via the shared
+    `Emulation -> Console switches` menu (native and wasm32 both dispatch
+    `MenuAction::ConsoleSwitch`) — no gap needed closing there. The NEW work
+    is the touch-friendly on-screen row above, since a touch user can't
+    easily reach a dropdown menu the way a mouse user can.
+  - **Settings panel**: reviewed tab-by-tab for wasm32-safety — the Video/
+    Audio/Input/System tabs are plain egui widgets mutating `Config` in
+    place with no native-only API in the path (no `rfd` dialogs, no blocking
+    file I/O), so the panel already worked correctly on wasm32 structurally;
+    this release's real work was making `MenuAction::SaveConfig`'s
+    `Config::save()` call actually persist there (see below) instead of
+    silently discarding every change on tab close.
+  - **`Config::save()`/`Config::load()`**: real `localStorage` persistence
+    (`LOCAL_STORAGE_KEY = "rusty2600.config"`), replacing the previous
+    no-op `save()` stub and previously-nonexistent `load()` on this target.
+    Shares the exact same TOML (de)serialization helpers
+    (`Config::to_toml_string`/`from_toml_str`) the native `config.toml` file
+    path uses, so both backends are covered by one set of native unit tests.
+    Falls back to defaults on any missing/corrupt/foreign stored value,
+    never blocking launch. Save-STATE-SLOT persistence (`v2.4.0`'s manual
+    save slots) is deliberately deferred — see the save-states section
+    above for why.
 
   **Honest status (v2.5.0 landing)**: compiles cleanly (`cargo check
   --target wasm32-unknown-unknown --no-default-features --features

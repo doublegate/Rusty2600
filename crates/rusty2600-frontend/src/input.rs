@@ -309,9 +309,214 @@ impl InputState {
     }
 }
 
+/// One on-screen touch-overlay button (`shell.rs`'s wasm32-only D-pad/fire/console-switch
+/// overlay, `[v2.8.0]`).
+///
+/// Deliberately covers player 0 only — a touch-only device (no keyboard) is overwhelmingly a
+/// single-player context, so the overlay doesn't also try to cram a second joystick's worth of
+/// buttons onto a phone screen.
+///
+/// This type and [`TouchOverlayState`] are plain data with no egui/`web_sys` dependency, so they
+/// compile and test on every target (including the native host `cargo test --workspace` runs on)
+/// even though only the wasm32 build ever actually renders/drives them — matching this project's
+/// test-as-spec discipline: the decoupled logic must be unit-testable without a live egui context
+/// or a real touchscreen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchButton {
+    /// Player-0 joystick Up (momentary — held while touched).
+    JoyUp,
+    /// See [`TouchButton::JoyUp`].
+    JoyDown,
+    /// See [`TouchButton::JoyUp`].
+    JoyLeft,
+    /// See [`TouchButton::JoyUp`].
+    JoyRight,
+    /// Player-0 fire (momentary).
+    JoyFire,
+    /// Game Select (momentary).
+    Select,
+    /// Game Reset (momentary).
+    Reset,
+    /// Color / B&W (latching — toggles once per press, not while held).
+    Color,
+    /// Left-player (P0) difficulty toggle (latching).
+    LeftDifficulty,
+    /// Right-player (P1) difficulty toggle (latching).
+    RightDifficulty,
+}
+
+impl TouchButton {
+    /// Every touch button, in a stable order — [`TouchOverlayState::update`] walks this fixed set
+    /// each frame rather than needing a `HashSet`/`HashMap` (there are only ten of them).
+    pub const ALL: [Self; 10] = [
+        Self::JoyUp,
+        Self::JoyDown,
+        Self::JoyLeft,
+        Self::JoyRight,
+        Self::JoyFire,
+        Self::Select,
+        Self::Reset,
+        Self::Color,
+        Self::LeftDifficulty,
+        Self::RightDifficulty,
+    ];
+
+    /// The 2600 input this touch button drives — the same [`InputAction`] the keyboard binding
+    /// table resolves to, so both input paths feed [`InputState::apply_action`] identically.
+    #[must_use]
+    pub const fn action(self) -> InputAction {
+        match self {
+            Self::JoyUp => InputAction::JoyUp(0),
+            Self::JoyDown => InputAction::JoyDown(0),
+            Self::JoyLeft => InputAction::JoyLeft(0),
+            Self::JoyRight => InputAction::JoyRight(0),
+            Self::JoyFire => InputAction::JoyFire(0),
+            Self::Select => InputAction::SwitchSelect,
+            Self::Reset => InputAction::SwitchReset,
+            Self::Color => InputAction::SwitchColor,
+            Self::LeftDifficulty => InputAction::SwitchLeftDifficulty,
+            Self::RightDifficulty => InputAction::SwitchRightDifficulty,
+        }
+    }
+
+    /// Whether this button is a press-EDGE latch (fires its action once per press, like the
+    /// keyboard binding for Color/Difficulty already does in [`InputState::apply_action`]) rather
+    /// than a level-driven hold (joystick directions/fire and Select/Reset are true momentary
+    /// switches on real hardware, active for exactly as long as they're touched).
+    #[must_use]
+    pub const fn is_latching(self) -> bool {
+        matches!(
+            self,
+            Self::Color | Self::LeftDifficulty | Self::RightDifficulty
+        )
+    }
+}
+
+/// The touch-overlay's held-button state, updated once per frame from the live egui widget
+/// interaction.
+///
+/// Driven by `shell.rs`'s wasm32-only `render_touch_overlay`, via
+/// `egui::Response::is_pointer_button_down_on()`, and diffed against the previous frame to
+/// produce the `(InputAction, pressed)` edges to feed into an [`InputState`].
+///
+/// The diff is what makes latching switches (Color/Difficulty) behave correctly under a
+/// finger-HELD-down model: [`InputState::apply_action`] toggles a latch on every `pressed = true`
+/// call, so naively calling it every single frame a button stays touched (the live "is this
+/// currently held" signal egui gives us) would re-toggle the switch 60+ times a second. Momentary
+/// buttons (joystick directions/fire, Select/Reset) have no such problem — they emit their live
+/// level every frame, exactly matching how a physical key's keydown/keyup events already drive
+/// them one level-change at a time.
+#[derive(Debug, Default, Clone)]
+pub struct TouchOverlayState {
+    held: Vec<TouchButton>,
+}
+
+impl TouchOverlayState {
+    /// Diff this frame's `now_held` set against the previous frame's, returning the
+    /// `(InputAction, pressed)` pairs to apply to an [`InputState`] this frame. `now_held` need
+    /// not be sorted or deduplicated.
+    pub fn update(&mut self, now_held: &[TouchButton]) -> Vec<(InputAction, bool)> {
+        let mut edges = Vec::new();
+        for button in TouchButton::ALL {
+            let was_held = self.held.contains(&button);
+            let is_held = now_held.contains(&button);
+            if button.is_latching() {
+                if is_held && !was_held {
+                    edges.push((button.action(), true));
+                }
+            } else if was_held != is_held {
+                edges.push((button.action(), is_held));
+            }
+        }
+        self.held = now_held.to_vec();
+        edges
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn touch_button_action_mapping_matches_keyboard_actions() {
+        assert_eq!(TouchButton::JoyUp.action(), InputAction::JoyUp(0));
+        assert_eq!(TouchButton::JoyDown.action(), InputAction::JoyDown(0));
+        assert_eq!(TouchButton::JoyLeft.action(), InputAction::JoyLeft(0));
+        assert_eq!(TouchButton::JoyRight.action(), InputAction::JoyRight(0));
+        assert_eq!(TouchButton::JoyFire.action(), InputAction::JoyFire(0));
+        assert_eq!(TouchButton::Select.action(), InputAction::SwitchSelect);
+        assert_eq!(TouchButton::Reset.action(), InputAction::SwitchReset);
+        assert_eq!(TouchButton::Color.action(), InputAction::SwitchColor);
+        assert_eq!(
+            TouchButton::LeftDifficulty.action(),
+            InputAction::SwitchLeftDifficulty
+        );
+        assert_eq!(
+            TouchButton::RightDifficulty.action(),
+            InputAction::SwitchRightDifficulty
+        );
+    }
+
+    #[test]
+    fn touch_button_latching_classification() {
+        assert!(TouchButton::Color.is_latching());
+        assert!(TouchButton::LeftDifficulty.is_latching());
+        assert!(TouchButton::RightDifficulty.is_latching());
+        assert!(!TouchButton::JoyUp.is_latching());
+        assert!(!TouchButton::JoyFire.is_latching());
+        assert!(!TouchButton::Select.is_latching());
+        assert!(!TouchButton::Reset.is_latching());
+    }
+
+    #[test]
+    fn touch_momentary_button_emits_press_and_release_edges() {
+        let mut overlay = TouchOverlayState::default();
+        assert_eq!(
+            overlay.update(&[TouchButton::JoyUp]),
+            vec![(InputAction::JoyUp(0), true)]
+        );
+        // Held another frame: no new edge (still down, nothing changed).
+        assert!(overlay.update(&[TouchButton::JoyUp]).is_empty());
+        assert_eq!(overlay.update(&[]), vec![(InputAction::JoyUp(0), false)]);
+    }
+
+    #[test]
+    fn touch_latching_button_fires_once_per_press_not_while_held() {
+        let mut overlay = TouchOverlayState::default();
+        assert_eq!(
+            overlay.update(&[TouchButton::Color]),
+            vec![(InputAction::SwitchColor, true)]
+        );
+        // Held across several more frames: must not re-toggle.
+        assert!(overlay.update(&[TouchButton::Color]).is_empty());
+        assert!(overlay.update(&[TouchButton::Color]).is_empty());
+        // Release produces no momentary-release edge for a latch.
+        assert!(overlay.update(&[]).is_empty());
+        // A fresh press fires exactly one more toggle.
+        assert_eq!(
+            overlay.update(&[TouchButton::Color]),
+            vec![(InputAction::SwitchColor, true)]
+        );
+    }
+
+    #[test]
+    fn touch_multiple_simultaneous_buttons_all_emit() {
+        let mut overlay = TouchOverlayState::default();
+        let edges = overlay.update(&[TouchButton::JoyLeft, TouchButton::JoyFire]);
+        assert_eq!(
+            edges,
+            vec![
+                (InputAction::JoyLeft(0), true),
+                (InputAction::JoyFire(0), true)
+            ]
+        );
+    }
+
+    #[test]
+    fn touch_default_overlay_state_starts_with_nothing_held() {
+        let mut overlay = TouchOverlayState::default();
+        assert!(overlay.update(&[]).is_empty());
+    }
 
     #[test]
     fn default_binds_cover_both_joysticks_and_switches() {
