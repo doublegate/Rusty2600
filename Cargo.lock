@@ -3652,6 +3652,7 @@ dependencies = [
 name = "rusty2600-core"
 version = "2.3.0"
 dependencies = [
+ "criterion",
  "postcard",
  "rusty2600-cart",
  "rusty2600-cpu",

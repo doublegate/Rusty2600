@@ -39,3 +39,17 @@ jobs:
         with:
           targets: thumbv7em-none-eabihf
       - run: cargo build -p rusty2600-core --target thumbv7em-none-eabihf --no-default-features
+  perf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96
+      # `bench_regression_check.sh` runs the whole-system frame bench
+      # (`rusty2600-core`'s `system_full_ntsc_frame`) and fails the job if
+      # the measured mean exceeds a fixed absolute ceiling -- see the
+      # script's own header comment and docs/performance.md for the
+      # baseline/ceiling rationale. ubuntu-latest only (deliberately not the
+      # full 3-OS matrix): bench timing noise across OSes would only add
+      # false-positive risk to a trip-wire that just needs one consistent
+      # runner.
+      - run: bash scripts/bench_regression_check.sh

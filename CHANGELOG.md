@@ -6,6 +6,19 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **CI-gated performance-regression check** — a new `rusty2600-core::
+  system_full_ntsc_frame` Criterion bench drives one full NTSC frame (262
+  lines x 228 color clocks) through the whole `System` (real CPU decode,
+  TIA register writes, RIOT, and cart — not a per-chip proxy), measuring
+  ~1.25 ms/frame, comfortably under the documented <=2 ms/frame target.
+  `scripts/bench_regression_check.sh` runs it and fails on a measured mean
+  above a fixed absolute ceiling (3.75 ms, ~3x the measured baseline —
+  deliberately not relative/percentage-based, since CI-runner timing noise
+  would make a relative comparison unreliable), wired as the new `perf` job
+  in `.github/workflows/ci.yml`. See `docs/performance.md`.
+
 ## [2.3.0] - 2026-07-02 - "Full Catalogue"
 
 Closes the cart bankswitch catalogue to 26/26 (CDF/CDFJ/CDFJ+, the last
