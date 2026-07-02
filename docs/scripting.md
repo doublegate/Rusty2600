@@ -42,6 +42,61 @@ are designed backend-agnostically (nothing outside `engine.rs` depends on
 `mlua`-specific types), so a `piccolo` backend remains a genuine, scoped
 follow-up rather than a rewrite.
 
+### `v2.9.0` status: `piccolo` investigated for real, still deferred — not a rewrite candidate yet
+
+`v2.9.0` "Full Circle" was scoped to finally land the `piccolo` wasm
+fallback flagged above. This pass actually did the investigation (docs.rs,
+the upstream README, the upstream `stdlib/` source tree, the `Executor`
+API), rather than re-deferring on the same reasoning as before. Two
+independent findings came out of it:
+
+- **`mlua` on `wasm32` is confirmed, again, to be a hard wall.**
+  `cargo check --target wasm32-unknown-unknown -p rusty2600-script` fails
+  inside `lua-src`'s build script ("don't know how to build Lua for
+  wasm32-unknown-unknown") — the vendored C build genuinely cannot target
+  that toolchain. This is not a bug to fix; native's `mlua` backend is
+  unchanged.
+- **`piccolo` is not yet a workable substrate either**, for two
+  compounding reasons:
+  1. *Stdlib gap.* Its only crates.io-published release (`0.3.3`, June
+     2024) implements almost none of Lua's `string`/`table` libraries —
+     per its own README, those (plus `io`/`file`/`os`/`package`/`utf8`)
+     are "either missing or very sparsely implemented." That rules out
+     exactly the kind of script this crate's own `emu` API invites —
+     `string.format` for an `emu.drawText` debug label, `table.insert` for
+     per-frame state tracking. Upstream `master` has grown partial
+     `string.rs`/`table.rs` implementations since (active 2025 commit
+     history), but nothing past `0.3.3` is on crates.io, and this
+     workspace has no git dependency anywhere else today — pinning one
+     here would be a first, against a crate whose own README warns
+     "expect *frequent* pre-1.0 API breakage, this crate is still very
+     experimental."
+  2. *Architecture mismatch.* `piccolo` is a `gc-arena`-based "stackless"
+     VM: an `Executor<'gc>` is driven by repeated
+     `Executor::step(ctx, fuel) -> bool` calls inside an arena
+     `mutate`/`finish` scope, and is itself neither `Send` nor storable
+     outside that arena's lifetime. `engine.rs`'s current design (a plain
+     owned `Lua` VM, `Rc<RefCell<B>>`-captured host closures, an
+     `mlua::RegistryKey` held across frames for `onFrame`) has no
+     equivalent "keep the VM around, call into it once per real frame"
+     pattern in `piccolo` without first building real `gc-arena`/
+     `Rootable!` plumbing of its own — a genuine rewrite of the engine's
+     embedding shape, not a second `engine_piccolo.rs` sibling reusing
+     `engine.rs`'s shape.
+
+**Decision: defer again, on a narrower and more concrete basis than
+before.** This is a confirmed external blocker, not a scope-discipline
+judgment call: the only realistic fallback candidate's published version
+cannot run realistic scripts, and its unpublished branch is explicitly
+pre-1.0-unstable by its own maintainer's admission. Forcing an
+implementation against either horn of that trade-off (a stdlib-crippled
+engine, or a git-pinned dependency on volatile code) would be a worse
+outcome than shipping nothing this release. In-browser Lua scripting
+remains unsupported on `wasm32`; nothing about the native `mlua` path
+changed. Revisit once `piccolo` publishes a crates.io release with real
+`string`/`table` coverage — an upstream milestone, not one this project
+controls or can schedule against.
+
 ## Architecture (matches the crate)
 
 - **`bus.rs`** — `ScriptBus`, the host seam. `CpuSnapshot` (a read-only
