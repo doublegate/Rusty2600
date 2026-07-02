@@ -39,6 +39,52 @@ fileprivate extension ForeignBytes {
     init(bufferPointer: UnsafeBufferPointer<UInt8>) {
         self.init(len: Int32(bufferPointer.count), data: bufferPointer.baseAddress)
     }
+
+    init(rawBufferPointer: UnsafeRawBufferPointer) {
+        self.init(
+            len: Int32(rawBufferPointer.count),
+            data: rawBufferPointer.baseAddress?.assumingMemoryBound(to: UInt8.self)
+        )
+    }
+}
+
+// Converter for `&[u8]` / `[ByRef] bytes` arguments.
+//
+// Conforms to `FfiConverter` so the compiler enforces the full converter
+// method set. Only the scope-bound `lower(_:_body:)` overload is sound —
+// zero-copy byte buffers only flow foreign -> Rust, and only in argument
+// position. The four protocol-witness methods (`lift`, `lower`, `read`,
+// `write`) `fatalError` at runtime if anyone reaches them.
+//
+// The scope-bound `lower` takes a closure because the `ForeignBytes`
+// pointer is only guaranteed valid for the duration of
+// `Data.withUnsafeBytes`. Callers must run the full FFI call inside
+// the closure body.
+fileprivate enum FfiConverterByRefBytes: FfiConverter {
+    typealias SwiftType = Data
+    typealias FfiType = ForeignBytes
+
+    static func lower<R>(_ value: Data, _ body: (ForeignBytes) throws -> R) rethrows -> R {
+        return try value.withUnsafeBytes { rawBuf in
+            try body(ForeignBytes(rawBufferPointer: rawBuf))
+        }
+    }
+
+    static func lower(_ value: Data) -> ForeignBytes {
+        fatalError("ByRef bytes cannot use the plain lower: returning ForeignBytes escapes the Data.withUnsafeBytes scope. Use the scope-bound lower(_:_body:) overload instead.")
+    }
+
+    static func lift(_ value: ForeignBytes) throws -> Data {
+        fatalError("ByRef bytes cannot be lifted: zero-copy &[u8] only flows foreign->Rust")
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        fatalError("ByRef bytes cannot be read from a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+    }
+
+    static func write(_ value: Data, into buf: inout [UInt8]) {
+        fatalError("ByRef bytes cannot be written to a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+    }
 }
 
 // For every type used in the interface, we provide helper methods for conveniently
@@ -281,7 +327,7 @@ private func makeRustCall<T, E: Swift.Error>(
     _ callback: (UnsafeMutablePointer<RustCallStatus>) -> T,
     errorHandler: ((RustBuffer) throws -> E)?
 ) throws -> T {
-    uniffiEnsureInitialized()
+    uniffiEnsureRusty2600MobileInitialized()
     var callStatus = RustCallStatus.init()
     let returnedVal = callback(&callStatus)
     try uniffiCheckCallStatus(callStatus: callStatus, errorHandler: errorHandler)
@@ -352,18 +398,29 @@ private func uniffiTraitInterfaceCallWithError<T, E>(
         callStatus.pointee.errorBuf = FfiConverterString.lower(String(describing: error))
     }
 }
-fileprivate class UniffiHandleMap<T> {
-    private var map: [UInt64: T] = [:]
+// Initial value and increment amount for handles. 
+// These ensure that SWIFT handles always have the lowest bit set
+fileprivate let UNIFFI_HANDLEMAP_INITIAL: UInt64 = 1
+fileprivate let UNIFFI_HANDLEMAP_DELTA: UInt64 = 2
+
+fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
+    // All mutation happens with this lock held, which is why we implement @unchecked Sendable.
     private let lock = NSLock()
-    private var currentHandle: UInt64 = 1
+    private var map: [UInt64: T] = [:]
+    private var currentHandle: UInt64 = UNIFFI_HANDLEMAP_INITIAL
 
     func insert(obj: T) -> UInt64 {
         lock.withLock {
-            let handle = currentHandle
-            currentHandle += 1
-            map[handle] = obj
-            return handle
+            return doInsert(obj)
         }
+    }
+
+    // Low-level insert function, this assumes `lock` is held.
+    private func doInsert(_ obj: T) -> UInt64 {
+        let handle = currentHandle
+        currentHandle += UNIFFI_HANDLEMAP_DELTA
+        map[handle] = obj
+        return handle
     }
 
      func get(handle: UInt64) throws -> T {
@@ -372,6 +429,15 @@ fileprivate class UniffiHandleMap<T> {
                 throw UniffiInternalError.unexpectedStaleHandle
             }
             return obj
+        }
+    }
+
+     func clone(handle: UInt64) throws -> UInt64 {
+        try lock.withLock {
+            guard let obj = map[handle] else {
+                throw UniffiInternalError.unexpectedStaleHandle
+            }
+            return doInsert(obj)
         }
     }
 
@@ -483,7 +549,11 @@ fileprivate struct FfiConverterString: FfiConverter {
             return String()
         }
         let bytes = UnsafeBufferPointer<UInt8>(start: value.data!, count: Int(value.len))
-        return String(bytes: bytes, encoding: String.Encoding.utf8)!
+        // Use Swift's native UTF-8 decoder; `String(bytes:encoding:.utf8)` goes
+        // through Foundation's NSString and silently strips a leading U+FEFF BOM.
+        // Invalid UTF-8 substitutes U+FFFD instead of trapping (unreachable
+        // given Rust's `String` invariant).
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     public static func lower(_ value: String) -> RustBuffer {
@@ -499,7 +569,8 @@ fileprivate struct FfiConverterString: FfiConverter {
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> String {
         let len: Int32 = try readInt(&buf)
-        return String(bytes: try readBytes(&buf, count: Int(len)), encoding: String.Encoding.utf8)!
+        // See `lift` above for why we avoid Foundation's NSString-backed decoder here.
+        return String(decoding: try readBytes(&buf, count: Int(len)), as: UTF8.self)
     }
 
     public static func write(_ value: String, into buf: inout [UInt8]) {
@@ -539,7 +610,7 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
  * frame-stepping cost is the same `System::step_instruction` loop every
  * other frontend already pays.
  */
-public protocol MobileEmulatorProtocol : AnyObject {
+public protocol MobileEmulatorProtocol: AnyObject, Sendable {
     
     /**
      * Whether a ROM is currently loaded.
@@ -593,7 +664,6 @@ public protocol MobileEmulatorProtocol : AnyObject {
     func saveState() throws  -> Data
     
 }
-
 /**
  * A single running emulator instance.
  *
@@ -603,61 +673,65 @@ public protocol MobileEmulatorProtocol : AnyObject {
  * frame-stepping cost is the same `System::step_instruction` loop every
  * other frontend already pays.
  */
-open class MobileEmulator:
-    MobileEmulatorProtocol {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+open class MobileEmulator: MobileEmulatorProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
     // TODO: We'd like this to be `private` but for Swifty reasons,
     // we can't implement `FfiConverter` without making this `required` and we can't
     // make it `required` without making it `public`.
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_rusty2600_mobile_fn_clone_mobileemulator(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_rusty2600_mobile_fn_clone_mobileemulator(self.handle, $0) }
     }
     /**
      * Construct a fresh, unloaded emulator instance.
      */
 public convenience init() {
-    let pointer =
+    let handle =
         try! rustCall() {
-    uniffi_rusty2600_mobile_fn_constructor_mobileemulator_new($0
+        uniffiCallStatus in
+    uniffi_rusty2600_mobile_fn_constructor_mobileemulator_new(uniffiCallStatus
     )
 }
-    self.init(unsafeFromRawPointer: pointer)
+    self.init(unsafeFromHandle: handle)
 }
 
     deinit {
-        guard let pointer = pointer else {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
             return
         }
 
-        try! rustCall { uniffi_rusty2600_mobile_fn_free_mobileemulator(pointer, $0) }
+        try! rustCall { uniffi_rusty2600_mobile_fn_free_mobileemulator(handle, $0) }
     }
 
     
@@ -666,9 +740,11 @@ public convenience init() {
     /**
      * Whether a ROM is currently loaded.
      */
-open func isRomLoaded() -> Bool {
+open func isRomLoaded() -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_rusty2600_mobile_fn_method_mobileemulator_is_rom_loaded(self.uniffiClonePointer(),$0
+        uniffiCallStatus in
+    uniffi_rusty2600_mobile_fn_method_mobileemulator_is_rom_loaded(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -684,10 +760,12 @@ open func isRomLoaded() -> Bool {
      * Returns [`MobileError::UnrecognizedRom`] if `rusty2600_cart::detect`
      * doesn't recognize `bytes`' bankswitch scheme.
      */
-open func loadRom(bytes: Data, romTag: UInt64)throws  {try rustCallWithError(FfiConverterTypeMobileError.lift) {
-    uniffi_rusty2600_mobile_fn_method_mobileemulator_load_rom(self.uniffiClonePointer(),
+open func loadRom(bytes: Data, romTag: UInt64)throws   {try rustCallWithError(FfiConverterTypeMobileError_lift) {
+        uniffiCallStatus in
+    uniffi_rusty2600_mobile_fn_method_mobileemulator_load_rom(
+            self.uniffiCloneHandle(),
         FfiConverterData.lower(bytes),
-        FfiConverterUInt64.lower(romTag),$0
+        FfiConverterUInt64.lower(romTag),uniffiCallStatus
     )
 }
 }
@@ -701,9 +779,11 @@ open func loadRom(bytes: Data, romTag: UInt64)throws  {try rustCallWithError(Ffi
      * captured for a different ROM (its embedded ROM tag doesn't match the
      * tag the currently-loaded ROM was given via `load_rom`).
      */
-open func loadState(bytes: Data)throws  {try rustCallWithError(FfiConverterTypeMobileError.lift) {
-    uniffi_rusty2600_mobile_fn_method_mobileemulator_load_state(self.uniffiClonePointer(),
-        FfiConverterData.lower(bytes),$0
+open func loadState(bytes: Data)throws   {try rustCallWithError(FfiConverterTypeMobileError_lift) {
+        uniffiCallStatus in
+    uniffi_rusty2600_mobile_fn_method_mobileemulator_load_state(
+            self.uniffiCloneHandle(),
+        FfiConverterData.lower(bytes),uniffiCallStatus
     )
 }
 }
@@ -718,10 +798,12 @@ open func loadState(bytes: Data)throws  {try rustCallWithError(FfiConverterTypeM
      *
      * Returns [`MobileError::NoRomLoaded`] if called before `load_rom`.
      */
-open func runFrame(input: MobileInput)throws  -> FrameOutput {
-    return try  FfiConverterTypeFrameOutput.lift(try rustCallWithError(FfiConverterTypeMobileError.lift) {
-    uniffi_rusty2600_mobile_fn_method_mobileemulator_run_frame(self.uniffiClonePointer(),
-        FfiConverterTypeMobileInput.lower(input),$0
+open func runFrame(input: MobileInput)throws  -> FrameOutput  {
+    return try  FfiConverterTypeFrameOutput_lift(try rustCallWithError(FfiConverterTypeMobileError_lift) {
+        uniffiCallStatus in
+    uniffi_rusty2600_mobile_fn_method_mobileemulator_run_frame(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeMobileInput_lower(input),uniffiCallStatus
     )
 })
 }
@@ -734,66 +816,61 @@ open func runFrame(input: MobileInput)throws  -> FrameOutput {
      *
      * Returns [`MobileError::NoRomLoaded`] if called before `load_rom`.
      */
-open func saveState()throws  -> Data {
-    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeMobileError.lift) {
-    uniffi_rusty2600_mobile_fn_method_mobileemulator_save_state(self.uniffiClonePointer(),$0
+open func saveState()throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeMobileError_lift) {
+        uniffiCallStatus in
+    uniffi_rusty2600_mobile_fn_method_mobileemulator_save_state(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
     
 
+    
 }
+
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeMobileEmulator: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = MobileEmulator
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> MobileEmulator {
-        return MobileEmulator(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> MobileEmulator {
+        return MobileEmulator(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: MobileEmulator) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: MobileEmulator) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MobileEmulator {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: MobileEmulator, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
 
-
-
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeMobileEmulator_lift(_ pointer: UnsafeMutableRawPointer) throws -> MobileEmulator {
-    return try FfiConverterTypeMobileEmulator.lift(pointer)
+public func FfiConverterTypeMobileEmulator_lift(_ handle: UInt64) throws -> MobileEmulator {
+    return try FfiConverterTypeMobileEmulator.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeMobileEmulator_lower(_ value: MobileEmulator) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeMobileEmulator_lower(_ value: MobileEmulator) -> UInt64 {
     return FfiConverterTypeMobileEmulator.lower(value)
 }
+
+
 
 
 /**
@@ -806,7 +883,7 @@ public func FfiConverterTypeMobileEmulator_lower(_ value: MobileEmulator) -> Uns
  * `AudioTrack`/`AAudio`, iOS's `AVAudioEngine`, both support arbitrary
  * input sample rates).
  */
-public struct FrameOutput {
+public struct FrameOutput: Equatable, Hashable {
     /**
      * RGBA8 framebuffer, `160 * 192 * 4` bytes.
      */
@@ -828,27 +905,15 @@ public struct FrameOutput {
         self.rgba = rgba
         self.audioSamples = audioSamples
     }
+
+    
+
+    
 }
 
-
-
-extension FrameOutput: Equatable, Hashable {
-    public static func ==(lhs: FrameOutput, rhs: FrameOutput) -> Bool {
-        if lhs.rgba != rhs.rgba {
-            return false
-        }
-        if lhs.audioSamples != rhs.audioSamples {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(rgba)
-        hasher.combine(audioSamples)
-    }
-}
-
+#if compiler(>=6)
+extension FrameOutput: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -894,7 +959,7 @@ public func FfiConverterTypeFrameOutput_lower(_ value: FrameOutput) -> RustBuffe
  * `Vec<T>`. Named fields keep the generated Kotlin/Swift struct's shape
  * simple (no index-based access into a bridged array type).
  */
-public struct MobileInput {
+public struct MobileInput: Equatable, Hashable {
     /**
      * Port 0 joystick.
      */
@@ -956,47 +1021,15 @@ public struct MobileInput {
         self.paddle3 = paddle3
         self.switches = switches
     }
+
+    
+
+    
 }
 
-
-
-extension MobileInput: Equatable, Hashable {
-    public static func ==(lhs: MobileInput, rhs: MobileInput) -> Bool {
-        if lhs.joystick0 != rhs.joystick0 {
-            return false
-        }
-        if lhs.joystick1 != rhs.joystick1 {
-            return false
-        }
-        if lhs.paddle0 != rhs.paddle0 {
-            return false
-        }
-        if lhs.paddle1 != rhs.paddle1 {
-            return false
-        }
-        if lhs.paddle2 != rhs.paddle2 {
-            return false
-        }
-        if lhs.paddle3 != rhs.paddle3 {
-            return false
-        }
-        if lhs.switches != rhs.switches {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(joystick0)
-        hasher.combine(joystick1)
-        hasher.combine(paddle0)
-        hasher.combine(paddle1)
-        hasher.combine(paddle2)
-        hasher.combine(paddle3)
-        hasher.combine(switches)
-    }
-}
-
+#if compiler(>=6)
+extension MobileInput: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1046,7 +1079,7 @@ public func FfiConverterTypeMobileInput_lower(_ value: MobileInput) -> RustBuffe
  * One joystick's four directions + fire, active-HIGH (`true` = pressed) —
  * a host-language-friendly convention, not a hardware register mirror.
  */
-public struct MobileJoystick {
+public struct MobileJoystick: Equatable, Hashable {
     /**
      * Up.
      */
@@ -1092,39 +1125,15 @@ public struct MobileJoystick {
         self.right = right
         self.fire = fire
     }
+
+    
+
+    
 }
 
-
-
-extension MobileJoystick: Equatable, Hashable {
-    public static func ==(lhs: MobileJoystick, rhs: MobileJoystick) -> Bool {
-        if lhs.up != rhs.up {
-            return false
-        }
-        if lhs.down != rhs.down {
-            return false
-        }
-        if lhs.left != rhs.left {
-            return false
-        }
-        if lhs.right != rhs.right {
-            return false
-        }
-        if lhs.fire != rhs.fire {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(up)
-        hasher.combine(down)
-        hasher.combine(left)
-        hasher.combine(right)
-        hasher.combine(fire)
-    }
-}
-
+#if compiler(>=6)
+extension MobileJoystick: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1169,7 +1178,7 @@ public func FfiConverterTypeMobileJoystick_lower(_ value: MobileJoystick) -> Rus
 /**
  * One paddle's position (`0..=255`) + fire button.
  */
-public struct MobilePaddle {
+public struct MobilePaddle: Equatable, Hashable {
     /**
      * Pot position, `0` (fully clockwise) ..= `255` (fully counter-clockwise).
      */
@@ -1191,27 +1200,15 @@ public struct MobilePaddle {
         self.position = position
         self.fire = fire
     }
+
+    
+
+    
 }
 
-
-
-extension MobilePaddle: Equatable, Hashable {
-    public static func ==(lhs: MobilePaddle, rhs: MobilePaddle) -> Bool {
-        if lhs.position != rhs.position {
-            return false
-        }
-        if lhs.fire != rhs.fire {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(position)
-        hasher.combine(fire)
-    }
-}
-
+#if compiler(>=6)
+extension MobilePaddle: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1250,7 +1247,7 @@ public func FfiConverterTypeMobilePaddle_lower(_ value: MobilePaddle) -> RustBuf
 /**
  * The six-switch console panel.
  */
-public struct MobileSwitches {
+public struct MobileSwitches: Equatable, Hashable {
     /**
      * Game Select (momentary).
      */
@@ -1296,39 +1293,15 @@ public struct MobileSwitches {
         self.leftDifficulty = leftDifficulty
         self.rightDifficulty = rightDifficulty
     }
+
+    
+
+    
 }
 
-
-
-extension MobileSwitches: Equatable, Hashable {
-    public static func ==(lhs: MobileSwitches, rhs: MobileSwitches) -> Bool {
-        if lhs.select != rhs.select {
-            return false
-        }
-        if lhs.reset != rhs.reset {
-            return false
-        }
-        if lhs.color != rhs.color {
-            return false
-        }
-        if lhs.leftDifficulty != rhs.leftDifficulty {
-            return false
-        }
-        if lhs.rightDifficulty != rhs.rightDifficulty {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(select)
-        hasher.combine(reset)
-        hasher.combine(color)
-        hasher.combine(leftDifficulty)
-        hasher.combine(rightDifficulty)
-    }
-}
-
+#if compiler(>=6)
+extension MobileSwitches: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1373,7 +1346,8 @@ public func FfiConverterTypeMobileSwitches_lower(_ value: MobileSwitches) -> Rus
 /**
  * Everything that can go wrong loading a ROM or a save-state.
  */
-public enum MobileError {
+public 
+enum MobileError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -1390,8 +1364,21 @@ public enum MobileError {
      */
     case SaveState(String
     )
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension MobileError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1440,12 +1427,18 @@ public struct FfiConverterTypeMobileError: FfiConverterRustBuffer {
 }
 
 
-extension MobileError: Equatable, Hashable {}
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMobileError_lift(_ buf: RustBuffer) throws -> MobileError {
+    return try FfiConverterTypeMobileError.lift(buf)
+}
 
-extension MobileError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMobileError_lower(_ value: MobileError) -> RustBuffer {
+    return FfiConverterTypeMobileError.lower(value)
 }
 
 #if swift(>=5.8)
@@ -1480,37 +1473,39 @@ private enum InitializationResult {
 }
 // Use a global variable to perform the versioning checks. Swift ensures that
 // the code inside is only computed once.
-private var initializationResult: InitializationResult = {
+private let initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
-    let bindings_contract_version = 26
+    let bindings_contract_version = 30
     // Get the scaffolding contract version by calling the into the dylib
     let scaffolding_contract_version = ffi_rusty2600_mobile_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_rusty2600_mobile_checksum_method_mobileemulator_is_rom_loaded() != 7459) {
+    if (uniffi_rusty2600_mobile_checksum_method_mobileemulator_is_rom_loaded() != 12342) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_rusty2600_mobile_checksum_method_mobileemulator_load_rom() != 53537) {
+    if (uniffi_rusty2600_mobile_checksum_method_mobileemulator_load_rom() != 53519) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_rusty2600_mobile_checksum_method_mobileemulator_load_state() != 28334) {
+    if (uniffi_rusty2600_mobile_checksum_method_mobileemulator_load_state() != 58410) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_rusty2600_mobile_checksum_method_mobileemulator_run_frame() != 55753) {
+    if (uniffi_rusty2600_mobile_checksum_method_mobileemulator_run_frame() != 24809) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_rusty2600_mobile_checksum_method_mobileemulator_save_state() != 15505) {
+    if (uniffi_rusty2600_mobile_checksum_method_mobileemulator_save_state() != 61598) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_rusty2600_mobile_checksum_constructor_mobileemulator_new() != 64708) {
+    if (uniffi_rusty2600_mobile_checksum_constructor_mobileemulator_new() != 61131) {
         return InitializationResult.apiChecksumMismatch
     }
 
     return InitializationResult.ok
 }()
 
-private func uniffiEnsureInitialized() {
+// Make the ensure init function public so that other modules which have external type references to
+// our types can call it.
+public func uniffiEnsureRusty2600MobileInitialized() {
     switch initializationResult {
     case .ok:
         break

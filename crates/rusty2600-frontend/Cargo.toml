@@ -155,7 +155,7 @@ rusty2600-script = { path = "../rusty2600-script", version = "2.3.0", optional =
 rusty2600-netplay = { path = "../rusty2600-netplay", version = "2.3.0", optional = true }
 # Referenced directly (`mlua::Error`) by the `scripting`-gated frontend
 # module; version/features must match `rusty2600-script`'s own pin exactly.
-mlua = { version = "0.10", features = ["lua54", "vendored"], optional = true }
+mlua = { version = "0.11", features = ["lua54", "vendored"], optional = true }
 
 # wasm32 target deps. The chip stack is `no_std + alloc`, so the browser build
 # only needs the wasm-bindgen + web-sys bridge here.
