@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
-"""One-off CDP script proving WebRtcSocket/WebRtcPeer's connection
-establishment + data-channel send/receive works for real, in a real
-Chromium instance, across two independent RTCPeerConnections (one per
-CDP-opened tab). NOT part of the shipped crate -- verification tooling
-only, run once and its output captured in the fork's final report."""
+"""One-off CDP script exercising WebRtcSocket/WebRtcPeer's connection-
+ESTABLISHMENT code path (offer/answer generation, set_remote_description)
+for real, in a real Chromium instance, across two independent
+RTCPeerConnections (one per CDP-opened tab). Reliably proves offer/answer
+generation and acceptance; does NOT by itself prove data-channel
+send/receive completed -- whether the channel actually reaches "open" (and
+therefore whether send/receive can be exercised at all) depends on ICE
+candidate gathering succeeding in the environment this script runs in,
+which is NOT guaranteed (see docs/netplay.md's "Browser WebRTC transport"
+section for this project's own documented result: zero ICE candidates
+were gathered in this project's own sandboxed CI-verification environment,
+so send/receive was never reached there). NOT part of the shipped crate --
+verification tooling only, run once and its output captured in the fork's
+final report; safe and expected to re-run in a different environment to
+check whether the channel opens there."""
 import json
 import sys
 import urllib.request

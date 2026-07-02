@@ -100,7 +100,17 @@
         let joinerChannel = null;
 
         function wireChannel(channel, label) {
-            channel.onmessage = (evt) => log(`${label}: RECEIVED "${evt.data}"`);
+            // `binaryType = "arraybuffer"` matches `WebRtcSocket::new`'s own
+            // `set_binary_type(RtcDataChannelType::Arraybuffer)` exactly —
+            // without this, `evt.data` would be a `Blob` (the browser
+            // default) or a plain string, neither of which is the binary
+            // path production code actually depends on.
+            channel.binaryType = "arraybuffer";
+            channel.onmessage = (evt) => {
+                const bytes = new Uint8Array(evt.data);
+                const text = new TextDecoder().decode(bytes);
+                log(`${label}: RECEIVED ${bytes.length} bytes -- "${text}"`);
+            };
             channel.onopen = () => log(`${label}: channel opened`);
             return channel;
         }
@@ -170,19 +180,22 @@
 
         document.getElementById("send-btn").addEventListener("click", () => {
             const text = document.getElementById("send-text").value;
-            // The REAL proof: send through whichever side's raw
-            // `RtcDataChannel` is open (the exact channel type
-            // `WebRtcSocket` wraps for real netplay use) and watch the
-            // OTHER tab's `wireChannel`-installed `onmessage` handler log
-            // the received bytes — a genuine, observable, two-independent-
-            // `RTCPeerConnection` data-channel round trip, not a simulated
-            // one.
+            // The REAL proof: send BYTES (a `Uint8Array`, matching
+            // `RtcDataChannel::send_with_u8_array` — the exact call
+            // `WebRtcSocket::send_to` makes, not a string) through whichever
+            // side's raw `RtcDataChannel` is open, and watch the OTHER
+            // tab's `wireChannel`-installed `onmessage` handler decode the
+            // received bytes — a genuine, observable, two-independent-
+            // `RTCPeerConnection` BINARY data-channel round trip, exercising
+            // the same path production code depends on, not a string
+            // message that happens to look similar.
+            const bytes = new TextEncoder().encode(text);
             if (hostChannel && hostChannel.readyState === "open") {
-                hostChannel.send(text);
-                log(`host: SENT "${text}"`);
+                hostChannel.send(bytes);
+                log(`host: SENT ${bytes.length} bytes -- "${text}"`);
             } else if (joinerChannel && joinerChannel.readyState === "open") {
-                joinerChannel.send(text);
-                log(`joiner: SENT "${text}"`);
+                joinerChannel.send(bytes);
+                log(`joiner: SENT ${bytes.length} bytes -- "${text}"`);
             } else {
                 log("no open channel yet on this tab — click 'Check channel status' first once both sides show OPEN");
             }

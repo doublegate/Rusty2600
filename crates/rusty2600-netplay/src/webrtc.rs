@@ -126,6 +126,19 @@ impl WebRtcSocket {
     }
 }
 
+impl Drop for WebRtcSocket {
+    /// Detaches the `onmessage` handler before `_on_message` deallocates.
+    ///
+    /// Without this, a message arriving on `channel` after this socket is
+    /// dropped (e.g. a shutdown/reconnect path where the channel itself
+    /// outlives the socket) would have the browser invoke a JS reference to
+    /// an already-freed `Closure` — a wasm-bindgen trap/panic, not a benign
+    /// no-op.
+    fn drop(&mut self) {
+        self.channel.set_onmessage(None);
+    }
+}
+
 impl NonBlockingSocket<SocketAddr> for WebRtcSocket {
     fn send_to(&mut self, msg: &Message, _addr: &SocketAddr) {
         // `_addr` is always `SENTINEL_PEER_ADDR` in practice (the only
@@ -169,10 +182,12 @@ pub struct WebRtcPeer {
 impl WebRtcPeer {
     /// Host side: create the peer connection + an unreliable/unordered data
     /// channel, generate an SDP offer, wait for ICE candidate gathering to
-    /// finish, and return the complete local description (offer + all ICE
-    /// candidates, as one JSON-serialized blob) ready to hand to the
-    /// joining peer out-of-band (copy-paste, per ADR 0008 — no signaling
-    /// server).
+    /// finish, and return the complete local description — a plain SDP
+    /// string (the standard `RTCSessionDescription.sdp` text format, with
+    /// every gathered ICE candidate already folded in as `a=candidate`
+    /// lines, since gathering has finished by the time this returns — NOT
+    /// a JSON envelope) ready to hand to the joining peer out-of-band
+    /// (copy-paste, per ADR 0008 — no signaling server).
     ///
     /// Waiting for `icegatheringstate == "complete"` before returning (a
     /// "trickle-less" exchange) is a deliberate simplification: it turns a
@@ -234,7 +249,6 @@ impl WebRtcPeer {
             },
         );
         pc.set_ondatachannel(Some(on_datachannel.as_ref().unchecked_ref()));
-        on_datachannel.forget(); // lives for the connection's lifetime, matching `pc` itself
 
         let remote_desc = RtcSessionDescriptionInit::new(RtcSdpType::Offer);
         remote_desc.set_sdp(&offer_sdp);
@@ -265,6 +279,7 @@ impl WebRtcPeer {
             pc,
             channel_cell,
             answer: blob,
+            _on_datachannel: on_datachannel,
         })
     }
 
@@ -347,6 +362,12 @@ pub struct CreateAnswerResult {
     pc: RtcPeerConnection,
     channel_cell: Rc<RefCell<Option<RtcDataChannel>>>,
     answer: String,
+    /// Kept alive until [`Self::try_into_peer`] consumes this result (or
+    /// this result itself is dropped) — dropping this closure without
+    /// first clearing `pc`'s `ondatachannel` handler would leave a raw JS
+    /// reference into deallocated memory; `try_into_peer` clears the
+    /// handler before dropping this field for exactly that reason.
+    _on_datachannel: Closure<dyn FnMut(web_sys::RtcDataChannelEvent)>,
 }
 
 #[wasm_bindgen]
@@ -372,6 +393,12 @@ impl CreateAnswerResult {
     #[must_use]
     pub fn try_into_peer(self) -> Option<WebRtcPeer> {
         let channel = self.channel_cell.borrow_mut().take()?;
+        // Detach the `ondatachannel` handler before `_on_datachannel` drops
+        // (at the end of this method, along with the rest of `self`) — the
+        // channel has already arrived, so the handler has no further job,
+        // and leaving it attached to a closure about to be freed would
+        // leave `pc` holding a raw JS reference into deallocated memory.
+        self.pc.set_ondatachannel(None);
         Some(WebRtcPeer {
             pc: self.pc,
             channel,
@@ -413,15 +440,20 @@ fn create_data_channel(pc: &RtcPeerConnection) -> RtcDataChannel {
 /// (the same "wrap a browser callback as an awaitable" shape every other
 /// async call in this module already uses via `JsFuture::from(...)`, e.g.
 /// `pc.create_offer()`) rather than hand-rolling a `Future`/`Waker` impl —
-/// simpler and far less error-prone for a wasm-bindgen callback bridge.
-/// The installed closure `.forget()`s itself once its one-time job is done;
-/// this leaks a single small closure per connection setup (at most 2 for
-/// the whole two-peer flow this crate drives), a bounded, one-time cost —
-/// not a per-message or per-frame leak.
+/// simpler and far less error-prone for a wasm-bindgen callback bridge. The
+/// closure is held in an `Rc<RefCell<Option<_>>>` (not `.forget()`-ten) so
+/// it — and the `onicegatheringstatechange` registration itself — are
+/// cleared once the promise resolves, rather than leaking one closure per
+/// connection setup.
 async fn wait_for_ice_gathering_complete(pc: &RtcPeerConnection) -> Result<(), JsValue> {
+    /// See [`wait_for_ice_gathering_complete`]'s doc comment.
+    type IceChangeClosureCell = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
+
     if pc.ice_gathering_state() == RtcIceGatheringState::Complete {
         return Ok(());
     }
+    let closure_cell: IceChangeClosureCell = Rc::new(RefCell::new(None));
+    let closure_cell_for_promise = Rc::clone(&closure_cell);
     let pc_for_closure = pc.clone();
     let promise = js_sys::Promise::new(&mut |resolve, _reject| {
         let pc_inner = pc_for_closure.clone();
@@ -431,8 +463,10 @@ async fn wait_for_ice_gathering_complete(pc: &RtcPeerConnection) -> Result<(), J
             }
         });
         pc_for_closure.set_onicegatheringstatechange(Some(on_ice_change.as_ref().unchecked_ref()));
-        on_ice_change.forget();
+        *closure_cell_for_promise.borrow_mut() = Some(on_ice_change);
     });
     JsFuture::from(promise).await?;
+    pc.set_onicegatheringstatechange(None);
+    drop(closure_cell.borrow_mut().take());
     Ok(())
 }
