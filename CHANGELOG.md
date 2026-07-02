@@ -8,6 +8,17 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ### Added
 
+- **Debugger Lua console panel** (`v2.5.0` "Web Awakens", `scripting`
+  feature) — `crates/rusty2600-script`'s Lua VM now overrides the default
+  `print` global (which previously went nowhere useful — real stdout,
+  invisible in a GUI app) to route into a new capped `ScriptLog` ring
+  buffer (500 lines, oldest dropped first), matching real Lua `print`
+  semantics (arguments tab-joined via `tostring`). `onFrame` runtime
+  errors are captured into the same log automatically. A new debugger
+  panel (`Debug -> Lua Console`, alongside CPU/TIA/RIOT/Memory/Cheevos)
+  renders the captured history live, oldest-first, with errors in red and
+  a Clear button. Output-only — not an interactive Lua REPL (see the
+  panel's module doc for why).
 - **Documentation-only research decision** (`v2.5.0` "Web Awakens", no code
   change) — checked whether the Atari Keyboard/Keypad Controller and the
   Trak-Ball are worth modeling, against Stella's own implementation and

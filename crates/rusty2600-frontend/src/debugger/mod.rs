@@ -13,6 +13,8 @@ pub mod cheevos_panel;
 pub mod disasm;
 pub mod event_panel;
 pub mod expr;
+#[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))]
+pub mod lua_console_panel;
 pub mod memory_compare_panel;
 pub mod pmb_panel;
 pub mod tastudio_panel;
