@@ -6,6 +6,17 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-07-02 - "Rollback Bridge"
+
+Third release of the RustyNES gap-closure arc, shipped through PR #15
+(browser WebRTC netplay transport) alongside PR #16 (a master dependency
+upgrade sweep consolidating 12 Dependabot PRs, merged into `main` first).
+PR #15 was reviewed by GitHub Copilot and Gemini Code Assist — 12
+findings, all genuine and fixed, mostly real memory-leak bugs in the new
+`wasm32` WebRTC code (unclosed JS closures that would trap/panic if a
+message arrived or a connection completed after the owning Rust value was
+dropped).
+
 ### Added
 
 - **Browser WebRTC netplay transport** (`v2.6.0` "Rollback Bridge",

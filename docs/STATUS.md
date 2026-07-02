@@ -5,97 +5,59 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v2.5.0 "Web Awakens" — the second release of the
+**Current release:** v2.6.0 "Rollback Bridge" — the third release of the
 RustyNES gap-closure arc (`v2.4.0 -> v3.0.0`, see `to-dos/ROADMAP.md`),
-shipped through PR #14. Headline item: **real `winit`+`wgpu`+`egui`
-rendering on `wasm32-unknown-unknown`** (`wasm-winit` feature, previously
-an empty placeholder) — the SAME `App`/`Gfx`/`shader_pass`/`emu_thread`
-shell the native build uses now compiles for wasm32, solving the hard
-architectural problem of async GPU bring-up (`pollster::block_on` can't
-run on the browser's single JS thread) via `wasm_bindgen_futures::
-spawn_local` populating a shared `Rc<RefCell<Option<Active>>>` cell.
-**Honest status**: compiles cleanly, a real `trunk build` produces a
-working bundle, confirmed loading in headless Chromium — but the wgpu
-adapter-request step itself could not be verified actually rendering a
-frame in this sandboxed environment (`gl support not compiled in` /
-`webgpu found no adapters`, independently reproduced twice). `wasm-canvas`
-(the older canvas-2D bootstrap) stays the actual GH-Pages-deployed build
-pending real-browser confirmation — see `docs/frontend.md`'s wasm status
-section. Also lands: a **debugger Lua console panel** (`print()`/error
-capture into a capped `ScriptLog` ring buffer, rendered live); a
-**research-only decision** on the Keyboard Controller/Trak-Ball (checked
-against Stella's own properties database — neither modeled this arc); and
-confirmed the GH Pages `/api/` rustdoc hosting was already live (no new
-work needed). 333 tests passing on default features (337 with
-`--features test-roms`), up from 327/331 at `[2.4.0]`.
+shipped through PR #15 (browser WebRTC netplay) alongside PR #16 (a
+master dependency-upgrade sweep consolidating 12 Dependabot PRs). Headline
+item: **`rusty2600-netplay::webrtc`** (`wasm32`-only) closes the WebRTC
+gap `[2.3.0]` deliberately deferred — `docs/adr/0008` (written first)
+establishes that the async connection-setup surface (offer/answer/ICE)
+stays fully contained via the same `wasm_bindgen_futures::spawn_local`
+pattern `[2.5.0]`'s `Gfx::new_async` proved, never touching
+`RollbackSession`'s per-frame hot path or the native/`no_std` build.
+`WebRtcSocket` implements `ggrs::NonBlockingSocket<SocketAddr>` over an
+already-open `RtcDataChannel` (mirroring `PunchedUdpSocket`, reusing its
+exact wire format) via a fixed sentinel address (this project is
+deliberately 2-player-only). **Honest verification**: the entire
+connection-establishment code path was driven end-to-end in real
+Chromium across two independent `RTCPeerConnection`s — real SDP
+offer/answer generated and accepted — but the data channel itself never
+reached `"open"` in this sandbox, diagnosed to zero ICE candidates being
+gathered (a sandbox-specific restriction, not a code bug; see
+`docs/netplay.md`). PR #15's bot review found 12 real findings, all
+fixed — mostly unclosed JS closures that would trap/panic in wasm if a
+message arrived or a connection completed after the owning Rust value
+was dropped. The dependency sweep (PR #16) applied 8 of 12 proposed
+bumps and deliberately declined 4 with documented reasons (`bincode`
+3.0.0 is a broken placeholder from an unmaintained crate; `dtolnay/
+rust-toolchain@1.100` references a Rust version that doesn't exist;
+`wgpu`/`naga` 30 blocked by `egui-wgpu` still requiring `wgpu` 29.x).
+333 tests passing on default features (337 with `--features test-roms`,
+unchanged from `[2.5.0]` since the new WebRTC code is `wasm32`-only).
 
-**Previous release:** v2.4.0 "Save Point" — the first release of the
-RustyNES gap-closure arc, shipped through PR #1. Headline item: **manual
-save-state slots** (`File -> Save State` / `Load State`, 8 numbered slots
-per ROM, `crate::config::save_slot_path`) — built entirely on the
-already-real `SaveState` format (`rusty2600-core`, ADR 0007, since
-`[1.10.0]`); a loaded ROM's slots are keyed by an FNV-1a hash of its raw
-bytes so a slot can never silently load against the wrong cartridge, and
-loading a slot now clears the rewind ring (a real bug caught by automated
-PR review — without this, pressing Rewind right after a slot load jumped
-to the pre-load timeline). Also landed: a **CI-gated performance-
-regression check** (`rusty2600-core::system_full_ntsc_frame`, an
-absolute-ceiling `perf` CI job, validated by injecting and reverting a
-real regression); a **paddle-timing Stella-oracle differential test**
-(an independently re-derived copy of Stella's `AnalogReadout` formula
-confirms every RC constant/formula in `rusty2600-tia::paddle` matches
-exactly — a real commercial-game cross-check stays honestly documented
-as blocked, no legally obtainable ROM in this environment); **`.zip`
-ROM-archive loading** (native + wasm, bounded-read decompression-bomb
-guard); and a GitHub repo hygiene pass (`CODE_OF_CONDUCT.md`,
-`SECURITY.md`, `CODEOWNERS`, `dependabot.yml`, issue templates,
-Discussions enabled). 327 tests passing on default features (331 with
-`--features test-roms`), up from 313/317 at `[2.3.0]`.
+**Previous release:** v2.5.0 "Web Awakens" — real `winit`+`wgpu`+`egui`
+rendering on `wasm32` (`wasm-winit` feature; compiles and loads in a real
+browser, but GPU rendering itself remains unverified in this sandbox —
+`wasm-canvas` stays the deployed GH-Pages build), a debugger Lua console
+panel, and a Keyboard Controller/Trak-Ball research decision. Shipped
+through PR #14. See `[2.5.0]` in `CHANGELOG.md` for full detail.
 
-**Two releases prior:** v2.3.0 "Full Catalogue" — closes the cart bankswitch
-catalogue to **26 of 26 schemes** and lands three more `/goal` follow-up
-items. `rusty2600-cart`'s `BankCdf` (`T-0401-006`, BestEffort tier) wires
-CDF/CDFJ/CDFJ+ — the last unimplemented scheme — into `detect()`: one
-struct covering all four sub-versions via a `CdfVersion` const table,
-ported from Gopher2600's Go `cdf` package. Reuses `BankDpcPlus`'s
-synchronous CALLFN-to-`ProgramEnded` ARM entry shape, plus genuinely new
-mechanics DPC+ never needed — a FastJMP data-fetcher-stream redirect
-(with the reference's documented phantom-read false-positive guard
-ported exactly) and **a real `ARMinterrupt` fault-servicing dispatch**
-(unlike DPC+'s no-op-stub equivalent, CDF's driver ROM makes genuine
-host-serviced calls). Caught via `rusty2600-thumb`'s existing
-`Fault::UnimplementedPeripheral` path with **zero changes needed to that
-crate** — `Arm7Tdmi::instruction_pc()` already reported the correct
-call-site address. **Verified with a real hand-assembled Thumb-1 program**
-that plants an actual `BX` at the documented call-site offset and asserts
-the dispatch loop set the targeted music fetcher's frequency field.
+**Historical**: v2.4.0 "Save Point" (PR #1) shipped manual save-state
+slots, a CI-gated performance-regression check, a paddle-timing
+Stella-oracle differential test, `.zip` ROM-archive loading, and a
+GitHub repo hygiene pass. v2.3.0 "Full Catalogue" closed the cart
+bankswitch catalogue to **26 of 26 schemes** (CDF/CDFJ/CDFJ+, the last
+scheme) and landed DPC+ music-mode audio, script overlay compositing,
+and a live-tested netplay STUN client. Full detail for every release
+lives in `CHANGELOG.md`, which this file never duplicates beyond a
+one-paragraph summary of the two most recent releases.
 
-Also lands: **DPC+ music-mode audio** (`BankDpcPlus::tick()`, a small,
-fully self-contained `rusty2600-cart` fix — the `Board::tick()` hook it
-needed already existed at the right rate, contrary to `[2.2.0]`'s own
-speculation that this would need a `rusty2600-tia` change); **script
-overlay compositing** (`scripting` feature — `take_overlay()`'s output
-now actually reaches the screen, piggybacked on the frontend's existing
-egui pass); and a **netplay STUN client** (`netplay` feature, real RFC
-5389 client via `stun_codec`, **live-verified against a real public STUN
-server** — WebRTC remains explicitly deferred, since it would pull an
-async runtime into an otherwise 100%-synchronous codebase). 313 tests
-passing on default features (317 with `--features test-roms`), up from
-295 at `[2.2.0]`.
-
-**Documentation correction, no code change**: `docs/cart.md` carried a
-stale "E7... not yet implemented" claim this entire session — `BankE7`
-has actually been implemented and wired into `detect()` since commit
-`94ca3a4` (2026-07-01), before the `v1.1.0` release line even began. This
-bug was silently copied into `[2.1.0]`'s and `[2.2.0]`'s own CHANGELOG/
-STATUS entries (both claimed E7 as a remaining gap) without independently
-verifying it against the code — corrected here; both prior entries stay
-published as-is (this project never rewrites CHANGELOG history).
-
-**Honest verification boundary**: netplay's STUN client itself is
-genuinely live-tested; real NAT traversal between two independently-NATed
-peers on different networks is NOT verified (a single-host sandbox can't
-provide that).
+**Honest verification boundary**: netplay's STUN client (`[2.3.0]`) and
+WebRTC transport (`[2.6.0]`) are each genuinely tested against a real
+protocol implementation, but real cross-NAT / cross-network traversal is
+NOT verified for either (a single-host sandbox can't provide two
+independently-NATed peers, and this sandbox's WebRTC ICE gathering
+itself doesn't complete — see above).
 
 Earlier: `v2.1.0 "Follow-Through"` closed three gaps `[2.0.0]` carried
 forward — AR/Supercharger (`BankAr`, a full port of Stella's

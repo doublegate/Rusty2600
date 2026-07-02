@@ -10,7 +10,7 @@
 <p align="center">
   <a href="https://github.com/doublegate/Rusty2600/actions"><img src="https://github.com/doublegate/Rusty2600/workflows/CI/badge.svg" alt="Build Status"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a>
-  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v2.5.0-blue.svg" alt="Version"></a>
+  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v2.6.0-blue.svg" alt="Version"></a>
   <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/rust-1.96-orange.svg" alt="Rust: 1.96"></a>
   <br>
   <a href="#compatibility-and-accuracy"><img src="https://img.shields.io/badge/accuracy%20battery-100%25%20(2%2F2)-brightgreen.svg" alt="Accuracy battery"></a>
@@ -98,7 +98,7 @@ look different, they visibly break.
 | **TAS Movies** *(v1.7.0)* | A `.r26m` movie format (`rusty2600-core::movie`) — a seeded power-on or embedded save-state start point plus a per-frame input log — and a TAStudio-lite piano-roll debugger panel with jump-to-frame and branch points |
 | **Accuracy Battery** | A real `AccuracyScore`-gated battery (`rusty2600-test-harness`), CI-enforced, growing honestly rather than claiming an inflated pass rate. *(v1.8.0)* `GoldenLogDiffer` now bundles a genuine externally-oracled golden CPU trace (20,000 instructions vs. an independent Gopher2600 run) |
 | **Lua Scripting Engine** *(v1.9.0, wired v2.1.0, overlay v2.3.0)* | A real, tested `rusty2600-script` crate (`mlua` native backend, off by default): a deliberately-smaller-than-RustyNES `emu` API over a host-agnostic `ScriptBus` trait, gated by a `WritesLocked` determinism lock. `v2.1.0` wired a real `ScriptBus` impl into the frontend's render loop plus a `Tools -> Load/Unload Script` menu; `v2.3.0` wired `drawText`/`drawRect`/`drawPixel` output into the actual screen, piggybacked on the frontend's existing egui pass |
-| **Rollback Netplay** *(v1.10.0, wired v2.1.0, STUN v2.3.0)* | A real, tested `rusty2600-netplay` crate: 2-player rollback netplay wrapping `ggrs` (GGPO-style), `resync()` built on the existing save-state substrate, input-delay/max-prediction-window matching GGPO convention, a genuine rollback-desync test. `v2.1.0` wired a real `Tools -> Netplay...` Connect dialog (direct-IP/LAN); `v2.3.0` added a real, live-tested STUN client (RFC 5389 via `stun_codec`) plus a hole-punch attempt — WebRTC and real cross-NAT verification remain deferred |
+| **Rollback Netplay** *(v1.10.0, wired v2.1.0, STUN v2.3.0, WebRTC v2.6.0)* | A real, tested `rusty2600-netplay` crate: 2-player rollback netplay wrapping `ggrs` (GGPO-style), `resync()` built on the existing save-state substrate, input-delay/max-prediction-window matching GGPO convention, a genuine rollback-desync test. `v2.1.0` wired a real `Tools -> Netplay...` Connect dialog (direct-IP/LAN); `v2.3.0` added a real, live-tested STUN client (RFC 5389 via `stun_codec`) plus a hole-punch attempt; `v2.6.0` added a browser `WebRtcSocket` transport (`wasm32`-only, ADR 0008) — connection-establishment (offer/answer/ICE) verified end-to-end in real Chromium, but the data channel itself never reached "open" in this sandbox (zero ICE candidates gathered — a sandbox-specific limitation, not a code bug). Real cross-NAT verification remains deferred for both transports |
 | **Real Paddle Input** *(v2.1.0)* | A faithful port of Stella's `AnalogReadout` dump-capacitor RC-circuit simulation — `INPT0..=INPT3` now respond to real analog paddle timing (NTSC-only) instead of a plain digital byte, wired end-to-end through native, Android, and iOS |
 | **AR/Supercharger Bankswitching** *(v2.1.0)* | A full "fast-load" port of Stella's `CartridgeAR`, including a byte-exact 294-byte dummy-BIOS port and the 5-distinct-access delayed-write RAM protocol — BestEffort tier |
 | **DPC+ ARM Coprocessor Bankswitching** *(v2.2.0, music audio v2.3.0)* | A full port of Gopher2600's `dpcplus` package — the complete register window, a real `ThumbMemory` impl, and a synchronous ARM-execution entry point driving `rusty2600-thumb`'s interpreter. `v2.3.0` added the music-mode audio phase-accumulator advance (a small, self-contained fix). BestEffort tier |
@@ -125,8 +125,10 @@ repo hygiene pass. `v2.5.0` "Web Awakens" followed with a real
 `winit`+`wgpu`+`egui` wasm build (compiles and builds cleanly; rendering
 unconfirmed in a real browser — see the WebAssembly row above), a
 debugger Lua console panel, and a Keyboard Controller/Trak-Ball research
-decision — see [`CHANGELOG.md`](CHANGELOG.md) for exactly what shipped in
-each release.
+decision. `v2.6.0` "Rollback Bridge" added browser WebRTC netplay (see
+the Rollback Netplay row above) and a master dependency-upgrade sweep
+consolidating 12 Dependabot PRs — see [`CHANGELOG.md`](CHANGELOG.md) for
+exactly what shipped in each release.
 Open follow-up work (each its own well-scoped future release): real
 Xcode-verified iOS build/run (this sandbox has no Xcode toolchain),
 netplay's WebRTC transport and real cross-NAT verification, and DPC+/CDF
