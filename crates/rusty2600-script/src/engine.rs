@@ -202,12 +202,16 @@ impl<B: ScriptBus + 'static> ScriptEngine<B> {
     /// with a `__tostring` metamethod still formats correctly, not just
     /// primitives) and joined with tabs — a script's existing debug
     /// `print`s read exactly the same here as they would on a real stdout.
+    /// `tostring` is looked up fresh on EVERY call (not captured once at
+    /// install time): real Lua's `print` re-resolves the global `tostring`
+    /// each call too, so a script that later overrides `tostring` still
+    /// sees that override reflected in `print`'s output.
     fn install_print(lua: &Lua, log: &Rc<RefCell<ScriptLog>>) -> mlua::Result<()> {
         let log = Rc::clone(log);
-        let tostring: mlua::Function = lua.globals().get("tostring")?;
         lua.globals().set(
             "print",
-            lua.create_function_mut(move |_, args: mlua::Variadic<mlua::Value>| {
+            lua.create_function_mut(move |lua, args: mlua::Variadic<mlua::Value>| {
+                let tostring: mlua::Function = lua.globals().get("tostring")?;
                 let mut parts = Vec::with_capacity(args.len());
                 for arg in args {
                     let s: String = tostring.call(arg)?;
@@ -219,8 +223,14 @@ impl<B: ScriptBus + 'static> ScriptEngine<B> {
         )
     }
 
-    /// Appends a runtime-error line to `log`, called by a host after
-    /// [`Self::tick_frame`] returns `Err` — see that method's doc.
+    /// Appends a runtime-error line to `log`.
+    ///
+    /// [`Self::tick_frame`] already calls this itself when the script's
+    /// `onFrame` raises, so a host does NOT need to call this again after a
+    /// `tick_frame` error — doing so would double-log the same error. This
+    /// is exposed as a public method for a host to log its OWN
+    /// script-related errors (e.g. a load failure) into the same console a
+    /// script's own `print`/runtime-error output already shows up in.
     pub fn log_error(&self, message: &str) {
         self.log
             .borrow_mut()

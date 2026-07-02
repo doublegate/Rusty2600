@@ -187,13 +187,16 @@ wire format was needed.
 Two independent wasm32 entry points, selected by feature flag (`src/wasm.rs`;
 see its module doc and `Cargo.toml`'s `[features]` doc comment):
 
-- **`wasm-winit`** (the default as of v2.5.0) — the real `app::App`, the SAME
-  winit+wgpu+egui shell the native build uses, compiled for
-  `wasm32-unknown-unknown`. `emu-thread`/`debug-hooks`/`retroachievements`/
-  `scripting`/`netplay` are NOT wasm-safe and must stay off (see
-  `Cargo.toml`'s feature doc comments) — `web/index.html` builds it via
-  `data-cargo-no-default-features` + `data-cargo-features="wasm-winit"`.
-  ROM loading routes through a hidden `<input type=file>`
+- **`wasm-winit`** (landed v2.5.0, NOT yet the deployed build — see
+  `wasm-canvas` below for what `web/index.html` actually builds today) —
+  the real `app::App`, the SAME winit+wgpu+egui shell the native build
+  uses, compiled for `wasm32-unknown-unknown`. `emu-thread`/`debug-hooks`/
+  `retroachievements`/`scripting`/`netplay` are NOT wasm-safe and must
+  stay off (see `Cargo.toml`'s feature doc comments). Available to build
+  via `data-cargo-no-default-features` + `data-cargo-features="wasm-winit"`
+  once real-browser rendering is confirmed (see the honest-status note
+  below for why that switch hasn't happened yet). ROM loading routes
+  through a hidden `<input type=file>`
   (`App::trigger_wasm_rom_picker`) rather than `rfd` (native-only, not even
   a wasm32 dependency); `Config::save()` is a no-op stub on this target (real
   `localStorage`/IndexedDB persistence is `v2.8.0` scope).
@@ -224,11 +227,14 @@ see its module doc and `Cargo.toml`'s `[features]` doc comment):
   wasm-winit audio would need to reuse `wasm-canvas`'s proven Web Audio
   `AudioSink` pattern instead, not attempted yet).
 
-- **`wasm-canvas`** (the older, simpler fallback — kept as a safety net) — a
-  bare canvas-2D `requestAnimationFrame` bootstrap with real, proven-working
-  keyboard input, ROM loading (including `.zip` archives), and Web Audio
-  output. This is genuinely complete and live-verified (it was the sole demo
-  through `v2.4.0`).
+- **`wasm-canvas`** (the older, simpler fallback — **this is what
+  `web/index.html` actually builds and what the live GH-Pages demo
+  deploys, as of `v2.5.0`**) — a bare canvas-2D `requestAnimationFrame`
+  bootstrap with real, proven-working keyboard input, ROM loading
+  (including `.zip` archives), and Web Audio output. This is genuinely
+  complete and live-verified (it was the sole demo through `v2.4.0`, and
+  stays the deployed one through `v2.5.0` too, pending `wasm-winit`'s
+  real-browser rendering confirmation above).
 
 Both build for `wasm32-unknown-unknown`. The Trunk project lives at
 `crates/rusty2600-frontend/web/` (not a repo-root `web/`) — `trunk build

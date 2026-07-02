@@ -572,7 +572,12 @@ impl App {
                             return;
                         };
                         let reader_clone = reader.clone();
-                        let on_load = Closure::<dyn FnMut()>::new(move || {
+                        // `Closure::once_into_js` (not `Closure::<dyn FnMut()>::new` +
+                        // `.forget()`): this callback only ever runs once per file read, so
+                        // `forget()`-ing a `FnMut` closure here would leak its heap allocation on
+                        // every single ROM load — `once_into_js` frees it automatically right
+                        // after its one invocation.
+                        let on_load = Closure::once_into_js(move || {
                             let Ok(buffer) = reader_clone.result() else {
                                 return;
                             };
@@ -591,8 +596,7 @@ impl App {
                             };
                             PENDING_ROM.with(|p| *p.borrow_mut() = Some(bytes));
                         });
-                        reader.set_onload(Some(on_load.as_ref().unchecked_ref()));
-                        on_load.forget();
+                        reader.set_onload(Some(on_load.unchecked_ref()));
                         let _ = reader.read_as_array_buffer(&file);
                     });
                 input.set_onchange(Some(on_change.as_ref().unchecked_ref()));
@@ -603,6 +607,12 @@ impl App {
             cell.clone()
         });
         if let Some(input) = input {
+            // The browser only fires `change` when the input's value actually differs from
+            // before — re-picking the SAME file (e.g. reloading after editing a ROM on disk)
+            // would otherwise silently do nothing, since the cached element's `value` still
+            // holds that file's path from last time. Clearing it first guarantees `change`
+            // fires again regardless of which file gets picked.
+            input.set_value("");
             input.click();
         }
     }
@@ -946,18 +956,24 @@ impl App {
         let ctx = active.egui_ctx.clone();
         let shell = &mut active.shell;
         let config = &mut active.config;
-        #[cfg(feature = "retroachievements")]
+        // `shell::ShellState::render` gates its own `cheevos`/`script` parameters on
+        // `all(not(target_arch = "wasm32"), feature = "...")` (neither feature is wasm-safe — see
+        // `Cargo.toml`'s doc comments), so the call site here must match EXACTLY, not just the
+        // bare feature flag — a `wasm32` build with either feature enabled (not exercised by this
+        // project's own wasm builds today, but a valid `cargo check` target combination) would
+        // otherwise pass an argument `render` doesn't accept on that target and fail to compile.
+        #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
         let cheevos = &mut active.cheevos;
-        #[cfg(feature = "scripting")]
+        #[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))]
         let active_script = &active.script;
         let full_output = ctx.run_ui(raw_input, |ui| {
             actions = shell.render(
                 ui,
                 &info,
                 config,
-                #[cfg(feature = "retroachievements")]
+                #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
                 cheevos,
-                #[cfg(feature = "scripting")]
+                #[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))]
                 active_script.as_ref(),
             );
             // The script overlay is a distinct concern from the menu/status-bar

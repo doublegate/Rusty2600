@@ -33,9 +33,13 @@ path = "src/main.rs"
 # as a safety net in case the real build regresses or a browser doesn't
 # support WebGL2/WebGPU. Exactly one of the two should be built for wasm32
 # at a time (see `web/index.html`'s `data-cargo-*` attributes, which
-# explicitly disable default features and select only `wasm-winit`, since
-# `emu-thread`/`debug-hooks` below are NOT wasm-safe — see their own doc
-# comments). Neither feature does anything on native.
+# explicitly disable default features and select only ONE of the two —
+# currently `wasm-canvas`, the actual deployed GH-Pages build, since
+# `wasm-winit`'s rendering isn't yet confirmed working in a real browser;
+# see `docs/frontend.md`'s wasm status section for exactly why and how to
+# flip it once confirmed). `emu-thread`/`debug-hooks` below are NOT
+# wasm-safe for either wasm feature — see their own doc comments. Neither
+# `wasm-winit` nor `wasm-canvas` does anything on native.
 # `help-tui` adds the ratatui terminal help browser (native-only).
 #
 # `emu-thread` runs `EmuCore` on a dedicated thread (paced by the audio ring
