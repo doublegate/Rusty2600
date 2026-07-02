@@ -15,14 +15,17 @@ arithmetic) maps far more naturally onto this project's own
 `#![forbid(unsafe_code)]` house style than a straight port of Stella's C++
 would.
 
-It exists to eventually back the Harmony/Melody coprocessor cartridges
-(DPC+/CDF/CDFJ/CDFJ+, `T-0401-006`) — those boards run a real ARM7TDMI
-alongside the 6507, executing Thumb-1 code that streams graphics/audio data
-and drives a fast RNG. **v1.6.0 lands the interpreter core plus conformance
-tests only.** It is a standalone `no_std + alloc` crate with zero
-dependency on `rusty2600-cart`/`rusty2600-core`/`rusty2600-frontend` — no
-`Cartridge` variant or `Board` impl consumes it yet. Wiring lands one
-coprocessor family at a time in the `v1.6.x` patch train.
+It backs the Harmony/Melody coprocessor cartridges (DPC+/CDF/CDFJ/CDFJ+,
+`T-0401-006`) — those boards run a real ARM7TDMI alongside the 6507,
+executing Thumb-1 code that streams graphics/audio data and drives a fast
+RNG. **v1.6.0 landed the interpreter core plus conformance tests only.**
+`rusty2600-cart` now depends on this crate (added when the first
+consumer landed — see "What's next" below); `rusty2600-thumb` itself
+remains a standalone `no_std + alloc` crate with zero dependency on
+`rusty2600-cart`/`rusty2600-core`/`rusty2600-frontend`, keeping the
+one-directional crate graph intact (`rusty2600-cart` depends on
+`rusty2600-thumb`, not the other way around). Coprocessor families wire
+in one at a time.
 
 ## Why Thumb-1 only
 
@@ -115,17 +118,28 @@ PC-relative/SP-relative/register-offset/immediate-offset/halfword/
 sign-extended load-store round-trips, load-address, push/pop including
 LR/PC, multiple load-store including the base-register-in-list edge case,
 conditional/unconditional branch, `BL`, and `SWI` faulting rather than
-panicking) against a minimal in-memory `TestMemory` harness. This crate is
-**not** part of the cart bankswitch-tier honesty gate
-(`tests/mapper_tier_honesty.rs`, ADR 0003) since it isn't a `Cartridge`
-variant yet — that gate gets extended when a `Board` first consumes this
-interpreter in the `v1.6.x` wiring train.
+panicking) against a minimal in-memory `TestMemory` harness. This crate
+itself is **not** part of the cart bankswitch-tier honesty gate
+(`tests/mapper_tier_honesty.rs`, ADR 0003) — that gate is `Core`/`Curated`-
+only, and DPC+ (this interpreter's first real consumer) lands `BestEffort`
+tier, so the gate's oracle set is correctly NOT extended for it either
+(same as `BankAr` before it). `BankDpcPlus`'s own tests (`docs/cart.md`,
+`crates/rusty2600-cart/src/lib.rs`) include a real hand-assembled synthetic
+Thumb-1 program proving `Arm7Tdmi::step()` actually executes against a real
+`ThumbMemory` implementation, not just that the register-decode logic
+compiles — the first end-to-end proof this interpreter drives a real
+cartridge board correctly.
 
 ## What's next
 
-Per `to-dos/ROADMAP.md`: the `v1.6.x` patch train wires DPC+, then CDF,
-then CDFJ/CDFJ+ into `rusty2600-cart::detect()` one family at a time, each
-supplying its own `ThumbMemory` implementation (register map, RNG/timer
-peripherals, `tick_coprocessor()` driving `Arm7Tdmi::step()` on the ARM's
-own clock) — closing the bankswitch catalogue to 24 of 25 schemes (leaving
-only AR/Supercharger, deferred separately per `[1.5.0]`).
+DPC+ landed first (`BankDpcPlus`, see `docs/cart.md`): a real `ThumbMemory`
+implementation over the board's own driver/custom/data/freq ROM+RAM
+segments (mapped at Gopher2600's own Harmony-architecture Flash/SRAM
+addresses), driven synchronously from the `$5A` "CALLFUNCTION" register
+write rather than a per-color-clock scheduler hook — DPC+'s ARM entry point
+turned out to be a synchronous call-and-run-to-completion from within
+`Board::cpu_write`, not something needing `Board::tick_coprocessor()` or
+any `Bus`/scheduler change at all. CDF, then CDFJ/CDFJ+, remain their own
+separately-scoped follow-ups, each supplying its own `ThumbMemory`
+implementation for that family's own register map/memory layout — closing
+the bankswitch catalogue to 25 of 25 schemes once all three land.
