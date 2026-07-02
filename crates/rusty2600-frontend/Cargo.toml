@@ -89,7 +89,7 @@ wgpu = { version = "29", features = ["webgl"] }
 cpal = "0.18"
 egui = "0.34"
 egui-wgpu = "0.34"
-egui-winit = { version = "0.34", default-features = false, features = ["links", "wayland", "x11"] }
+egui-winit = { version = "0.35", default-features = false, features = ["links", "wayland", "x11"] }
 thiserror = "2.0"
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
