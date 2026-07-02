@@ -1,0 +1,11 @@
+# Trunk config for the WebRTC test harness — a standalone page (NOT the
+# main GH-Pages demo) proving `WebRtcSocket`/`WebRtcPeer` for real in a real
+# browser, without any dependency on `rusty2600-frontend`'s own wasm build
+# (`wasm-winit`/`wasm-canvas`) — see `web/index.html`'s own doc comment and
+# `docs/adr/0008-netplay-webrtc-async-boundary.md`. Not part of any deployed
+# site; local-only verification tooling.
+[build]
+target = "index.html"
+
+[tools]
+wasm_bindgen = "0.2.126"   # <-- keep == Cargo.lock (grep -A1 'name = "wasm-bindgen"' ../../../Cargo.lock)
