@@ -6,6 +6,24 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Paddle-timing Stella-oracle differential test** (`T-0501-010`
+  follow-up) — `crates/rusty2600-tia/src/paddle.rs` gains a `stella_oracle`
+  test module: an independently re-derived copy of Stella's
+  `AnalogReadout` RC-circuit formula, cross-checked against the port
+  across a position sweep, multi-step charging, VBLANK-dump discharge, and
+  the redundant-`set_position` edge case. Confirms every RC constant and
+  formula in `paddle.rs` matches Stella's `AnalogReadout.{cxx,hxx}`
+  exactly; confirms the port's two-variant `Connection` enum (`Vcc`/
+  `Disconnected`) is a deliberate, correct scope match to Stella's own
+  `Paddles.cxx` (which never uses `AnalogReadout`'s third `ground`
+  connection type — that's exclusive to non-paddle controllers this crate
+  doesn't model). A real commercial paddle-game differential cross-check
+  (Breakout/Warlords/Kaboom!) remains blocked — no such ROM is legally
+  obtainable/stageable in this development environment; see
+  `docs/compatibility.md`.
+
 ## [2.3.0] - 2026-07-02 - "Full Catalogue"
 
 Closes the cart bankswitch catalogue to 26/26 (CDF/CDFJ/CDFJ+, the last

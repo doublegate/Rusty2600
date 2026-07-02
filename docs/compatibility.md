@@ -39,6 +39,18 @@ Out-of-scope for the initial cut (BestEffort or deferred): ARM-coprocessor carts
 (DPC+/CDF/CDFJ), Supercharger (`AR`) tape loading, and exotic peripherals
 (Trak-Ball, light guns, AtariVox). Per ref-docs/research-report.md §2.
 
+Paddle (`INPT0..=INPT3`) RC-circuit timing (`crates/rusty2600-tia/src/paddle.rs`,
+`T-0501-010`) is cross-checked against an independently re-derived copy of
+Stella's `AnalogReadout` formula in an executable test (`paddle.rs`'s
+`stella_oracle` test module, `v2.4.0`) — every RC constant, the
+comparator-threshold formula, and the charge/dump update formulas are
+confirmed to match exactly. A real commercial paddle-game differential
+cross-check (e.g. Breakout, Warlords, Kaboom!) remains blocked: no such ROM
+is legally obtainable/stageable in this development environment. If ROMs
+are staged locally under `tests/roms/external/commercial/` in the future, a
+gameplay-level differential test can be added alongside the existing
+oracle test.
+
 ## TIA revisions
 
 **Design resolved by `docs/adr/0005`** (research report §14, item 3): rather

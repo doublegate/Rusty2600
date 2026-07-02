@@ -247,4 +247,190 @@ mod tests {
         assert!((position_to_resistance(0) - 0.0).abs() < f64::EPSILON);
         assert!((position_to_resistance(255) - MAX_POT_RESISTANCE).abs() < 1.0);
     }
+
+    // -- Stella `AnalogReadout` oracle differential (v2.4.0, T-0501-010 follow-up) --
+    //
+    // Independently re-derives Stella's exact RC-circuit formulas
+    // (`ref-proj/stella/src/emucore/tia/AnalogReadout.{cxx,hxx}`, `AnalogReadout::
+    // setConsoleTiming`/`updateCharge`/`inpt`) in this test module only — NOT
+    // shared with the production code above, so this is a genuine independent
+    // check, not a tautology against our own implementation. Verified by hand
+    // against Stella's source, line-by-line, before writing this module:
+    //
+    //   myUThresh = U_SUPP * (1 - exp(-TRIPPOINT_LINES*228 / myClockFreq
+    //                                 / (MAX_POT_RESISTANCE + R0) / C))
+    //   charging:  myU = U_SUPP * (1 - (1 - myU/U_SUPP)
+    //                               * exp(-dt / (resistance + R0) / C / myClockFreq))
+    //   dumped:    myU *= exp(-dt / R_DUMP / C / myClockFreq)
+    //
+    // All four RC constants (R0=1800, C=68e-9, R_DUMP=50, U_SUPP=5), TRIPPOINT_LINES
+    // (379) and NTSC_CLOCK_FREQ (60*228*262) already match `paddle.rs`'s constants
+    // above exactly (confirmed by direct comparison against `AnalogReadout.hxx`).
+    //
+    // One deliberate, confirmed-correct divergence: Stella's `ConnectionType` has
+    // a third `ground` variant (capacitor discharges through `resistance + R0`,
+    // distinct from the VBLANK `myIsDumped` path which always uses `R_DUMP`).
+    // Grepping Stella's own `Paddles.cxx` (the actual paddle controller class this
+    // module claims fidelity to) shows it NEVER calls `AnalogReadout::
+    // connectToGround()` — only `connectToVcc()`/`disconnect()`. `connectToGround`
+    // is exclusively used by unrelated non-paddle controllers (Booster, CompuMate,
+    // Genesis, Joy2BPlus, Keyboard, QuadTari) this crate does not model. So
+    // `Connection`'s two-variant (`Vcc`/`Disconnected`) shape here is a correct,
+    // deliberate scope match to real paddle hardware, not a missing feature.
+    //
+    // A second, inconsequential shape difference: Stella's `update()` only calls
+    // `updateCharge` (i.e. advances the RC integration) when the new `Connection`
+    // differs from the old one; `AnalogPaddle::set_position` above always does.
+    // This does not change the simulated result: RC charging under a fixed
+    // resistance is composable (`exp(-t1/RC) * exp(-t2/RC) == exp(-(t1+t2)/RC)`),
+    // so re-integrating across an unbroken same-resistance span in two calls
+    // versus one gives the identical final capacitor voltage — confirmed by the
+    // `set_position_called_redundantly_matches_stella_early_exit_optimization`
+    // test below, which exercises exactly this shape difference.
+    mod stella_oracle {
+        //! A from-scratch re-implementation of `AnalogReadout`'s formulas, used
+        //! ONLY to cross-check `super::AnalogPaddle` — never imported by
+        //! production code.
+        const R0: f64 = 1800.0;
+        const CAP: f64 = 68e-9;
+        const R_DUMP: f64 = 50.0;
+        const U_SUPP: f64 = 5.0;
+        const TRIPPOINT_LINES: f64 = 379.0;
+        const NTSC_CLOCK_FREQ: f64 = 60.0 * 228.0 * 262.0;
+
+        pub fn u_thresh() -> f64 {
+            U_SUPP
+                * (1.0
+                    - libm::exp(
+                        -TRIPPOINT_LINES * 228.0
+                            / NTSC_CLOCK_FREQ
+                            / (super::MAX_POT_RESISTANCE + R0)
+                            / CAP,
+                    ))
+        }
+
+        /// Charges (or discharges, if `dumped`) `u` across `elapsed` color
+        /// clocks at a fixed `resistance`, mirroring `AnalogReadout::updateCharge`.
+        pub fn advance(u: f64, elapsed: f64, resistance: f64, dumped: bool) -> f64 {
+            if dumped {
+                u * libm::exp(-elapsed / R_DUMP / CAP / NTSC_CLOCK_FREQ)
+            } else {
+                U_SUPP
+                    * (1.0
+                        - (1.0 - u / U_SUPP)
+                            * libm::exp(-elapsed / (resistance + R0) / CAP / NTSC_CLOCK_FREQ))
+            }
+        }
+    }
+
+    /// The precomputed NTSC comparator threshold must match the oracle exactly
+    /// (both sides evaluate the identical closed-form expression, so this
+    /// should be bit-for-bit, not just approximately equal).
+    #[test]
+    fn threshold_matches_stella_oracle() {
+        let p = AnalogPaddle::default();
+        assert!(
+            (p.u_thresh - stella_oracle::u_thresh()).abs() < 1e-15,
+            "port={}  oracle={}",
+            p.u_thresh,
+            stella_oracle::u_thresh()
+        );
+    }
+
+    /// Sweeps a representative range of paddle positions (`0`, `64`, `128`,
+    /// `192`, `255` — spanning `position_to_resistance`'s documented `0..=255`
+    /// range) and confirms the port's capacitor voltage after a single charge
+    /// step matches the independently re-derived Stella formula exactly, for
+    /// several elapsed-time magnitudes (short/medium/long relative to the RC
+    /// time constant at each resistance).
+    #[test]
+    fn single_step_charge_matches_stella_oracle_across_positions() {
+        for position in [0u8, 64, 128, 192, 255] {
+            let resistance = position_to_resistance(position);
+            for &elapsed in &[10.0, 1_000.0, 100_000.0, 2_000_000.0] {
+                let mut p = AnalogPaddle::default();
+                p.set_position(position, 0);
+                // `set_position` already advanced charge to t=0 (a no-op,
+                // elapsed=0); now advance to `elapsed` and compare.
+                let _ = p.inpt(elapsed as u64);
+                let expected = stella_oracle::advance(0.0, elapsed, resistance, false);
+                assert!(
+                    (p.u - expected).abs() < 1e-9,
+                    "position={position} elapsed={elapsed}: port={} oracle={expected}",
+                    p.u
+                );
+            }
+        }
+    }
+
+    /// Confirms multi-step charging (several successive `inpt()` calls at
+    /// increasing timestamps, as a real CPU polling loop would do) matches the
+    /// oracle applied incrementally the same way — not just a single big jump.
+    #[test]
+    fn multi_step_charge_matches_stella_oracle() {
+        let position = 96u8;
+        let resistance = position_to_resistance(position);
+        let mut p = AnalogPaddle::default();
+        p.set_position(position, 0);
+
+        let mut oracle_u = 0.0;
+        let mut oracle_t = 0.0f64;
+        for step_t in [5_000.0, 20_000.0, 75_000.0, 300_000.0, 900_000.0] {
+            let _ = p.inpt(step_t as u64);
+            oracle_u = stella_oracle::advance(oracle_u, step_t - oracle_t, resistance, false);
+            oracle_t = step_t;
+            assert!(
+                (p.u - oracle_u).abs() < 1e-9,
+                "at t={step_t}: port={} oracle={oracle_u}",
+                p.u
+            );
+        }
+    }
+
+    /// Confirms the VBLANK-dump discharge path matches the oracle too (a
+    /// separate code branch from charging — `R_DUMP`, not the pot resistance).
+    #[test]
+    fn dump_discharge_matches_stella_oracle() {
+        let mut p = AnalogPaddle::default();
+        p.set_position(0, 0); // fastest charge, to get `u` well above 0 first.
+        let _ = p.inpt(1_000_000);
+        let u_before_dump = p.u;
+
+        p.vblank(0x80, 1_000_000);
+        let _ = p.inpt(1_000_300);
+
+        let expected = stella_oracle::advance(u_before_dump, 300.0, 0.0, true);
+        assert!(
+            (p.u - expected).abs() < 1e-9,
+            "port={} oracle={expected}",
+            p.u
+        );
+    }
+
+    /// Confirms the shape difference documented above (`set_position` always
+    /// re-integrates vs. Stella's `update()` skipping when the connection is
+    /// unchanged) produces an IDENTICAL result, not a divergence — calling
+    /// `set_position` redundantly with the same position mid-charge must land
+    /// on the same voltage as never having called it again at all.
+    #[test]
+    fn set_position_called_redundantly_matches_stella_early_exit_optimization() {
+        let position = 200u8;
+
+        let mut redundant = AnalogPaddle::default();
+        redundant.set_position(position, 0);
+        let _ = redundant.inpt(50_000);
+        redundant.set_position(position, 50_000); // same position, re-set mid-charge
+        let _ = redundant.inpt(150_000);
+
+        let mut untouched = AnalogPaddle::default();
+        untouched.set_position(position, 0);
+        let _ = untouched.inpt(150_000);
+
+        assert!(
+            (redundant.u - untouched.u).abs() < 1e-9,
+            "redundant={} untouched={}",
+            redundant.u,
+            untouched.u
+        );
+    }
 }
