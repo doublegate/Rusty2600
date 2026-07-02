@@ -6,6 +6,79 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-07-02 - "Full Circle"
+
+Sixth release of the RustyNES gap-closure arc, shipped through PR #19.
+Closes the remaining `wasm-winit` capability gap from the plan's Web
+Parity waves: a share-link feature, PWA install, and a wasm32-safe
+debugger overlay — plus a real, not re-deferred, investigation into
+in-browser Lua scripting that concluded honestly deferred. Reviewed by
+GitHub Copilot and Gemini Code Assist — 2 findings, both fixed.
+
+### Added
+
+- **`?settings=` share-link** (`crates/rusty2600-frontend/src/
+  share_link.rs`) — round-trips the whole `Config` (region/video/audio/
+  key bindings) through a hand-rolled, URL-safe base64 codec, pure and
+  target-agnostic (7 new native unit tests). Applied on boot, overriding
+  `Config::load()`'s persisted value when a `?settings=` parameter is
+  present. Settings-only — no ROM reference, since neither the native
+  `rfd` dialog nor the wasm `<input type=file>` picker has a URL a share
+  link could carry.
+- **Wasm32-safe debugger overlay** — `debug-hooks` is now confirmed
+  wasm32-safe for `wasm-winit`: CPU/TIA/RIOT/Memory panels plus nearly
+  every other native debugger panel work identically in-browser. The
+  one exception, TAStudio's "Save branch" (native-only `rfd` save
+  dialog), is scoped out specifically (`MenuAction::TastudioSaveBranch`
+  is `not(target_arch = "wasm32")`-gated) rather than excluding all of
+  `debug-hooks` from wasm32.
+- **PWA install** (`web/manifest.json`, `web/sw.js`, placeholder icons)
+  — makes the deployed build installable and usable offline after a
+  first visit. The service worker uses a runtime cache-first-then-
+  revalidate strategy for sub-resources (Trunk hashes build filenames,
+  so a static precache manifest would go stale every rebuild) and
+  network-first for the app-shell navigation request (see Fixed below).
+
+### Investigated, deferred
+
+- **In-browser Lua scripting** — `mlua`'s vendored C build is confirmed,
+  again, to be a hard wall on `wasm32-unknown-unknown` (direct build
+  attempt fails in `lua-src`'s build script). The one realistic pure-
+  Rust fallback, `piccolo`, is NOT yet a workable substrate: its only
+  crates.io-published release (`0.3.3`) implements almost none of Lua's
+  `string`/`table` stdlib, and its more-complete unpublished branch is
+  explicitly pre-1.0-unstable by its own maintainer's admission. Native
+  `mlua` is completely unchanged — same crate, same version pin, same
+  feature gating. Documented in `crates/rusty2600-script/src/lib.rs`'s
+  module doc and `docs/scripting.md`; revisit once `piccolo` publishes a
+  release with real `string`/`table` coverage.
+
+### Fixed
+
+- **Service-worker `activate` could wipe unrelated origin caches**
+  (Copilot) — Cache Storage is origin-wide, not scoped to one service
+  worker; deleting "every cache except CACHE_NAME" could wipe a sibling
+  GitHub Pages project's caches on the same origin. Now filters by a
+  `CACHE_PREFIX` so only a previous Rusty2600 shell cache is ever
+  evicted.
+- **Stale-while-revalidate on `index.html` could break offline loads
+  after a deploy** (Gemini Code Assist) — with Trunk's hashed sub-
+  resource filenames, serving a stale cached `index.html` while silently
+  overwriting it in the background could leave a later offline visit
+  with HTML referencing hashed assets that were never actually fetched.
+  Navigation requests now use network-first instead; sub-resources keep
+  cache-first-then-revalidate.
+
+### Test count
+
+349 tests passing on default features (353 with `--features test-roms`)
+— up from 342/346, the 7 new tests covering the share-link base64 codec
+and encode/decode round-trip. Full CI green — Linux/macOS/Windows, the
+perf regression gate, and the `no_std` gate. Also independently
+verified: `cargo check`/`cargo clippy --target wasm32-unknown-unknown
+--features wasm-winit` and the new `--features wasm-winit,debug-hooks`
+combination both clean; `--features wasm-canvas` unaffected.
+
 ## [2.8.0] - 2026-07-02 - "Touchpoint"
 
 Fifth release of the RustyNES gap-closure arc, shipped through PR #18.
