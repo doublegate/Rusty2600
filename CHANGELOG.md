@@ -6,6 +6,22 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **ROM loading from `.zip` archives** — both the native `File > Open ROM`
+  dialog and the wasm GH-Pages demo's file loader could previously only
+  load a bare `.a26`/`.bin`/`.rom` file, not one packaged inside a `.zip`
+  (the common ROM-redistribution format). New shared
+  `rusty2600-frontend::rom_archive` module extracts the first
+  `.a26`/`.bin`/`.rom` entry (by archive order) from an in-memory zip via
+  the `zip` crate (`default-features = false`, `deflate` only — pure-Rust
+  `flate2`/`miniz_oxide` backend, no C toolchain, no unneeded
+  bzip2/lzma/zstd/xz/aes-crypto codec support), reads bounded to a 1 MiB
+  ceiling regardless of what the zip's central directory claims (a
+  decompression-bomb guard, not just a declared-size check), and never
+  panics on malformed/corrupt input. Both the native dialog's filter list
+  and the wasm demo's `<input accept>` now include `.zip`.
+
 ## [2.3.0] - 2026-07-02 - "Full Catalogue"
 
 Closes the cart bankswitch catalogue to 26/26 (CDF/CDFJ/CDFJ+, the last

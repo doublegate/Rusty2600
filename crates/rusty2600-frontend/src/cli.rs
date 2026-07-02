@@ -54,7 +54,8 @@ See `rusty2600 help <topic>` for: controls, gamepad, features, about.";
     disable_help_subcommand = true,
 )]
 pub struct Cli {
-    /// Path to the `.a26` / `.bin` ROM to load and run. Load further ROMs from the File menu or by
+    /// Path to the `.a26` / `.bin` / `.rom` ROM to load and run, or a `.zip`
+    /// archive containing one. Load further ROMs from the File menu or by
     /// drag-and-drop once a session is open.
     #[arg(value_name = "ROM", value_hint = clap::ValueHint::FilePath)]
     pub rom: Option<PathBuf>,
