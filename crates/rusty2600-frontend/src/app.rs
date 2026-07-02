@@ -210,12 +210,31 @@ impl ApplicationHandler for App {
         let mut cheevos = crate::cheevos::CheevosState::default();
         if let Some(path) = self.pending_rom.take() {
             match std::fs::read(&path) {
-                Ok(bytes) => {
-                    if let Err(e) = emu.load_rom(&bytes) {
-                        eprintln!("rusty2600: failed to load {}: {e}", path.display());
+                Ok(raw_bytes) => {
+                    let filename = path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |n| n.to_string_lossy().into_owned(),
+                    );
+                    let extracted = if crate::rom_archive::looks_like_zip(&filename) {
+                        crate::rom_archive::extract_first_rom(&raw_bytes)
+                    } else {
+                        Ok((raw_bytes, filename))
+                    };
+                    match extracted {
+                        Ok((bytes, _entry_name)) => {
+                            if let Err(e) = emu.load_rom(&bytes) {
+                                eprintln!("rusty2600: failed to load {}: {e}", path.display());
+                            }
+                            #[cfg(feature = "retroachievements")]
+                            cheevos.load_rom(&bytes);
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "rusty2600: failed to extract a ROM from {}: {e}",
+                                path.display()
+                            );
+                        }
                     }
-                    #[cfg(feature = "retroachievements")]
-                    cheevos.load_rom(&bytes);
                 }
                 Err(e) => eprintln!("rusty2600: cannot read {}: {e}", path.display()),
             }
@@ -747,26 +766,49 @@ impl App {
             match action {
                 MenuAction::OpenRom => {
                     if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Atari 2600 ROM", &["a26", "bin", "rom"])
+                        .add_filter("Atari 2600 ROM", &["a26", "bin", "rom", "zip"])
                         .pick_file()
                     {
                         match std::fs::read(&path) {
-                            Ok(bytes) => {
-                                let mut emu =
-                                    active.core.lock().unwrap_or_else(PoisonError::into_inner);
-                                if let Err(e) = emu.load_rom(&bytes) {
-                                    active.shell.status = format!("load failed: {e}");
+                            Ok(raw_bytes) => {
+                                let filename = path.file_name().map_or_else(
+                                    || path.display().to_string(),
+                                    |n| n.to_string_lossy().into_owned(),
+                                );
+                                let extracted = if crate::rom_archive::looks_like_zip(&filename) {
+                                    crate::rom_archive::extract_first_rom(&raw_bytes)
+                                        .map(|(bytes, entry_name)| (bytes, Some(entry_name)))
                                 } else {
-                                    active.shell.status = format!("Loaded {}", path.display());
-                                    let rom_label = path.file_name().map_or_else(
-                                        || path.display().to_string(),
-                                        |n| n.to_string_lossy().into_owned(),
-                                    );
-                                    active.window.set_title(&format!("Rusty2600 - {rom_label}"));
+                                    Ok((raw_bytes, None))
+                                };
+                                match extracted {
+                                    Ok((bytes, entry_name)) => {
+                                        let mut emu = active
+                                            .core
+                                            .lock()
+                                            .unwrap_or_else(PoisonError::into_inner);
+                                        if let Err(e) = emu.load_rom(&bytes) {
+                                            active.shell.status = format!("load failed: {e}");
+                                        } else {
+                                            let rom_label = entry_name
+                                                .as_ref()
+                                                .map_or_else(|| filename.clone(), Clone::clone);
+                                            active.shell.status = entry_name.as_ref().map_or_else(
+                                                || format!("Loaded {rom_label}"),
+                                                |entry| format!("Loaded {entry} (from {filename})"),
+                                            );
+                                            active
+                                                .window
+                                                .set_title(&format!("Rusty2600 - {rom_label}"));
+                                        }
+                                        drop(emu);
+                                        #[cfg(feature = "retroachievements")]
+                                        active.cheevos.load_rom(&bytes);
+                                    }
+                                    Err(e) => {
+                                        active.shell.status = format!("zip extraction failed: {e}");
+                                    }
                                 }
-                                drop(emu);
-                                #[cfg(feature = "retroachievements")]
-                                active.cheevos.load_rom(&bytes);
                             }
                             Err(e) => active.shell.status = format!("read failed: {e}"),
                         }

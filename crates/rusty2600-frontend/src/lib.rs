@@ -72,6 +72,12 @@ pub mod input;
 pub mod palette;
 pub mod present_buffer;
 pub mod resampler;
+/// Extracting a ROM image out of a `.zip` archive.
+///
+/// Shared by the native `OpenRom` dialog (`app`) and the wasm demo's file
+/// loader (`wasm`). Plain code spans, not intra-doc links: `app`/`wasm` are
+/// mutually `cfg`-exclusive, so only one exists in any given doc build.
+pub mod rom_archive;
 pub mod shell;
 
 /// The debugger's persistent state, structured chip snapshots, and panel

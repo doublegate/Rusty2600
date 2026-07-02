@@ -94,6 +94,17 @@ thiserror = "2.0"
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 toml = "1.1"
+# ROM-from-.zip loading (native `OpenRom` dialog + the wasm demo's file
+# input, `src/rom_archive.rs`). Reads only, from an in-memory `Cursor` (never
+# touches a real filesystem), so it builds cleanly for wasm32 too.
+# `default-features = false` + `deflate` only: `deflate` pulls in flate2's
+# pure-Rust `rust_backend` (miniz_oxide) — no C toolchain — for decompression
+# (the `deflate-flate2` marker feature alone does NOT actually enable the
+# `flate2` optional dep; `deflate` is the feature that does). No
+# bzip2/lzma/zstd/xz/aes-crypto (unneeded codecs/encryption that would only
+# bloat the native binary and the wasm bundle for no benefit — ROM zips are
+# plain Deflate or Store).
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Already transitive deps of wgpu; direct here is free.
 pollster = "0.4"

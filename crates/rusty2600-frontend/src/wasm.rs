@@ -200,6 +200,7 @@ fn install_rom_loader(rom_input: &HtmlInputElement) {
         };
         let Some(files) = input.files() else { return };
         let Some(file) = files.get(0) else { return };
+        let filename = file.name();
 
         let Ok(reader) = FileReader::new() else {
             return;
@@ -210,7 +211,24 @@ fn install_rom_loader(rom_input: &HtmlInputElement) {
                 return;
             };
             let array = js_sys::Uint8Array::new(&buffer);
-            let bytes = array.to_vec();
+            let raw_bytes = array.to_vec();
+
+            let bytes = if crate::rom_archive::looks_like_zip(&filename) {
+                match crate::rom_archive::extract_first_rom(&raw_bytes) {
+                    Ok((extracted, entry_name)) => {
+                        web_sys::console::log_1(
+                            &format!("Extracted {entry_name} from {filename}").into(),
+                        );
+                        extracted
+                    }
+                    Err(e) => {
+                        web_sys::console::log_1(&format!("zip extraction failed: {e}").into());
+                        return;
+                    }
+                }
+            } else {
+                raw_bytes
+            };
 
             if let Some(board) = detect(&bytes) {
                 let mut system = System::new(0);
