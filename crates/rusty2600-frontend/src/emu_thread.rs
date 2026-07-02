@@ -198,6 +198,9 @@ impl EmuCore {
             let (inpt4, inpt5) = state.fire_inputs();
             self.system.bus.tia.inpt[4] = inpt4;
             self.system.bus.tia.inpt[5] = inpt5;
+            for (i, paddle) in state.paddles.iter().enumerate() {
+                self.system.bus.tia.set_paddle_position(i, paddle.position);
+            }
         }
 
         if !self.rom_loaded || self.paused {
@@ -294,12 +297,15 @@ impl EmuCore {
         clippy::cast_sign_loss,
         clippy::cast_lossless
     )]
-    pub fn step_frame(&mut self, frames: &FrameProducer, input: Option<(u8, u8, u8, u8)>) {
-        if let Some((swcha, swchb, inpt4, inpt5)) = input {
+    pub fn step_frame(&mut self, frames: &FrameProducer, input: Option<(u8, u8, u8, u8, [u8; 4])>) {
+        if let Some((swcha, swchb, inpt4, inpt5, paddles)) = input {
             self.system.bus.riot.pins[0] = swcha;
             self.system.bus.riot.pins[1] = swchb;
             self.system.bus.tia.inpt[4] = inpt4;
             self.system.bus.tia.inpt[5] = inpt5;
+            for (i, position) in paddles.into_iter().enumerate() {
+                self.system.bus.tia.set_paddle_position(i, position);
+            }
         }
 
         if !self.rom_loaded || self.paused {
@@ -415,13 +421,17 @@ pub type EmuHandle = Arc<Mutex<EmuCore>>;
 /// The winit thread writes the latest host input; the emu-thread reads it late
 /// (just before producing a frame). v0.1 packs the [`InputState`] into the two
 /// RIOT port bytes + the two fire inputs (4 bytes) behind a single `AtomicU32`,
-/// so the read is wait-free without a mutex.
-///
-/// TODO(T-0501-010): widen to carry the analog paddle bytes too (a second atomic).
+/// so the read is wait-free without a mutex. A follow-up (`T-0501-010`) added a
+/// second `AtomicU32` carrying the four paddle position bytes the same way.
 #[derive(Debug, Default)]
 pub struct SharedInput {
     /// Packed `[SWCHA, SWCHB, INPT4, INPT5]` — the emu-thread unpacks this.
     packed: AtomicU32,
+    /// Packed `[paddle0, paddle1, paddle2, paddle3]` positions (`0..=255`
+    /// each) — kept in a second atomic rather than widening `packed` past
+    /// 32 bits, matching this struct's own established wait-free-without-a-
+    /// mutex convention.
+    paddles: AtomicU32,
 }
 
 impl SharedInput {
@@ -442,21 +452,37 @@ impl SharedInput {
             | (u32::from(inpt4) << 8)
             | u32::from(inpt5);
         self.packed.store(packed, Ordering::Release);
+
+        let p = state.paddles;
+        let packed_paddles = (u32::from(p[0].position) << 24)
+            | (u32::from(p[1].position) << 16)
+            | (u32::from(p[2].position) << 8)
+            | u32::from(p[3].position);
+        self.paddles.store(packed_paddles, Ordering::Release);
     }
 
-    /// Load the latched host input (emu thread).
+    /// Load the latched host input (emu thread): `(SWCHA, SWCHB, INPT4,
+    /// INPT5, [paddle0..=paddle3 positions])`.
     // `packed` is a deliberately bit-packed u32 (4 bytes via SWCHA/SWCHB/INPT4/INPT5 shifts);
     // truncating `as u8` here intentionally takes the low byte of each known field, not a bug.
     #[must_use]
     #[allow(clippy::cast_possible_truncation)]
-    pub fn load(&self) -> (u8, u8, u8, u8) {
+    pub fn load(&self) -> (u8, u8, u8, u8, [u8; 4]) {
         let packed = self.packed.load(Ordering::Acquire);
         let swcha = (packed >> 24) as u8;
         let swchb = (packed >> 16) as u8;
         let inpt4 = (packed >> 8) as u8;
         let inpt5 = packed as u8;
 
-        (swcha, swchb, inpt4, inpt5)
+        let pp = self.paddles.load(Ordering::Acquire);
+        let paddles = [
+            (pp >> 24) as u8,
+            (pp >> 16) as u8,
+            (pp >> 8) as u8,
+            pp as u8,
+        ];
+
+        (swcha, swchb, inpt4, inpt5, paddles)
     }
 
     /// Read the latched `(SWCHA, SWCHB, INPT4, INPT5)` bytes (emu-thread).
@@ -491,6 +517,19 @@ mod tests {
         st.joysticks[0].fire = true;
         si.store(st);
         assert_eq!(si.load_ports().2, 0x00, "P0 fire => INPT4 active-low");
+    }
+
+    #[test]
+    fn shared_input_roundtrips_paddle_positions() {
+        let si = SharedInput::new();
+        let mut st = InputState::default();
+        st.paddles[0].position = 10;
+        st.paddles[1].position = 20;
+        st.paddles[2].position = 200;
+        st.paddles[3].position = 255;
+        si.store(st);
+        let (.., paddles) = si.load();
+        assert_eq!(paddles, [10, 20, 200, 255]);
     }
 
     #[test]

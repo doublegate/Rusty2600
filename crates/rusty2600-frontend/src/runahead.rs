@@ -44,7 +44,7 @@ use crate::present_buffer::Producer as FrameProducer;
 pub fn step_frame(
     core: &mut EmuCore,
     frames: &FrameProducer,
-    input: Option<(u8, u8, u8, u8)>,
+    input: Option<(u8, u8, u8, u8, [u8; 4])>,
     runahead_frames: u32,
 ) {
     if runahead_frames == 0 {

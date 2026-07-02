@@ -7,6 +7,7 @@
 extern crate alloc;
 
 pub mod audio;
+pub mod paddle;
 
 pub mod regs {
     // Write registers
@@ -126,6 +127,18 @@ pub struct Tia {
     pub inpt: [u8; 6],
     pub current_color: u8,
     rdy_stall: bool,
+    /// The real RC-circuit paddle simulations behind `INPT0..=INPT3` (see
+    /// `paddle` module doc). `inpt[0..=3]` is no longer the authoritative
+    /// value for these four channels — `cpu_read` computes it live from
+    /// this array; `inpt[4]`/`inpt[5]` (joystick fire buttons) stay plain
+    /// digital fields as before.
+    pub paddles: [paddle::AnalogPaddle; 4],
+    /// Monotonic, never-resetting color-clock counter used ONLY as the
+    /// paddle RC simulation's elapsed-time base (`wrapping_add`, matching
+    /// `rusty2600_core::scheduler::System`'s own equivalent counter — kept
+    /// local here rather than threaded in from `System` since the crate
+    /// graph is one-directional and `Tia` cannot depend on `rusty2600-core`).
+    paddle_clock: u64,
     /// One color-index byte per visible dot of the CURRENT frame, indexed
     /// `scanline * 160 + x` (`x = color_clock - 68`). Sized for the PAL/SECAM
     /// worst case (312 scanlines); NTSC just uses a smaller prefix.
@@ -191,7 +204,13 @@ impl Tia {
                     self.scanline = 0;
                 }
             }
-            regs::VBLANK => self.objects.vblank = val,
+            regs::VBLANK => {
+                self.objects.vblank = val;
+                let ts = self.paddle_clock;
+                for p in &mut self.paddles {
+                    p.vblank(val, ts);
+                }
+            }
             regs::WSYNC => {
                 // WSYNC halts the CPU until the leading edge of the next
                 // scanline's HBLANK — the TIA resets the RDY latch when the
@@ -294,10 +313,22 @@ impl Tia {
             regs::CXM1FB => self.collisions.cxm1fb,
             regs::CXBLPF => self.collisions.cxblpf,
             regs::CXPPMM => self.collisions.cxppmm,
-            regs::INPT0 => self.inpt[0],
-            regs::INPT1 => self.inpt[1],
-            regs::INPT2 => self.inpt[2],
-            regs::INPT3 => self.inpt[3],
+            regs::INPT0 => {
+                let ts = self.paddle_clock;
+                self.paddles[0].inpt(ts)
+            }
+            regs::INPT1 => {
+                let ts = self.paddle_clock;
+                self.paddles[1].inpt(ts)
+            }
+            regs::INPT2 => {
+                let ts = self.paddle_clock;
+                self.paddles[2].inpt(ts)
+            }
+            regs::INPT3 => {
+                let ts = self.paddle_clock;
+                self.paddles[3].inpt(ts)
+            }
             regs::INPT4 => self.inpt[4],
             regs::INPT5 => self.inpt[5],
             _ => 0,
@@ -308,7 +339,23 @@ impl Tia {
         self.write_register((addr & 0x3F) as u8, val);
     }
 
+    /// Set a paddle's `0..=255` position (`0` fully clockwise, `255` fully
+    /// counter-clockwise — the same convention `rusty2600_frontend::input::Paddle`
+    /// and `rusty2600_mobile::MobilePaddle` already document). `index` is
+    /// `0..=3`, matching `INPT0..=INPT3`. Call this whenever the host's
+    /// paddle input changes (typically once per frame, the same late-latch
+    /// cadence joystick/console-switch input already uses) — the RC
+    /// simulation itself advances continuously via `tick_color_clock`
+    /// regardless of how often this is called.
+    pub fn set_paddle_position(&mut self, index: usize, position: u8) {
+        let ts = self.paddle_clock;
+        if let Some(p) = self.paddles.get_mut(index) {
+            p.set_position(position, ts);
+        }
+    }
+
     pub fn tick_color_clock(&mut self) {
+        self.paddle_clock = self.paddle_clock.wrapping_add(1);
         self.color_clock += 1;
         if self.color_clock >= 228 {
             self.color_clock = 0;
