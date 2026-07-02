@@ -16,12 +16,14 @@ basis for rewind, run-ahead, **and netplay rollback**." No new
 determinism infrastructure was needed to build this crate — it's a thin,
 real integration layer.
 
-**v1.10.0 lands a real, tested rollback session crate**: 2-player-only,
+**v1.10.0 landed a real, tested rollback session crate**: 2-player-only,
 direct-IP/LAN UDP transport, input-delay + max-prediction-window defaults
 matching GGPO convention, and a genuine rollback-desync test proving the
-save/restore/resimulate path is correct. **It is not yet wired into
-`rusty2600-frontend`** — no host/join-game menu, no live per-frame input
-capture feeding a running session. See "What's deferred" below.
+save/restore/resimulate path is correct. **`[2.1.0]` wired it into
+`rusty2600-frontend`** — a real Connect dialog and live per-frame input
+capture (see "Frontend wiring" below). **`[2.3.0]` adds a real STUN
+client** for NAT-assisted connections (see "STUN client" below); the
+WebRTC transport remains deferred.
 
 ## Why 2-player-only
 
@@ -148,11 +150,57 @@ writes too, for the same reason RA hardcore mode does: an unreplicated
 local write would silently desync the two peers' otherwise bit-identical
 timelines.
 
-**Still deferred, unchanged from `[1.10.0]`'s own scope**: STUN/hole-punch
-NAT traversal for real internet play and the WebRTC browser transport —
-both still need a genuine external peer no sandbox can verify against.
-Console switches and paddles remain un-modeled per-player (same
-"no natural which-peer-owns-this mapping" reasoning as before). Real
-two-peer verification so far is localhost-only (`netplay_session.rs`'s
-own test, two `NetplaySession`s on `127.0.0.1` with different ports) —
-genuine LAN/cross-machine verification remains open.
+Real two-peer verification through `[2.1.0]` was localhost-only
+(`netplay_session.rs`'s own test, two `NetplaySession`s on `127.0.0.1`
+with different ports) — genuine LAN/cross-machine verification remained
+open.
+
+## STUN client (`[2.3.0]`)
+
+Closes the STUN half of `[1.10.0]`'s "STUN/hole-punch NAT traversal is
+deferred" note. `rusty2600-netplay::stun` adds a real RFC 5389 client
+(`stun_codec`, a sans-IO codec — zero networking/async dependencies,
+fitting this crate's plain `std::net::UdpSocket` convention with no new
+async-runtime dependency) plus a best-effort UDP hole-punch helper.
+`NetplaySession::connect_via_stun` (`rusty2600-frontend`) wires both into
+a second "Connect via STUN" button in the Netplay dialog alongside the
+existing direct-IP `Connect` button.
+
+**What's real and live-verified**: the STUN Binding Request/Response
+round trip itself. `stun::tests::discovers_a_real_public_address` and
+`netplay_session::tests::connect_via_stun_completes_for_both_peers` both
+performed genuine round trips against a real public STUN server
+(`stun.l.google.com:19302`) during implementation — not mocked, not
+simulated. Both are `#[ignore]`d by default (matching this project's
+convention for tests needing live external network access — a CI
+runner's outbound UDP access is a separate, less certain question than a
+dev sandbox's) but pass when run explicitly (`cargo test -- --ignored`).
+`RollbackSession::with_socket` plus its `PunchedUdpSocket` transport
+(a small, real `ggrs::NonBlockingSocket` impl over a pre-bound socket,
+needed because the STUN-discovered NAT mapping is only valid for the
+exact socket that produced it) are proven by a genuine two-real-peer
+localhost session test, not just "it compiles."
+
+**What remains unverified, stated plainly**: actual NAT traversal between
+two independently-NATed peers on two different real networks. A
+single-host sandbox cannot provide that — loopback traffic never crosses
+a NAT boundary at all, so no test in this codebase (or achievable in this
+environment) proves the hole-punch actually opens a path through a real
+router. If both peers sit behind restrictive (symmetric) NATs, the
+subsequent GGRS handshake may simply time out; that's a known STUN-alone
+limitation (TURN relay servers exist specifically for this case, and are
+out of scope here). Mirrors this project's own `docs/mobile.md` "iOS
+Verification" precedent for infrastructure that can be built and
+partially verified, but not fully proven, in this environment.
+
+**Still deferred**: the WebRTC browser transport (both native and
+browser/`web-sys` paths) — a much larger architectural commitment than
+STUN alone, since a native Rust WebRTC stack would pull an async runtime
+into a codebase that is otherwise 100% synchronous `std`, and the
+leading ready-made integration (`matchbox_socket`) pins an incompatible
+`ggrs` version (0.11 vs. this project's 0.13). Deferred to its own
+future, separately-scoped release once that tradeoff is deliberately
+decided, not bundled into this pass. Console switches and paddles remain
+un-modeled per-player (same "no natural which-peer-owns-this mapping"
+reasoning as before). Genuine LAN/cross-machine (not just localhost)
+verification also remains open.

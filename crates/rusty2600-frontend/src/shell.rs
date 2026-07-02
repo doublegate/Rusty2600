@@ -67,6 +67,20 @@ pub enum MenuAction {
         /// The peer's address.
         remote_addr: std::net::SocketAddr,
     },
+    /// Netplay dialog -> Connect via STUN (`[2.3.0]`): bind `local_port`,
+    /// discover this machine's own public address via a real STUN query,
+    /// best-effort hole-punch toward the peer's own already-discovered
+    /// public address (`remote_public_addr`, exchanged out-of-band the
+    /// same way `NetplayConnect`'s address is), then start synchronizing.
+    /// See `rusty2600-netplay::stun`'s module doc for exactly what is and
+    /// isn't verified about real NAT traversal.
+    #[cfg(feature = "netplay")]
+    NetplayConnectStun {
+        /// The local UDP port to bind.
+        local_port: u16,
+        /// The peer's own STUN-discovered public address.
+        remote_public_addr: std::net::SocketAddr,
+    },
     /// Tools -> Disconnect Netplay.
     #[cfg(feature = "netplay")]
     NetplayDisconnect,
@@ -470,7 +484,11 @@ impl ShellState {
                 });
                 ui.label(
                     "Both players exchange addresses out-of-band, then each enters \
-                     the other's address here — there's no separate host/join step.",
+                     the other's address here — there's no separate host/join step. \
+                     \"Connect\" uses the address directly (LAN/port-forwarded); \
+                     \"Connect via STUN\" discovers your own public address first \
+                     (shown in the status bar once found) and hole-punches toward \
+                     the peer's.",
                 );
                 ui.horizontal(|ui| {
                     let parsed_port = self.netplay_local_port.trim().parse::<u16>();
@@ -487,6 +505,32 @@ impl ShellState {
                             (Err(_), _) => error = Some("local port must be 0-65535".into()),
                             (_, Err(_)) => {
                                 error = Some("remote address must be ip:port".into());
+                            }
+                        }
+                    }
+                    if ui
+                        .button("Connect via STUN")
+                        .on_hover_text(
+                            "Discovers your own public address via STUN, hole-punches \
+                             toward the peer's already-discovered address (typed above \
+                             as the remote address), then connects. Real traversal \
+                             through both peers' NATs is not guaranteed to succeed.",
+                        )
+                        .clicked()
+                    {
+                        let parsed_port = self.netplay_local_port.trim().parse::<u16>();
+                        let remote = self.netplay_remote_addr.trim().parse();
+                        match (parsed_port, remote) {
+                            (Ok(local_port), Ok(remote_public_addr)) => {
+                                actions.push(MenuAction::NetplayConnectStun {
+                                    local_port,
+                                    remote_public_addr,
+                                });
+                                submitted = true;
+                            }
+                            (Err(_), _) => error = Some("local port must be 0-65535".into()),
+                            (_, Err(_)) => {
+                                error = Some("peer's public address must be ip:port".into());
                             }
                         }
                     }

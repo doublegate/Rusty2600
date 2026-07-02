@@ -8,25 +8,24 @@
 //! intentional scope divergence in this crate, already decided by the
 //! project's own plan.
 //!
-//! Transport: GGRS's own built-in [`ggrs::UdpNonBlockingSocket`] — this crate
-//! does not implement a custom [`ggrs::NonBlockingSocket`], since GGRS
-//! already ships a real, tested UDP implementation. **Direct-IP/LAN
-//! connection only in this release**: the peer's `SocketAddr` is supplied
-//! directly (e.g. exchanged out-of-band by the two players). STUN/hole-punch
-//! NAT traversal for internet play is explicitly deferred to a `v1.10.x`
-//! follow-up — implementing and (crucially) verifying real NAT traversal
-//! needs a genuine external peer this sandbox cannot provide, and is
-//! substantial, separable work from the rollback session logic itself.
+//! Transport: GGRS's own built-in [`ggrs::UdpNonBlockingSocket`] for the
+//! plain direct-IP/LAN path (peer's `SocketAddr` supplied directly, e.g.
+//! exchanged out-of-band by the two players) — [`RollbackSession::new`]/
+//! [`RollbackSession::with_config`]. `[2.3.0]` adds
+//! [`RollbackSession::with_socket`] plus `PunchedUdpSocket` (a small,
+//! real `ggrs::NonBlockingSocket` impl over a pre-bound `std::net::UdpSocket`)
+//! for the STUN-assisted path — see `crate::stun` for the STUN client and
+//! hole-punch helper. **WebRTC (browser or native) remains explicitly out
+//! of scope** — see `crate::stun`'s module doc for why.
 //!
 //! **Frontend wiring (an actual host/join-game menu, live per-frame input
-//! capture) is also deferred.** This release lands a real, tested rollback
-//! session crate; wiring it into `rusty2600-frontend` is a `v1.10.x`
-//! follow-up, the same honest-partial-landing pattern this project already
-//! used for `rusty2600-thumb` (`[1.6.0]`) and `rusty2600-script` (`[1.9.0]`).
+//! capture) landed in `[2.1.0]`** (`rusty2600-frontend::netplay_session`).
 
-use std::net::SocketAddr;
+use std::net::{SocketAddr, UdpSocket};
 
-use ggrs::{GgrsError, GgrsRequest, P2PSession, PlayerType, SessionBuilder};
+use ggrs::{
+    GgrsError, GgrsRequest, Message, NonBlockingSocket, P2PSession, PlayerType, SessionBuilder,
+};
 use rusty2600_core::{SaveState, System};
 
 use crate::checksum::checksum128;
@@ -149,6 +148,48 @@ impl RollbackSession {
         })
     }
 
+    /// Like [`Self::new`], but over an already-bound `socket` instead of a
+    /// bare port number — the STUN-assisted connect path
+    /// (`crate::stun::discover_public_address`/`crate::stun::hole_punch`)
+    /// needs the STUN query, the hole-punch, and the GGRS session to all
+    /// share the exact same local UDP socket, since the NAT mapping a STUN
+    /// server observes is only valid for the `(local port, remote server)`
+    /// pair that produced it — binding a fresh socket here instead would
+    /// silently invalidate that mapping.
+    ///
+    /// `socket` is wrapped in `PunchedUdpSocket` and put into non-blocking
+    /// mode internally; callers do not need to call `set_nonblocking`
+    /// themselves first (though it's harmless if they already have).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NetplayError::Socket`] if `socket` can't be switched to
+    /// non-blocking mode, or [`NetplayError::Ggrs`] if GGRS rejects the
+    /// configuration.
+    pub fn with_socket(
+        socket: UdpSocket,
+        remote_addr: SocketAddr,
+        system: System,
+        rom_tag: u64,
+        input_delay: usize,
+        max_prediction_window: usize,
+    ) -> Result<Self, NetplayError> {
+        let socket = PunchedUdpSocket::new(socket).map_err(NetplayError::Socket)?;
+        let session = SessionBuilder::<RustyConfig>::new()
+            .with_num_players(2)?
+            .with_input_delay(input_delay)
+            .with_max_prediction_window(max_prediction_window)
+            .add_player(PlayerType::Local, LOCAL_PLAYER_HANDLE)?
+            .add_player(PlayerType::Remote(remote_addr), REMOTE_PLAYER_HANDLE)?
+            .start_p2p_session(socket)?;
+
+        Ok(Self {
+            session,
+            system,
+            rom_tag,
+        })
+    }
+
     /// Whether the session has finished synchronizing with the remote peer
     /// and is ready to advance frames.
     #[must_use]
@@ -231,5 +272,161 @@ impl RollbackSession {
     #[must_use]
     pub const fn system(&self) -> &System {
         &self.system
+    }
+}
+
+/// A [`ggrs::NonBlockingSocket`] implementation over an already-bound
+/// `std::net::UdpSocket`, for [`RollbackSession::with_socket`]'s
+/// STUN-assisted connect path.
+///
+/// This is a near-verbatim copy of GGRS's own bundled
+/// `UdpNonBlockingSocket` (`send_to`/`receive_all_messages`, same
+/// bincode-over-UDP wire format, same fixed receive buffer) — the ONLY
+/// difference is construction: GGRS's own type always binds a fresh socket
+/// internally (`UdpNonBlockingSocket::bind_to_port`), which would discard
+/// the exact `(local port, external mapping)` pair a STUN query and
+/// hole-punch already established on `socket`. Duplicating this small,
+/// stable shape is simpler and more obviously correct than trying to
+/// retrofit "accept a pre-bound socket" onto GGRS's own type from outside
+/// its crate.
+struct PunchedUdpSocket {
+    socket: UdpSocket,
+    buffer: [u8; Self::RECV_BUFFER_SIZE],
+}
+
+impl PunchedUdpSocket {
+    const RECV_BUFFER_SIZE: usize = 4096;
+
+    /// Wrap `socket`, switching it to non-blocking mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying I/O error if `set_nonblocking` fails.
+    fn new(socket: UdpSocket) -> std::io::Result<Self> {
+        socket.set_nonblocking(true)?;
+        Ok(Self {
+            socket,
+            buffer: [0; Self::RECV_BUFFER_SIZE],
+        })
+    }
+}
+
+impl NonBlockingSocket<SocketAddr> for PunchedUdpSocket {
+    fn send_to(&mut self, msg: &Message, addr: &SocketAddr) {
+        let Ok(buf) = bincode::serialize(msg) else {
+            return;
+        };
+        let _ = self.socket.send_to(&buf, addr);
+    }
+
+    fn receive_all_messages(&mut self) -> Vec<(SocketAddr, Message)> {
+        let mut received = Vec::new();
+        loop {
+            match self.socket.recv_from(&mut self.buffer) {
+                Ok((n, src)) => {
+                    if let Ok(msg) = bincode::deserialize(&self.buffer[..n]) {
+                        received.push((src, msg));
+                    }
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => return received,
+                Err(ref e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
+                Err(_) => return received,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod punched_socket_tests {
+    //! `ggrs::Message`'s fields are all `pub(crate)` (no public
+    //! constructor), so `PunchedUdpSocket` can't be unit-tested by directly
+    //! constructing a `Message` from outside the `ggrs` crate. Real proof
+    //! instead comes from driving a full `RollbackSession::with_socket`
+    //! two-peer session on localhost — this exercises `PunchedUdpSocket`'s
+    //! `send_to`/`receive_all_messages` for real, through GGRS's own
+    //! handshake and frame-advance traffic, the same way
+    //! `rusty2600-frontend`'s existing `netplay_session` tests already
+    //! prove `RollbackSession::new`'s plain-UDP path.
+
+    use std::net::SocketAddr;
+
+    use rusty2600_cart::{Cartridge, Rom4K};
+    use rusty2600_core::System;
+
+    use super::RollbackSession;
+
+    /// Same synthetic input-reactive ROM `desync_tests` uses — real board
+    /// state that visibly depends on joystick input every instruction.
+    fn synthetic_input_reactive_rom() -> Cartridge {
+        let mut rom = [0u8; 0x1000];
+        rom[0x000] = 0xAD; // LDA $0280
+        rom[0x001] = 0x80;
+        rom[0x002] = 0x02;
+        rom[0x003] = 0x85; // STA $80
+        rom[0x004] = 0x80;
+        rom[0x005] = 0x4C; // JMP $1000
+        rom[0x006] = 0x00;
+        rom[0x007] = 0x10;
+        rom[0xFFC] = 0x00;
+        rom[0xFFD] = 0x10;
+        Cartridge::Rom4K(Rom4K::new(&rom).expect("exactly 4 KiB"))
+    }
+
+    fn loaded_system(seed: u64) -> System {
+        let mut system = System::new(seed);
+        system.bus.board = Some(synthetic_input_reactive_rom());
+        system
+    }
+
+    /// Two `RollbackSession::with_socket` instances on `127.0.0.1`,
+    /// each wrapping its own pre-bound `UdpSocket` in a `PunchedUdpSocket`,
+    /// actually synchronizing and advancing real frames — mirrors
+    /// `rusty2600-netplay`'s own `[2.1.0]` rollback-desync test's "prove it
+    /// for real, not just that it compiles" standard, applied to the new
+    /// socket wrapper specifically.
+    #[test]
+    fn two_peers_synchronize_over_punched_sockets() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(run_two_peer_test)
+            .expect("spawning the test thread should succeed")
+            .join()
+            .expect("the test thread should not panic");
+    }
+
+    fn run_two_peer_test() {
+        let raw_a = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let raw_b = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr_a: SocketAddr = raw_a.local_addr().unwrap();
+        let addr_b: SocketAddr = raw_b.local_addr().unwrap();
+
+        let mut peer_a =
+            RollbackSession::with_socket(raw_a, addr_b, loaded_system(1), 1, 2, 8).unwrap();
+        let mut peer_b =
+            RollbackSession::with_socket(raw_b, addr_a, loaded_system(1), 1, 2, 8).unwrap();
+
+        let mut advanced_a = 0u32;
+        let mut advanced_b = 0u32;
+        for _ in 0..500 {
+            peer_a.poll();
+            peer_b.poll();
+            let input = crate::config::PortInput::default();
+            if matches!(peer_a.advance_frame(input), Ok(true)) {
+                advanced_a += 1;
+            }
+            if matches!(peer_b.advance_frame(input), Ok(true)) {
+                advanced_b += 1;
+            }
+            if advanced_a > 10 && advanced_b > 10 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+
+        assert!(
+            advanced_a > 0 && advanced_b > 0,
+            "both PunchedUdpSocket-backed peers should have advanced at least one real frame \
+             (a={advanced_a}, b={advanced_b})"
+        );
     }
 }
