@@ -109,7 +109,7 @@ winit = "0.30"
 # per-crate feature unification across the whole dependency graph, regardless of what this
 # `Cargo.toml` requests. See the wasm32 `[target...]` block's comment for the full investigation
 # and its honest, unresolved conclusion.
-wgpu = { version = "29", default-features = false, features = ["wgsl", "std"] }
+wgpu = { version = "30", default-features = false, features = ["wgsl", "std"] }
 cpal = "0.18"
 egui = "0.34"
 egui-wgpu = "0.34"
