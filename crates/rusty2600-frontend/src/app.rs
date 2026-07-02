@@ -573,7 +573,7 @@ impl App {
                 }
             }
             #[cfg(feature = "scripting")]
-            if emu.rom_loaded
+            let script_overlay = if emu.rom_loaded
                 && let Some(script) = active.script.as_mut()
             {
                 let locked = rusty2600_script::WritesLocked {
@@ -587,7 +587,10 @@ impl App {
                     netplay_active: false,
                 };
                 script.tick(&mut emu, locked, &mut active.host_input);
-            }
+                script.take_overlay()
+            } else {
+                rusty2600_script::Overlay::default()
+            };
             let info = ShellInfo {
                 board_tier: emu.board_tier().map(str::to_string),
                 region: emu.region,
@@ -601,6 +604,8 @@ impl App {
                 cheevos_game_loaded: active.cheevos.game_loaded(),
                 #[cfg(feature = "scripting")]
                 script_loaded: active.script.is_some(),
+                #[cfg(feature = "scripting")]
+                overlay: script_overlay,
                 #[cfg(feature = "netplay")]
                 netplay_active: active.netplay.is_some(),
             };
@@ -633,7 +638,10 @@ impl App {
         let raw_input = active.egui_state.take_egui_input(&active.window);
         let mut actions = Vec::new();
         // Split disjoint borrows so the egui closure can take `&mut shell` + `&mut config` while
-        // `run_ui` borrows the (cloned) context.
+        // `run_ui` borrows the (cloned) context. Read out BEFORE the splits below (a plain field
+        // read, not a `&mut active` method call, so it doesn't conflict with them).
+        #[cfg(feature = "scripting")]
+        let screen_size = (active.gfx.config.width, active.gfx.config.height);
         let ctx = active.egui_ctx.clone();
         let shell = &mut active.shell;
         let config = &mut active.config;
@@ -647,6 +655,14 @@ impl App {
                 #[cfg(feature = "retroachievements")]
                 cheevos,
             );
+            // The script overlay is a distinct concern from the menu/status-bar
+            // chrome `ShellState::render` owns, so it's composited here rather
+            // than folded into that function. Uses an unclipped foreground
+            // layer painter (not `ui`'s own clip rect, which panels above may
+            // have narrowed) so the overlay always covers the full framebuffer
+            // area regardless of which debugger/menu panels are open.
+            #[cfg(feature = "scripting")]
+            draw_script_overlay(ui.ctx(), &info.overlay, fb_dims, screen_size);
         });
         active
             .egui_state
@@ -987,6 +1003,99 @@ impl App {
     }
 }
 
+/// Composite a script's accumulated `emu.drawText`/`drawRect`/`drawPixel`
+/// output over the presented frame, via an unclipped `egui` foreground
+/// layer painter (not a new `wgpu::RenderPipeline` — see `docs/scripting.md`
+/// for the "why piggyback on the existing egui pass" rationale).
+///
+/// `overlay`'s coordinates are declared in emulated-frame pixels
+/// (`0..=fb_dims.0`/`0..=fb_dims.1`). `Gfx::blit`'s base framebuffer draw is
+/// a fullscreen-triangle stretch with no aspect-preserving letterbox (it
+/// samples the active sub-rect across the WHOLE surface, not a centered
+/// sub-region) — so a plain linear `screen / fb` scale, not a letterboxed
+/// one, is what actually keeps the overlay pixel-aligned with the displayed
+/// framebuffer at any window size.
+// Every cast here is `u32`/`i32` -> `f32` screen-space math (well within
+// `f32`'s 23-bit mantissa for any real window/framebuffer size) or an
+// intentional 32-bit-to-8-bit color-channel unpack in `color32_from_packed`
+// below — see `gfx.rs`'s identical `#![allow(...)]` for this crate's
+// established rationale on this exact lint pair.
+#[cfg(feature = "scripting")]
+#[allow(clippy::cast_precision_loss)]
+fn draw_script_overlay(
+    ctx: &egui::Context,
+    overlay: &rusty2600_script::Overlay,
+    fb_dims: (u32, u32),
+    screen_size: (u32, u32),
+) {
+    if overlay.is_empty() {
+        return;
+    }
+    // `.max(1)`: never divide by a zero framebuffer dimension (e.g. before
+    // the first ROM load ever populates `fb_dims`).
+    let scale_x = screen_size.0 as f32 / fb_dims.0.max(1) as f32;
+    let scale_y = screen_size.1 as f32 / fb_dims.1.max(1) as f32;
+
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("rusty2600_script_overlay"),
+    ));
+
+    for r in &overlay.rects {
+        let min = egui::pos2(r.x as f32 * scale_x, r.y as f32 * scale_y);
+        let size = egui::vec2(
+            (r.w as f32 * scale_x).max(1.0),
+            (r.h as f32 * scale_y).max(1.0),
+        );
+        painter.rect_filled(
+            egui::Rect::from_min_size(min, size),
+            0,
+            color32_from_packed(r.color),
+        );
+    }
+    for p in &overlay.pixels {
+        // Drawn as a scaled filled rect, not a single device pixel, so it
+        // stays visible (matches one emulated pixel's on-screen footprint)
+        // at any window size — a literal 1x1 dot would vanish at high scale.
+        let min = egui::pos2(p.x as f32 * scale_x, p.y as f32 * scale_y);
+        let size = egui::vec2(scale_x.max(1.0), scale_y.max(1.0));
+        painter.rect_filled(
+            egui::Rect::from_min_size(min, size),
+            0,
+            color32_from_packed(p.color),
+        );
+    }
+    for t in &overlay.texts {
+        let pos = egui::pos2(t.x as f32 * scale_x, t.y as f32 * scale_y);
+        // `emu.drawText(x, y, text)` has no color parameter (see
+        // `rusty2600-script`'s `TextPrimitive`) and no font-size parameter
+        // either — a fixed white color and a size scaled with the
+        // framebuffer-to-screen ratio (so text stays roughly one
+        // emulated-scanline tall relative to the display) are both
+        // reasonable defaults for an API that doesn't specify either, not a
+        // silent guess at unstated real behavior.
+        let font = egui::FontId::monospace((8.0 * scale_y).max(6.0));
+        painter.text(
+            pos,
+            egui::Align2::LEFT_TOP,
+            &t.text,
+            font,
+            egui::Color32::WHITE,
+        );
+    }
+}
+
+/// Unpack a script primitive's `0xRRGGBB`-packed color into `egui::Color32`.
+// Each shifted-and-masked byte below always fits in a `u8` by construction
+// (an `& 0xFF` per channel would be redundant given the `as u8` truncation
+// already discards everything above bit 7) — same convention this project's
+// other RGB-unpack sites already use (e.g. `rusty2600-mobile`'s `run_frame`).
+#[cfg(feature = "scripting")]
+#[allow(clippy::cast_possible_truncation)]
+const fn color32_from_packed(rgb: u32) -> egui::Color32 {
+    egui::Color32::from_rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1006,5 +1115,85 @@ mod tests {
     fn region_label_round_trips() {
         assert_eq!(Region::Pal.label(), "PAL");
         assert_eq!(Region::Secam.label(), "SECAM");
+    }
+
+    #[cfg(feature = "scripting")]
+    mod script_overlay {
+        use super::*;
+
+        #[test]
+        fn color32_from_packed_unpacks_each_channel() {
+            let c = color32_from_packed(0x11_22_33);
+            assert_eq!((c.r(), c.g(), c.b()), (0x11, 0x22, 0x33));
+        }
+
+        /// The real, GPU-free proof this feature works: build a bare `egui::Context`,
+        /// run one frame calling `draw_script_overlay`, and inspect the resulting
+        /// `FullOutput::shapes` — egui's shape list is a plain data structure,
+        /// constructible and inspectable with no wgpu surface/device involved.
+        #[test]
+        fn overlay_primitives_reach_the_egui_paint_list() {
+            let overlay = rusty2600_script::Overlay {
+                texts: vec![rusty2600_script::TextPrimitive {
+                    x: 4,
+                    y: 8,
+                    text: "hi".to_string(),
+                }],
+                rects: vec![rusty2600_script::RectPrimitive {
+                    x: 0,
+                    y: 0,
+                    w: 10,
+                    h: 10,
+                    color: 0x00_FF_00,
+                }],
+                pixels: vec![rusty2600_script::PixelPrimitive {
+                    x: 1,
+                    y: 1,
+                    color: 0xFF_00_00,
+                }],
+            };
+
+            let ctx = egui::Context::default();
+            let full_output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                draw_script_overlay(ui.ctx(), &overlay, (160, 192), (320, 384));
+            });
+
+            // One rect shape for the `RectPrimitive`, one for the `PixelPrimitive`
+            // (drawn as a scaled filled rect, see `draw_script_overlay`'s doc), and
+            // at least one text-bearing shape for the `TextPrimitive` — confirms all
+            // three primitive kinds actually produced paintable output, not just that
+            // the function ran without panicking.
+            let rect_count = full_output
+                .shapes
+                .iter()
+                .filter(|cs| matches!(cs.shape, egui::Shape::Rect(_)))
+                .count();
+            assert_eq!(
+                rect_count, 2,
+                "expected one rect shape + one pixel-as-rect shape"
+            );
+
+            let has_text = full_output
+                .shapes
+                .iter()
+                .any(|cs| matches!(cs.shape, egui::Shape::Text(_)));
+            assert!(
+                has_text,
+                "expected the drawText primitive to produce a text shape"
+            );
+        }
+
+        #[test]
+        fn empty_overlay_produces_no_shapes() {
+            let overlay = rusty2600_script::Overlay::default();
+            let ctx = egui::Context::default();
+            let full_output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                draw_script_overlay(ui.ctx(), &overlay, (160, 192), (320, 384));
+            });
+            assert!(
+                full_output.shapes.is_empty(),
+                "an empty Overlay must not add any shapes to the paint list"
+            );
+        }
     }
 }

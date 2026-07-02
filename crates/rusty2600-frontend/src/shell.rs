@@ -199,6 +199,14 @@ pub struct ShellInfo {
     /// Whether a Lua script is currently loaded.
     #[cfg(feature = "scripting")]
     pub script_loaded: bool,
+    /// This frame's accumulated `emu.drawText`/`drawRect`/`drawPixel` calls,
+    /// drained from the script engine under the same brief emu lock `debug`/
+    /// `cheevos_hardcore` already use. Composited by `app.rs`'s render pass
+    /// (`draw_script_overlay`), not by `ShellState::render` itself — the
+    /// script overlay is a distinct concern from the menu/status-bar chrome
+    /// this module owns.
+    #[cfg(feature = "scripting")]
+    pub overlay: rusty2600_script::Overlay,
     /// Whether a rollback netplay session is currently active.
     #[cfg(feature = "netplay")]
     pub netplay_active: bool,
