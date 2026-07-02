@@ -107,7 +107,7 @@ look different, they visibly break.
 | **Android** *(v1.11.0)* | A real, tested `rusty2600-mobile` UniFFI bridge crate reused from Kotlin — zero hand-written JNI/`unsafe` (a design win over the original plan). A real Gradle/Kotlin app, **verified running on a real emulator** (booted, installed, launched crash-free, a ROM loaded via the system file picker) |
 | **iOS** *(v1.12.0)* | Reuses the `rusty2600-mobile` bridge unchanged for a SwiftUI app (`ios/`) — genuinely tool-generated Swift bindings, real Metal/AVFoundation source, and a new touch-drag rotary paddle control. This sandbox has no Xcode toolchain, so the build is honestly unverified by compilation; a `v1.12.x` follow-up completes real Xcode/Simulator/device verification |
 | **Manual Save-State Slots** *(v2.4.0)* | `File -> Save State` / `Load State` — 8 numbered slots per ROM, built on the already-real `SaveState` format (ADR 0007). Each ROM's slots are keyed by an FNV-1a hash of its raw bytes, so a slot can never silently load against the wrong cartridge; loading a slot clears the rewind ring so `Rewind` doesn't jump to a pre-load timeline. Native-only for now |
-| **WebAssembly** | The live demo runs via a canvas-2D bootstrap (`wasm-canvas`; real keyboard input + Web Audio API output). *(v2.5.0)* A real `winit`+`wgpu`+`egui` build (`wasm-winit`) — the SAME shell the native binary uses — now compiles cleanly for `wasm32-unknown-unknown` and a real `trunk build` produces a working bundle, but its wgpu rendering step is not yet confirmed working in a real browser (a sandboxed-headless-Chromium-specific GPU-adapter limitation, independently reproduced twice — see `docs/frontend.md`), so `wasm-canvas` stays the deployed build for now. *(v2.8.0)* `wasm-winit` gained an on-screen touch D-pad/fire/console-switch overlay (`View -> Touch overlay`), a Settings panel confirmed structurally wasm32-safe, and real `Config` persistence via `localStorage` (replacing the previous no-op stub) — all shared code, verified via `cargo check`/`clippy --target wasm32-unknown-unknown` + native unit tests for the pure logic, but NOT live-browser-verified for the same reason rendering itself isn't yet |
+| **WebAssembly** | The live demo runs via a canvas-2D bootstrap (`wasm-canvas`; real keyboard input + Web Audio API output). *(v2.5.0)* A real `winit`+`wgpu`+`egui` build (`wasm-winit`) — the SAME shell the native binary uses — now compiles cleanly for `wasm32-unknown-unknown` and a real `trunk build` produces a working bundle, but its wgpu rendering step is not yet confirmed working in a real browser (a sandboxed-headless-Chromium-specific GPU-adapter limitation, independently reproduced twice — see `docs/frontend.md`), so `wasm-canvas` stays the deployed build for now. *(v2.8.0)* `wasm-winit` gained an on-screen touch D-pad/fire/console-switch overlay (`View -> Touch overlay`), a Settings panel confirmed structurally wasm32-safe, and real `Config` persistence via `localStorage` (replacing the previous no-op stub). *(v2.9.0)* A `?settings=` share-link round-trips the whole `Config` (region/video/audio/key bindings) through a hand-rolled, native-unit-tested base64url codec; `debug-hooks` is now confirmed wasm32-safe for `wasm-winit`, giving the CPU/TIA/RIOT/Memory panels (and nearly everything else in the native debugger) a working in-browser counterpart, gated only on TAStudio's native-only "Save branch" file dialog; and a PWA manifest + service worker make whichever build is deployed here installable and offline-capable (the actually-deployed `wasm-canvas` build measures ~324 KiB total; the not-yet-deployed `wasm-winit` build is much larger, ~7+ MiB unoptimized, since `winit`+`wgpu`+`egui` — not the 2600 core — dominate wasm bundle size). All of this is shared code, verified via `cargo check`/`clippy --target wasm32-unknown-unknown` + native unit tests for the pure logic, but NOT live-browser-verified for the same reason rendering itself isn't yet |
 | **`.zip` ROM Loading** *(v2.4.0)* | Both the native `File -> Open ROM` dialog and the wasm demo's file loader can extract a ROM directly from a `.zip` archive (the common ROM-redistribution format) — bounded-read (decompression-bomb guard), never panics on malformed input |
 | **Pure Rust** | `winit` + `wgpu` + `cpal` + `egui` frontend; a safe `no_std + alloc` chip stack behind a one-directional crate graph |
 
@@ -133,8 +133,11 @@ object-ID mask and wired the HD-pack live rendering splice (see the
 HD-Pack Live Rendering row above). `v2.8.0` "Touchpoint" built the first
 wave of `wasm-winit` web parity — an on-screen touch overlay, a
 wasm32-safety review of the Settings panel, and real `localStorage`
-config persistence (see the WebAssembly row above) — see
-[`CHANGELOG.md`](CHANGELOG.md) for exactly what shipped in each release.
+config persistence (see the WebAssembly row above). `v2.9.0` "Full Circle"
+built the second wave — a `?settings=` share-link, a wasm32-safe
+`debug-hooks` debugger overlay, and PWA install/offline support (see the
+WebAssembly row above) — see [`CHANGELOG.md`](CHANGELOG.md) for exactly
+what shipped in each release.
 Open follow-up work (each its own well-scoped future release): real
 Xcode-verified iOS build/run (this sandbox has no Xcode toolchain),
 netplay's WebRTC transport and real cross-NAT verification, DPC+/CDF
@@ -203,7 +206,14 @@ interpreter architecture.
   game's internal input lag, built on the save-state snapshot primitives.
 - **WebAssembly** — a canvas-2D bootstrap with real keyboard input and Web
   Audio API output; native-only features compile out automatically. A full
-  winit+wgpu+egui browser build (matching the native binary) is future work.
+  winit+wgpu+egui browser build (`wasm-winit`, matching the native binary)
+  compiles cleanly and, as of `v2.9.0`, has a wasm32-safe debugger overlay
+  and a `?settings=` share-link; live-browser rendering confirmation and a
+  deployed switch-over remain open (see the WebAssembly feature-matrix row
+  above and `docs/frontend.md`).
+- **PWA install** (`v2.9.0`) — a web-app manifest + service worker
+  (`crates/rusty2600-frontend/web/manifest.json`/`sw.js`) make the deployed
+  wasm demo installable and offline-capable after a first visit.
 
 ---
 

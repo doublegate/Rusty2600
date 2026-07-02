@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Rusty2600 PWA icon source (`[v2.9.0]`). A placeholder, not a logo commission — this project
+    has no dedicated logo/brand asset yet (see `docs/frontend.md`'s wasm-winit status section).
+    Rasterized to `icon-192.png` (`sizes="192x192" purpose="any"`) and `icon-512.png`
+    (`sizes="512x512" purpose="any maskable"`) via `rsvg-convert` for `manifest.json`. Colors
+    match `web/index.html`'s own dark/amber CSS palette (bg/accent/border variables) so the
+    installed-app icon reads as the same product as the page. The joystick glyph + safe interior
+    margin (~10% on every side) keep the important content inside a maskable icon's safe zone.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="96" fill="#181410" />
+  <rect x="16" y="16" width="480" height="480" rx="84" fill="none" stroke="#3a2f22" stroke-width="8" />
+
+  <!-- Joystick base -->
+  <rect x="176" y="336" width="160" height="72" rx="16" fill="#3a2f22" />
+  <rect x="176" y="336" width="160" height="20" rx="10" fill="#e8871e" />
+
+  <!-- Joystick shaft -->
+  <rect x="240" y="176" width="32" height="176" rx="16" fill="#8a5420" />
+
+  <!-- Joystick ball top -->
+  <circle cx="256" cy="160" r="56" fill="#e8871e" />
+  <circle cx="256" cy="160" r="56" fill="none" stroke="#181410" stroke-width="6" />
+
+  <!-- Fire button -->
+  <circle cx="356" cy="372" r="22" fill="#e7ddce" />
+</svg>
