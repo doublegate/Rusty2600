@@ -311,6 +311,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bincode"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd6a120d2e16b3e1b4a24bd70f23b12d3e16b81f113364a26935f8db7245452d"
+
+[[package]]
 name = "bit-set"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1539,7 +1545,7 @@ version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "672a16c1d778ad2d7a6218700ba0863a9e510e9446b08f3644460a9884aed048"
 dependencies = [
- "bincode",
+ "bincode 1.3.3",
  "bitfield-rle",
  "instant",
  "js-sys",
@@ -3787,7 +3793,7 @@ dependencies = [
 name = "rusty2600-netplay"
 version = "2.5.0"
 dependencies = [
- "bincode",
+ "bincode 3.0.0",
  "bytecodec",
  "ggrs",
  "rusty2600-cart",
@@ -4710,7 +4716,7 @@ version = "0.28.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12c65a5b12ec544ef136693af8759fb9d11aefce740fb76916721e876639033b"
 dependencies = [
- "bincode",
+ "bincode 1.3.3",
  "camino",
  "fs-err",
  "once_cell",
