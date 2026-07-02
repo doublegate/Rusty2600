@@ -776,6 +776,7 @@ impl ShellState {
         let dpad_btn = egui::vec2(48.0, 40.0);
         egui::Area::new(egui::Id::new("rusty2600_touch_dpad"))
             .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(16.0, -16.0))
+            .movable(false)
             .show(ctx, |ui| {
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
@@ -796,6 +797,7 @@ impl ShellState {
 
         egui::Area::new(egui::Id::new("rusty2600_touch_fire"))
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0))
+            .movable(false)
             .show(ctx, |ui| {
                 touch_button(
                     ui,
@@ -808,6 +810,7 @@ impl ShellState {
 
         egui::Area::new(egui::Id::new("rusty2600_touch_switches"))
             .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 28.0))
+            .movable(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let sw_btn = egui::vec2(56.0, 28.0);

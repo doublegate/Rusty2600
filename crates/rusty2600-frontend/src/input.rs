@@ -403,9 +403,10 @@ impl TouchButton {
 /// finger-HELD-down model: [`InputState::apply_action`] toggles a latch on every `pressed = true`
 /// call, so naively calling it every single frame a button stays touched (the live "is this
 /// currently held" signal egui gives us) would re-toggle the switch 60+ times a second. Momentary
-/// buttons (joystick directions/fire, Select/Reset) have no such problem — they emit their live
-/// level every frame, exactly matching how a physical key's keydown/keyup events already drive
-/// them one level-change at a time.
+/// buttons (joystick directions/fire, Select/Reset) have no such re-toggle risk, but
+/// [`Self::update`] only emits an edge for them too — on the press and release transitions, not
+/// every frame they stay held — exactly matching how a physical key's keydown/keyup events
+/// already drive them one level-change at a time.
 #[derive(Debug, Default, Clone)]
 pub struct TouchOverlayState {
     held: Vec<TouchButton>,
