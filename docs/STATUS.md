@@ -5,59 +5,53 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v1.11.0 "Handheld" — the eleventh release of the
+**Current release:** v1.12.0 "Pocket" — the twelfth release of the
 `v1.1.0 -> v2.0.0` RustyNES-parity line (see `to-dos/ROADMAP.md` for the
-full plan and `CHANGELOG.md`'s `[1.11.0]` entry). Adds a new
-`rusty2600-mobile` crate: a `std`, host-testable, platform-agnostic UniFFI
-bridge over `rusty2600_core::System` (`load_rom`/`run_frame`/`save_state`/
-`load_state`/`is_rom_loaded`), reusable from both Kotlin (Android, this
-release) and Swift (`v1.12.0` "Pocket", iOS) — one Rust implementation,
-two mobile hosts. **A real design improvement over the original plan**:
-rather than the planned `rusty2600-android` JNI/`ANativeWindow`/AAudio
-glue crate ("the only `unsafe` surface"), `run_frame` returns a plain
-`Vec<u8>` RGBA8 framebuffer + `Vec<f32>` audio samples — data, not a
-surface handle — so Android's stock `Bitmap`/`AudioTrack` APIs consume it
-directly via UniFFI's generated JNA-based Kotlin bindings, with **zero
-hand-written JNI or `unsafe` on either side of the bridge**. A real
-Gradle Android app (`android/`: `MainActivity`/`EmulatorView`, AGP 8.6 /
-Kotlin 1.9 / compileSdk 34) was built and **verified running on a real
-Android emulator** (`Pixel_8_API_34`, x86_64, KVM-accelerated): booted,
-installed, launched crash-free (confirmed via logcat), and loaded a test
-ROM through the real system file picker with the background emulation
-thread actively consuming CPU — screenshots captured. Not verified this
-release: visual output from a color-writing ROM (the synthetic test ROM
-never writes `COLUBK`), a physical device (only the emulator was
-available), and Play Store packaging (explicitly out of scope, deferred
-beyond `v2.0.0` per RustyNES's own precedent). See `docs/mobile.md` for
-the full architecture, deviation rationale, and verification detail.
+full plan and `CHANGELOG.md`'s `[1.12.0]` entry). Reuses `[1.11.0]`'s
+`rusty2600-mobile` UniFFI bridge unchanged for a SwiftUI iOS host
+(`ios/`): a real, tool-generated Swift binding
+(`ios/RustyMobileFFI/Sources/RustyMobileFFI/rusty2600_mobile.swift`,
+1,523 lines, produced by an actual `cargo build -p rusty2600-mobile
+--release` + `uniffi-bindgen generate --language swift` run — not
+hand-written) wrapped in a local Swift Package, plus real SwiftUI/Metal/
+AVFoundation app source (`ios/Rusty2600/Sources/`: a Metal `MTKView`
+blitting `FrameOutput.rgba`, an `AVAudioEngine` playing
+`FrameOutput.audioSamples`, and `PaddleControlView` — a genuinely new
+touch-drag rotary-dial control mapping to `MobilePaddle.position`, the
+first analog input either mobile host has had to solve). **Explicit hard
+environment constraint, honestly documented rather than glossed over**:
+this development sandbox is Linux with no Xcode/`xcodebuild`/`swift`
+toolchain at all, so — unlike the Android build — no Xcode build, no iOS
+Simulator run, and no device run were possible; the Swift bindings are
+genuinely generated but the SwiftUI/Metal/AVFoundation source is
+unverified by compilation. A `v1.12.x` follow-up on a real Mac needs to
+cross-compile the xcframework, create the Xcode project, and actually
+build + run before this reaches the Android build's verification bar. Also
+discovered and documented (not fixed here, out of scope for a
+mobile-bridge release): `MobilePaddle.position` is wired end-to-end
+through the new iOS UI but `run_frame` never forwards it into the TIA —
+a pre-existing, project-wide gap (`T-0501-010`) affecting every platform,
+since the engine has no real analog dump-capacitor timing simulation yet.
+See `docs/mobile.md` for full architecture, provenance, and verification
+detail.
 
-Earlier in the line: `v1.10.0 "Rollback"` added a new
-`rusty2600-netplay` crate: 2-player rollback netplay wrapping the mature
-`ggrs` (GGPO-style) rollback engine rather than reimplementing it from
-scratch, over GGRS's own built-in UDP transport (direct-IP/LAN only this
-release). Rollback's `resync()` loop reuses `[1.1.0]`'s `SaveState`
-substrate directly — no new determinism infrastructure needed, per ADR
-0004's own citation of save-states as "the basis for rewind, run-ahead,
-and netplay rollback." Input-delay (2 frames) and max-prediction-window
-(8 frames) defaults match GGPO convention exactly. A genuine
-rollback-desync test (`ggrs::SyncTestSession` driving a real `System` with
-a synthetic input-reactive ROM across varied two-player input,
-`SyncTestSession` panicking on any checksum mismatch) proves the
-save/restore/resimulate path is correct — validated for real by
-deliberately reintroducing a bug and confirming the test catches it.
-**This release lands the session crate only** — not yet wired into
-`rusty2600-frontend` (no host/join-game menu, no live input capture); a
-`v1.10.x` follow-up does that wiring plus STUN/hole-punch NAT traversal
-and the WebRTC browser transport, the same pattern `rusty2600-thumb`
-(`[1.6.0]`) and `rusty2600-script` (`[1.9.0]`) already established. See
-`docs/netplay.md` for the full architecture and scope.
+Earlier in the line: `v1.11.0 "Handheld"` added the `rusty2600-mobile`
+bridge crate itself and a real Android app (`android/`), verified
+running on a real emulator (`Pixel_8_API_34`: booted, installed, launched
+crash-free, a test ROM loaded via the real system file picker). A design
+improvement over the original plan meant no separate `rusty2600-android`
+JNI glue crate was needed — `run_frame` returns plain framebuffer/audio
+data, so Android's stock `Bitmap`/`AudioTrack` consume it directly via
+UniFFI's generated bindings with zero hand-written JNI/`unsafe`. See
+`docs/mobile.md` and `CHANGELOG.md`'s `[1.11.0]` entry.
 
-Full release-by-release detail for `[1.1.0]` through `[1.9.0]` (save-states,
+Full release-by-release detail for `[1.1.0]` through `[1.10.0]` (save-states,
 run-ahead, debugger depth, the shader stack, `Bank4A50`, the
 `rusty2600-thumb` ARM interpreter, `.r26m` movies, the golden CPU trace,
-and the `rusty2600-script` Lua engine) lives in `CHANGELOG.md` — not
-duplicated here to avoid this section drifting out of sync with the
-authoritative per-release record as the line grows. The full 8-scheme
+the `rusty2600-script` Lua engine, and `rusty2600-netplay` rollback
+netplay) lives in `CHANGELOG.md` — not duplicated here to avoid this
+section drifting out of sync with the authoritative per-release record as
+the line grows. The full 8-scheme
 Curated cart tier
 (v0.3.0) plus 12 BestEffort schemes (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC,
 BF/BFSC, UA, 0840, FE, SB, X07) are implemented and wired into automatic

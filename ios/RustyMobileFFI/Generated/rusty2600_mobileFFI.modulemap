@@ -1,0 +1,4 @@
+module rusty2600_mobileFFI {
+    header "rusty2600_mobileFFI.h"
+    export *
+}

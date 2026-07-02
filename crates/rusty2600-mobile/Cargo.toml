@@ -1,6 +1,6 @@
 [package]
 name = "rusty2600-mobile"
-version = "1.11.0"
+version = "1.12.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -25,8 +25,8 @@ required-features = ["bindgen"]
 bindgen = ["uniffi/cli"]
 
 [dependencies]
-rusty2600-core = { path = "../rusty2600-core", version = "1.11.0" }
-rusty2600-cart = { path = "../rusty2600-cart", version = "1.11.0" }
+rusty2600-core = { path = "../rusty2600-core", version = "1.12.0" }
+rusty2600-cart = { path = "../rusty2600-cart", version = "1.12.0" }
 uniffi = "0.28"
 thiserror = "2.0"
 

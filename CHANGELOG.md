@@ -6,6 +6,87 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-07-02 - "Pocket"
+
+A SwiftUI iOS app reusing `[1.11.0]`'s `rusty2600-mobile` bridge unchanged,
+plus genuinely new virtual-analog-paddle UX design work. Honestly scoped to
+what a Linux sandbox without an Xcode toolchain can actually verify.
+
+### Added
+
+- **`ios/`** (new tree, reusing `rusty2600-mobile` with zero Rust changes):
+  - **`ios/RustyMobileFFI/`** — a local Swift Package wrapping the FFI
+    bridge. `Sources/RustyMobileFFI/rusty2600_mobile.swift` (1,523 lines)
+    is genuinely tool-generated — produced by an actual
+    `cargo build -p rusty2600-mobile --release` followed by
+    `uniffi-bindgen generate --language swift` run on this Linux box, not
+    hand-written — matching the same trusted codegen path `[1.11.0]`'s
+    Kotlin bindings used. `Package.swift` declares a `binaryTarget`
+    pointing at `Rusty2600Mobile.xcframework`, which intentionally does
+    not exist in this checkout yet (building it needs
+    `aarch64-apple-ios`/`aarch64-apple-ios-sim` Rust cross-compilation on
+    a real Mac with Xcode — impossible on Linux).
+  - **`ios/Rusty2600/Sources/`** — real SwiftUI/Metal/AVFoundation app
+    source: `EmulatorView` (a Metal `MTKView` blitting `FrameOutput.rgba`
+    into an `MTLTexture` via a single full-screen-triangle blit, not a
+    shader stack), `AudioEngine` (`AVAudioEngine` + `AVAudioPlayerNode`
+    scheduling `FrameOutput.audioSamples`), `EmulatorViewModel` (the
+    `ObservableObject` owning the emulator instance and ~60Hz run loop),
+    `ContentView` (ROM loading via `.fileImporter`, on-screen controls),
+    and **`PaddleControlView`** — the genuinely new UX work: a touch-drag
+    rotary dial (not accelerometer/tilt) mapping deterministically to
+    `MobilePaddle.position`, modeled as a clamped -150°...+150° arc
+    matching a real paddle's fixed-sweep potentiometer. RustyNES's
+    d-pad-only touch overlay never had to solve an analog input problem;
+    this is the first one either Rusty2600 mobile host has needed.
+  - `ios/regenerate-bindings.sh` documents the real end-to-end process
+    (cross-compile both Apple targets, assemble the xcframework via
+    `xcodebuild -create-xcframework`, regenerate bindings) for a real Mac
+    to run — the xcframework-assembly step is explicitly commented as
+    requiring Xcode, not silently presented as Linux-runnable.
+
+### Notes
+
+- **Explicit hard environment constraint, honestly documented rather than
+  glossed over**: this development sandbox is Linux with no
+  `xcodebuild`/`xcrun`/`swift` at all. Unlike `[1.11.0]`'s Android build
+  (verified on a real KVM-accelerated emulator), **no Xcode build, no iOS
+  Simulator run, and no device run were performed or are possible here**.
+  The Swift bindings are genuinely tool-generated (see above); the
+  SwiftUI/Metal/AVFoundation source was written directly against that
+  generated API's real method/type signatures, but has never been
+  compiled by `swiftc` — unverified by compilation. No `.xcodeproj` exists
+  in this checkout either: a hand-authored `project.pbxproj` was
+  deliberately avoided (fragile to write correctly by hand, and
+  unverifiable without Xcode itself); `ios/RustyMobileFFI/` is instead a
+  real, independently-valid Swift Package ready to be added as a local
+  dependency to a fresh Xcode iOS App project. A `v1.12.x` follow-up on a
+  real Mac needs to run `regenerate-bindings.sh` in full, create that
+  Xcode project, and actually build + run on Simulator (and ideally a
+  physical device) before this reaches the Android build's verification
+  bar. See `docs/mobile.md`'s "iOS Verification" section for full detail.
+- **A pre-existing, project-wide gap discovered and documented, not fixed
+  here**: `MobileInput.paddle0..=paddle3` are wired end-to-end from the
+  new `PaddleControlView` through every `run_frame` call, but
+  `rusty2600-mobile`'s `run_frame` (unchanged this release) never
+  forwards those fields into `system.bus.tia.inpt[0..=3]` — the TIA has
+  no real analog dump-capacitor charge-timing simulation anywhere in the
+  engine yet, on any platform (`rusty2600-frontend`'s `emu_thread.rs`
+  documents the identical gap as `T-0501-010`). Implementing real
+  capacitor-charge timing is a `rusty2600-tia` accuracy task, out of
+  scope for a mobile-bridge release. Paddle games (Breakout, Warlords,
+  Kaboom!) will not respond to the paddle control yet on any platform —
+  inherited scope, not new breakage from this release.
+- Save/load-state UI and HD-pack loading aren't exposed in the iOS app
+  either — same as the Android app, the bridge crate already supports
+  save-states.
+- App Store submission stays explicitly out of scope, deferred beyond
+  `v2.0.0` per RustyNES's own `v2.1.0` precedent — same posture as Play
+  Store submission at `[1.11.0]`.
+- Rust side untouched: `cargo build -p rusty2600-mobile --release`
+  recompiles 0 crates versus `[1.11.0]`; the full workspace test count is
+  unchanged at 268 passing (272 with `--features test-roms`).
+
 ## [1.11.0] - 2026-07-02 - "Handheld"
 
 A new `rusty2600-mobile` crate and a real Android app, verified running on

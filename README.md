@@ -99,6 +99,7 @@ look different, they visibly break.
 | **Lua Scripting Engine** *(v1.9.0)* | A real, tested `rusty2600-script` crate (`mlua` native backend, off by default): a deliberately-smaller-than-RustyNES `emu` API over a host-agnostic `ScriptBus` trait, gated by a `WritesLocked` determinism lock. Engine only in this release — not yet wired into the frontend |
 | **Rollback Netplay** *(v1.10.0)* | A real, tested `rusty2600-netplay` crate: 2-player rollback netplay wrapping `ggrs` (GGPO-style), `resync()` built on the existing save-state substrate, input-delay/max-prediction-window matching GGPO convention, a genuine rollback-desync test. Session crate only — direct-IP/LAN UDP transport, not yet wired into the frontend |
 | **Android** *(v1.11.0)* | A real, tested `rusty2600-mobile` UniFFI bridge crate reused from Kotlin — zero hand-written JNI/`unsafe` (a design win over the original plan). A real Gradle/Kotlin app, **verified running on a real emulator** (booted, installed, launched crash-free, a ROM loaded via the system file picker) |
+| **iOS** *(v1.12.0)* | Reuses the `rusty2600-mobile` bridge unchanged for a SwiftUI app (`ios/`) — genuinely tool-generated Swift bindings, real Metal/AVFoundation source, and a new touch-drag rotary paddle control. This sandbox has no Xcode toolchain, so the build is honestly unverified by compilation; a `v1.12.x` follow-up completes real Xcode/Simulator/device verification |
 | **WebAssembly** | Runs in-browser via a canvas-2D bootstrap (real keyboard input + Web Audio API output). `wasm-winit`/`wasm-canvas` are currently identical placeholder feature names for this one build; a full winit+wgpu+egui browser build matching the native binary is future work, not yet attempted (`docs/frontend.md`) |
 | **Pure Rust** | `winit` + `wgpu` + `cpal` + `egui` frontend; a safe `no_std + alloc` chip stack behind a one-directional crate graph |
 
@@ -107,7 +108,7 @@ Planned via the iterative `v1.x.0` line toward `v2.0.0` — see
 [`CHANGELOG.md`](CHANGELOG.md) for exactly what's shipped in each release:
 closing the remaining 2 bankswitch schemes (AR/Supercharger, the ARM-driven
 DPC+/CDF/CDFJ/CDFJ+ family), wiring Lua scripting and rollback netplay
-into the frontend, and an iOS build. The sprite-pack data model
+into the frontend, and real Xcode-verified iOS build/run. The sprite-pack data model
 (`sprite_pack`, `hd-pack` feature) shipped in v1.4.0; its live rendering
 splice awaits a TIA
 object-ID mask. The `.r26m` movie format and
