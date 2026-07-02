@@ -249,6 +249,16 @@ impl ScriptState {
     pub fn take_overlay(&self) -> Overlay {
         self.engine.take_overlay()
     }
+
+    /// This script's captured `print()`/error output so far, for the
+    /// debugger's Lua console panel (`crate::debugger::lua_console_panel`).
+    ///
+    /// Unlike [`Self::take_overlay`], this is a persistent history that
+    /// isn't drained on read — see `rusty2600_script::log`'s module doc.
+    #[must_use]
+    pub fn log(&self) -> std::rc::Rc<std::cell::RefCell<rusty2600_script::ScriptLog>> {
+        self.engine.log()
+    }
 }
 
 fn apply_joystick_override(input: &mut InputState, overrides: &[JoystickOverride; 2]) {

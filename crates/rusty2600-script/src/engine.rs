@@ -8,6 +8,7 @@ use mlua::Lua;
 
 use crate::bus::{JoyDirection, ScriptBus};
 use crate::lock::WritesLocked;
+use crate::log::{LogLine, ScriptLog};
 use crate::overlay::{Overlay, PixelPrimitive, RectPrimitive, TextPrimitive};
 
 /// A loaded Lua script bound to a [`ScriptBus`] host.
@@ -21,6 +22,7 @@ pub struct ScriptEngine<B: ScriptBus + 'static> {
     locked: Rc<Cell<WritesLocked>>,
     overlay: Rc<RefCell<Overlay>>,
     on_frame: Rc<RefCell<Option<mlua::RegistryKey>>>,
+    log: Rc<RefCell<ScriptLog>>,
 }
 
 /// Returns the standard "writes are locked" runtime error for `name`
@@ -192,6 +194,60 @@ impl<B: ScriptBus + 'static> ScriptEngine<B> {
         }
     }
 
+    /// Overrides Lua's default global `print` to route into `log` instead.
+    ///
+    /// Lua's real `print` would otherwise write to the process's real
+    /// stdout, invisible in a GUI app. Matches real Lua `print` semantics:
+    /// each argument is stringified via the global `tostring` (so a table
+    /// with a `__tostring` metamethod still formats correctly, not just
+    /// primitives) and joined with tabs — a script's existing debug
+    /// `print`s read exactly the same here as they would on a real stdout.
+    /// `tostring` is looked up fresh on EVERY call (not captured once at
+    /// install time): real Lua's `print` re-resolves the global `tostring`
+    /// each call too, so a script that later overrides `tostring` still
+    /// sees that override reflected in `print`'s output.
+    fn install_print(lua: &Lua, log: &Rc<RefCell<ScriptLog>>) -> mlua::Result<()> {
+        let log = Rc::clone(log);
+        lua.globals().set(
+            "print",
+            lua.create_function_mut(move |lua, args: mlua::Variadic<mlua::Value>| {
+                let tostring: mlua::Function = lua.globals().get("tostring")?;
+                let mut parts = Vec::with_capacity(args.len());
+                for arg in args {
+                    let s: String = tostring.call(arg)?;
+                    parts.push(s);
+                }
+                log.borrow_mut().push(LogLine::Print(parts.join("\t")));
+                Ok(())
+            })?,
+        )
+    }
+
+    /// Appends a runtime-error line to `log`.
+    ///
+    /// [`Self::tick_frame`] already calls this itself when the script's
+    /// `onFrame` raises, so a host does NOT need to call this again after a
+    /// `tick_frame` error — doing so would double-log the same error. This
+    /// is exposed as a public method for a host to log its OWN
+    /// script-related errors (e.g. a load failure) into the same console a
+    /// script's own `print`/runtime-error output already shows up in.
+    pub fn log_error(&self, message: &str) {
+        self.log
+            .borrow_mut()
+            .push(LogLine::Error(message.to_string()));
+    }
+
+    /// This script's captured `print()`/error output so far, oldest-first,
+    /// for a debugger console panel to render.
+    ///
+    /// Read-only: unlike [`Self::take_overlay`], the log is a persistent
+    /// history the host doesn't drain every frame (see `log.rs`'s module
+    /// doc for why).
+    #[must_use]
+    pub fn log(&self) -> Rc<RefCell<ScriptLog>> {
+        Rc::clone(&self.log)
+    }
+
     fn install_pause_and_state(
         lua: &Lua,
         emu: &mlua::Table,
@@ -243,6 +299,7 @@ impl<B: ScriptBus + 'static> ScriptEngine<B> {
         let locked = Rc::new(Cell::new(WritesLocked::default()));
         let overlay = Rc::new(RefCell::new(Overlay::default()));
         let on_frame: Rc<RefCell<Option<mlua::RegistryKey>>> = Rc::new(RefCell::new(None));
+        let log = Rc::new(RefCell::new(ScriptLog::default()));
 
         let emu = lua.create_table()?;
         Self::install_peek(&lua, &emu, &bus)?;
@@ -254,6 +311,7 @@ impl<B: ScriptBus + 'static> ScriptEngine<B> {
         Self::install_draw_fns(&lua, &emu, &overlay)?;
         Self::install_pause_and_state(&lua, &emu, &bus)?;
         lua.globals().set("emu", emu)?;
+        Self::install_print(&lua, &log)?;
 
         Ok(Self {
             lua,
@@ -261,6 +319,7 @@ impl<B: ScriptBus + 'static> ScriptEngine<B> {
             locked,
             overlay,
             on_frame,
+            log,
         })
     }
 
@@ -292,11 +351,19 @@ impl<B: ScriptBus + 'static> ScriptEngine<B> {
     /// # Errors
     ///
     /// Returns an `mlua::Error` if the registered callback itself errors.
+    ///
+    /// A runtime error is also appended to [`Self::log`] as an
+    /// [`LogLine::Error`] before being returned, so a debugger console
+    /// panel shows it even if the caller only logs the returned `Err` via
+    /// `log::warn!` (or ignores it) rather than surfacing it itself.
     pub fn tick_frame(&self) -> mlua::Result<()> {
         let key = self.on_frame.borrow();
         if let Some(key) = key.as_ref() {
             let f: mlua::Function = self.lua.registry_value(key)?;
-            f.call::<()>(())?;
+            if let Err(e) = f.call::<()>(()) {
+                self.log_error(&e.to_string());
+                return Err(e);
+            }
         }
         Ok(())
     }
@@ -554,5 +621,57 @@ mod tests {
         // Taking the overlay clears it for the next frame.
         let overlay2 = engine.take_overlay();
         assert!(overlay2.is_empty());
+    }
+
+    #[test]
+    fn print_is_captured_into_the_log_instead_of_real_stdout() {
+        let engine = ScriptEngine::new(MockBus::default()).unwrap();
+        engine.load(r#"print("hello", "world")"#).unwrap();
+        let log = engine.log();
+        let log = log.borrow();
+        assert_eq!(log.lines().len(), 1);
+        assert!(!log.lines()[0].is_error());
+        // Real Lua `print` tab-joins its arguments.
+        assert_eq!(log.lines()[0].text(), "hello\tworld");
+    }
+
+    #[test]
+    fn print_stringifies_non_string_arguments_like_real_lua() {
+        let engine = ScriptEngine::new(MockBus::default()).unwrap();
+        engine.load("print(42, true, nil)").unwrap();
+        let log = engine.log();
+        let log = log.borrow();
+        assert_eq!(log.lines()[0].text(), "42\ttrue\tnil");
+    }
+
+    #[test]
+    fn on_frame_error_is_captured_as_an_error_line_and_still_returned() {
+        let engine = ScriptEngine::new(MockBus::default()).unwrap();
+        engine
+            .load(r#"emu.onFrame(function() error("boom") end)"#)
+            .unwrap();
+        let err = engine.tick_frame().unwrap_err();
+        assert!(err.to_string().contains("boom"));
+
+        let log = engine.log();
+        let log = log.borrow();
+        assert_eq!(log.lines().len(), 1);
+        assert!(log.lines()[0].is_error());
+        assert!(log.lines()[0].text().contains("boom"));
+    }
+
+    #[test]
+    fn log_error_and_print_share_one_ordered_history() {
+        let engine = ScriptEngine::new(MockBus::default()).unwrap();
+        engine.load(r#"print("before")"#).unwrap();
+        engine.log_error("manual error");
+        engine.load(r#"print("after")"#).unwrap();
+
+        let log = engine.log();
+        let log = log.borrow();
+        assert_eq!(log.lines().len(), 3);
+        assert_eq!(log.lines()[0].text(), "before");
+        assert!(log.lines()[1].is_error());
+        assert_eq!(log.lines()[2].text(), "after");
     }
 }

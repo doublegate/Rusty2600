@@ -228,6 +228,10 @@ pub enum DebugPanel {
     /// presence, recent unlocks (`T-0802-005`).
     #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
     Cheevos,
+    /// A loaded Lua script's captured `print()`/error output
+    /// (`lua_console_panel`, `[2.5.0]`).
+    #[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))]
+    LuaConsole,
 }
 
 /// Persistent shell UI toggles (which panels are open, theme, status). Separate from the emulator
@@ -376,6 +380,9 @@ impl ShellState {
         cfg: &mut Config,
         #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
         cheevos: &mut crate::cheevos::CheevosState,
+        #[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))] script: Option<
+            &crate::scripting::ScriptState,
+        >,
     ) -> Vec<MenuAction> {
         let mut actions = Vec::new();
         let ctx = root_ui.ctx().clone();
@@ -593,6 +600,8 @@ impl ShellState {
                 &mut actions,
                 #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
                 cheevos,
+                #[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))]
+                script,
             );
         }
         #[cfg(feature = "netplay")]
@@ -821,6 +830,9 @@ impl ShellState {
         >,
         #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
         cheevos: &mut crate::cheevos::CheevosState,
+        #[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))] script: Option<
+            &crate::scripting::ScriptState,
+        >,
     ) {
         let mut open = self.debugger_visible;
         egui::Window::new("Debugger")
@@ -841,6 +853,8 @@ impl ShellState {
                     ui.selectable_value(&mut self.panel, DebugPanel::MemoryCompare, "Compare");
                     #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
                     ui.selectable_value(&mut self.panel, DebugPanel::Cheevos, "Cheevos");
+                    #[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))]
+                    ui.selectable_value(&mut self.panel, DebugPanel::LuaConsole, "Lua Console");
                 });
                 ui.separator();
 
@@ -916,6 +930,12 @@ impl ShellState {
                         #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
                         DebugPanel::Cheevos => {
                             crate::debugger::cheevos_panel::render_cheevos_panel(ui, cheevos);
+                        }
+                        #[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))]
+                        DebugPanel::LuaConsole => {
+                            crate::debugger::lua_console_panel::render_lua_console_panel(
+                                ui, script,
+                            );
                         }
                     }
                     for action in debug_actions {

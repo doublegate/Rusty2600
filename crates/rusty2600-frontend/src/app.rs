@@ -1,11 +1,17 @@
 //! The winit [`ApplicationHandler`] that drives the always-on egui shell, the framebuffer present
 //! path, the emulator, and audio.
 //!
-//! Native only (the wasm path lives in `wasm.rs`). The structure is the RustyNES `app.rs`,
-//! distilled to the load-bearing flow:
+//! Native, or wasm32 with the real `wasm-winit` build (v2.5.0; the fallback bootstrap lives in
+//! `wasm.rs`'s `run_canvas`). The structure is the RustyNES `app.rs`, distilled to the load-bearing
+//! flow:
 //!
 //! 1. `resumed()` (the winit 0.30 idiom) creates the window + [`Gfx`] + the egui integration and
-//!    powers on the [`EmuCore`].
+//!    powers on the [`EmuCore`]. On native this is fully synchronous; on wasm32, `Gfx::new_async`'s
+//!    adapter/device acquisition can't block the browser's single JS thread (`pollster::block_on`
+//!    would hang), so it runs inside a `wasm_bindgen_futures::spawn_local` task that writes the
+//!    finished `Active` into `App::active` once ready — see `resumed`'s wasm branch. Every
+//!    OTHER `ApplicationHandler` method treats a still-`None` `active` as "not ready yet" and
+//!    no-ops, exactly like the native "not yet resumed" case already had to handle.
 //! 2. `window_event()` feeds input to egui, late-latches the host input into the
 //!    [`crate::input::InputState`], and on `RedrawRequested` runs one render:
 //!    - step one frame + copy the framebuffer out under a BRIEF emu lock, then DROP the lock;
@@ -15,8 +21,20 @@
 //!    - dispatch the collected actions AFTER the egui pass.
 //!
 //! The frontend owns pacing + run-ahead; the core never sees wall-clock time (determinism).
+//!
+//! ## wasm32 (`wasm-winit`) status — see `docs/frontend.md` for the authoritative version
+//!
+//! `emu-thread`/`debug-hooks`/`retroachievements`/`scripting`/`netplay` are NOT wasm-safe and must
+//! stay off for this build (see `Cargo.toml`'s doc comments) — this file's `#[cfg(feature = ...)]`
+//! blocks for those simply don't compile in. `MenuAction::OpenRom` and `SaveConfig`/`SetRegion`'s
+//! `Config::save()` call are handled with wasm-specific paths (see their dispatch arms and
+//! `config.rs`'s wasm `save()` stub) since `rfd`/`directories` aren't available on this target.
 
+use std::cell::RefCell;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
+use std::rc::Rc;
+#[cfg(feature = "emu-thread")]
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -25,12 +43,23 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::cli::Cli;
 use crate::config::Config;
 use crate::emu_thread::EmuCore;
 use crate::gfx::Gfx;
 use crate::input::InputState;
 use crate::shell::{ConsoleSwitchAction, MenuAction, ShellInfo, ShellState};
+
+// wasm32: bytes staged by the hidden `<input type=file>`'s `onchange` handler
+// (`App::trigger_wasm_rom_picker`), drained once per frame by `App::render` — see both for why
+// this can't just write directly into a live `Active`/`EmuCore` (the callback fires from a
+// detached JS event, with no `&mut Active` in scope).
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static PENDING_ROM: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
+    static ROM_INPUT: RefCell<Option<web_sys::HtmlInputElement>> = const { RefCell::new(None) };
+}
 
 /// The live application state, constructed in `resumed()` (the winit 0.30 idiom — a window cannot
 /// be created before the event loop resumes).
@@ -50,7 +79,9 @@ struct Active {
     config: Config,
     /// Whether the window is currently fullscreen (toggled from the View menu).
     fullscreen: bool,
-    /// The running audio output stream (keeps the cpal device alive).
+    /// The running audio output stream (keeps the cpal device alive). Native-only — see
+    /// `emu_thread.rs`'s `audio_tx` doc comment for why wasm-winit has no audio yet.
+    #[cfg(not(target_arch = "wasm32"))]
     #[allow(dead_code)]
     audio_out: Option<crate::audio::AudioOutput>,
     /// Wall-clock deadline for the next emulated frame. `about_to_wait` requests a
@@ -66,7 +97,7 @@ struct Active {
     /// thread owns stepping, ITS run loop paces via the audio ring buffer's fill
     /// ratio instead (see `emu_thread.rs`'s spawned closure).
     #[cfg(not(feature = "emu-thread"))]
-    next_step_at: std::time::Instant,
+    next_step_at: web_time::Instant,
 
     #[cfg(feature = "emu-thread")]
     shared_input: Arc<crate::emu_thread::SharedInput>,
@@ -92,7 +123,7 @@ struct Active {
     last_frame: Vec<u8>,
 
     /// Timestamp of the previous render pass, for the smoothed FPS estimate.
-    last_render_at: std::time::Instant,
+    last_render_at: web_time::Instant,
     /// An exponential-moving-average FPS estimate shown in the status bar
     /// (`ShellInfo::fps`) — measures actual render-pass cadence, not the
     /// emulator's internal frame-production rate, so it reflects what the
@@ -119,44 +150,84 @@ struct Active {
 }
 
 /// The app: holds the config + the deferred ROM path until `resumed()` builds `Active`.
+///
+/// `active` is a shared cell (not a plain `Option`) so the wasm32 build can populate it from a
+/// detached `wasm_bindgen_futures::spawn_local` task — see this module's wasm32 doc section above.
+/// `Rc<RefCell<_>>` (not `Arc<Mutex<_>>`) is deliberate: both targets drive every
+/// `ApplicationHandler` callback on one thread (native: the winit/main thread; wasm32: the single
+/// browser JS thread), so there is never real concurrent access, and `Rc`/`RefCell` are cheaper.
 pub struct App {
     config: Config,
+    #[cfg(not(target_arch = "wasm32"))]
     pending_rom: Option<PathBuf>,
     seed: u64,
-    active: Option<Active>,
+    active: Rc<RefCell<Option<Active>>>,
 }
 
 impl App {
     /// Create the app from parsed CLI options + a loaded config. The window + emulator are built
-    /// when the event loop resumes.
+    /// when the event loop resumes. Native-only (`Cli` doesn't exist on wasm32 — use
+    /// [`Self::with_config`] there).
+    #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub fn new(cli: &Cli) -> Self {
         Self {
             config: Config::load(),
             pending_rom: cli.rom.clone(),
             seed: 0,
-            active: None,
+            active: Rc::new(RefCell::new(None)),
         }
     }
 
-    /// Create the app with an explicit config + optional ROM (used by `main.rs`).
+    /// Create the app with an explicit config + optional ROM (used by `main.rs` natively; the
+    /// wasm32 `wasm-winit` entry point (`wasm.rs::run_winit`) calls this with `Config::default()`
+    /// and `rom: None` — the wasm32 target has no `pending_rom` field at all, see below).
+    #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
-    pub const fn with_config(config: Config, rom: Option<PathBuf>) -> Self {
+    pub fn with_config(config: Config, rom: Option<PathBuf>) -> Self {
         Self {
             config,
             pending_rom: rom,
             seed: 0,
-            active: None,
+            active: Rc::new(RefCell::new(None)),
         }
     }
 
-    /// Run the native event loop to completion.
+    /// wasm32's `with_config` — no `pending_rom`/`PathBuf` on this target (ROM loading is
+    /// browser-file-input-driven, wired in `resumed()`'s wasm branch, not a startup CLI path).
+    #[cfg(target_arch = "wasm32")]
+    #[must_use]
+    pub fn with_config(config: Config) -> Self {
+        Self {
+            config,
+            seed: 0,
+            active: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    /// Run the native event loop to completion (blocking).
     ///
     /// # Errors
     /// Returns any [`winit::error::EventLoopError`] from creating or running the loop.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn run(mut self) -> Result<(), winit::error::EventLoopError> {
         let event_loop = EventLoop::new()?;
         event_loop.run_app(&mut self)
+    }
+
+    /// Run the wasm32 event loop. Unlike [`Self::run`], this returns immediately — the browser's
+    /// single JS thread can't block on a `run_app`-style loop, so winit drives events via its own
+    /// internal `requestAnimationFrame`/task-scheduler loop instead (`EventLoopExtWebSys::
+    /// spawn_app`).
+    ///
+    /// # Errors
+    /// Returns any [`winit::error::EventLoopError`] from creating the event loop.
+    #[cfg(target_arch = "wasm32")]
+    pub fn run(self) -> Result<(), winit::error::EventLoopError> {
+        use winit::platform::web::EventLoopExtWebSys;
+        let event_loop = EventLoop::new()?;
+        event_loop.spawn_app(self);
+        Ok(())
     }
 }
 
@@ -165,175 +236,225 @@ impl ApplicationHandler for App {
     // it apart would scatter tightly-sequenced init steps with no real reuse benefit.
     #[allow(clippy::too_many_lines)]
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.active.is_some() {
+        if self.active.borrow().is_some() {
             return; // already initialized (e.g. resumed after suspend)
         }
-        let attrs = Window::default_attributes()
+        #[allow(unused_mut)]
+        let mut attrs = Window::default_attributes()
             .with_title("Rusty2600")
             .with_inner_size(winit::dpi::LogicalSize::new(640.0, 480.0));
+        // wasm32: let winit create its own `<canvas>` and auto-insert it into the page (simpler
+        // and less error-prone than pre-declaring one in `index.html` and wiring it up by ID).
+        #[cfg(target_arch = "wasm32")]
+        {
+            use winit::platform::web::WindowAttributesExtWebSys;
+            attrs = attrs.with_append(true);
+        }
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                eprintln!("rusty2600: failed to create window: {e}");
-                event_loop.exit();
-                return;
-            }
-        };
-        let gfx = match Gfx::new(Arc::clone(&window), &self.config.video.present_mode) {
-            Ok(g) => g,
-            Err(e) => {
-                eprintln!("rusty2600: wgpu init failed: {e}");
+                Self::log_error(&format!("failed to create window: {e}"));
                 event_loop.exit();
                 return;
             }
         };
 
-        let egui_ctx = egui::Context::default();
-        let egui_state = egui_winit::State::new(
-            egui_ctx.clone(),
-            egui_ctx.viewport_id(),
-            &window,
-            None,
-            None,
-            None,
-        );
-        let egui_renderer = egui_wgpu::Renderer::new(
-            &gfx.device,
-            gfx.config.format,
-            egui_wgpu::RendererOptions::default(),
-        );
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let gfx = match Gfx::new(Arc::clone(&window), &self.config.video.present_mode) {
+                Ok(g) => g,
+                Err(e) => {
+                    eprintln!("rusty2600: wgpu init failed: {e}");
+                    event_loop.exit();
+                    return;
+                }
+            };
+            let (egui_ctx, egui_state, egui_renderer) = Self::build_egui(&gfx, &window);
 
-        // Power on the emulator at the configured region.
-        let mut emu = EmuCore::new(self.seed);
-        emu.region = self.config.region;
-        #[cfg(feature = "retroachievements")]
-        let mut cheevos = crate::cheevos::CheevosState::default();
-        if let Some(path) = self.pending_rom.take() {
-            match std::fs::read(&path) {
-                Ok(raw_bytes) => {
-                    let filename = path.file_name().map_or_else(
-                        || path.display().to_string(),
-                        |n| n.to_string_lossy().into_owned(),
-                    );
-                    let extracted = if crate::rom_archive::looks_like_zip(&filename) {
-                        crate::rom_archive::extract_first_rom(&raw_bytes)
-                    } else {
-                        Ok((raw_bytes, filename))
-                    };
-                    match extracted {
-                        Ok((bytes, _entry_name)) => {
-                            if let Err(e) = emu.load_rom(&bytes) {
-                                eprintln!("rusty2600: failed to load {}: {e}", path.display());
-                            } else {
-                                #[cfg(feature = "retroachievements")]
-                                cheevos.load_rom(&bytes);
+            // Power on the emulator at the configured region.
+            let mut emu = EmuCore::new(self.seed);
+            emu.region = self.config.region;
+            #[cfg(feature = "retroachievements")]
+            let mut cheevos = crate::cheevos::CheevosState::default();
+            if let Some(path) = self.pending_rom.take() {
+                match std::fs::read(&path) {
+                    Ok(raw_bytes) => {
+                        let filename = path.file_name().map_or_else(
+                            || path.display().to_string(),
+                            |n| n.to_string_lossy().into_owned(),
+                        );
+                        let extracted = if crate::rom_archive::looks_like_zip(&filename) {
+                            crate::rom_archive::extract_first_rom(&raw_bytes)
+                        } else {
+                            Ok((raw_bytes, filename))
+                        };
+                        match extracted {
+                            Ok((bytes, _entry_name)) => {
+                                if let Err(e) = emu.load_rom(&bytes) {
+                                    eprintln!("rusty2600: failed to load {}: {e}", path.display());
+                                } else {
+                                    #[cfg(feature = "retroachievements")]
+                                    cheevos.load_rom(&bytes);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "rusty2600: failed to extract a ROM from {}: {e}",
+                                    path.display()
+                                );
                             }
                         }
-                        Err(e) => {
-                            eprintln!(
-                                "rusty2600: failed to extract a ROM from {}: {e}",
-                                path.display()
-                            );
-                        }
                     }
+                    Err(e) => eprintln!("rusty2600: cannot read {}: {e}", path.display()),
                 }
-                Err(e) => eprintln!("rusty2600: cannot read {}: {e}", path.display()),
             }
+
+            let (audio_out, audio_tx) = match crate::audio::AudioOutput::new() {
+                Ok(pair) => (Some(pair.0), Some(pair.1)),
+                Err(e) => {
+                    eprintln!("rusty2600: failed to start audio: {e}");
+                    (None, None)
+                }
+            };
+            emu.audio_tx = audio_tx;
+
+            // `Arc<Mutex<EmuCore>>` is the right shape for the dedicated `emu-thread` + the present
+            // path. `EmuCore` is `Send` (via `Bus::board`'s concrete `Cartridge` enum, not
+            // `Box<dyn Board>`) — the stale blocker this comment used to describe is resolved
+            // (`T-0503-001`, DONE); see `Cargo.toml`'s `emu-thread` feature comment for the history.
+            #[allow(clippy::arc_with_non_send_sync)]
+            let core = Arc::new(Mutex::new(emu));
+
+            #[cfg(feature = "emu-thread")]
+            let (shared_input, frame_rx, runahead_frames) = {
+                let shared_input = Arc::new(crate::emu_thread::SharedInput::new());
+                let (frame_tx, frame_rx) = crate::present_buffer::channel();
+                let runahead_frames = Arc::new(AtomicU32::new(self.config.video.runahead_frames));
+
+                let thread_core = Arc::clone(&core);
+                let thread_input = Arc::clone(&shared_input);
+                let thread_runahead = Arc::clone(&runahead_frames);
+                std::thread::Builder::new()
+                    .name("emu-thread".into())
+                    .spawn(move || {
+                        loop {
+                            let mut lock = thread_core.lock().unwrap();
+                            let input = thread_input.load();
+                            let paused = lock.paused || !lock.rom_loaded;
+
+                            // Pace the emulator using the audio ring buffer fill ratio.
+                            // If it's over 60% full, sleep to let the audio consumer drain it.
+                            let fill = if paused {
+                                0.0
+                            } else {
+                                lock.audio_tx
+                                    .as_ref()
+                                    .map_or(0.0, crate::audio::AudioProducer::fill_ratio)
+                            };
+
+                            if !paused && fill < 0.6 {
+                                let ra = thread_runahead.load(Ordering::Relaxed);
+                                crate::runahead::step_frame(&mut lock, &frame_tx, Some(input), ra);
+                                drop(lock);
+                            } else {
+                                drop(lock);
+                                std::thread::sleep(std::time::Duration::from_millis(1));
+                            }
+                        }
+                    })
+                    .expect("failed to spawn emu thread");
+
+                (shared_input, frame_rx, runahead_frames)
+            };
+
+            *self.active.borrow_mut() = Some(Active {
+                window,
+                gfx,
+                egui_ctx,
+                egui_state,
+                egui_renderer,
+                core,
+                host_input: InputState::default(),
+                shell: ShellState::default(),
+                config: self.config.clone(),
+                fullscreen: false,
+                audio_out,
+                #[cfg(not(feature = "emu-thread"))]
+                next_step_at: web_time::Instant::now(),
+                #[cfg(feature = "emu-thread")]
+                shared_input,
+                #[cfg(feature = "emu-thread")]
+                frame_rx,
+                #[cfg(feature = "emu-thread")]
+                runahead_frames,
+                #[cfg(feature = "emu-thread")]
+                last_frame: vec![0u8; (crate::gfx::VCS_W * crate::gfx::VCS_H_NTSC * 4) as usize],
+                last_render_at: web_time::Instant::now(),
+                fps_smoothed: 0.0,
+                #[cfg(feature = "retroachievements")]
+                cheevos,
+                #[cfg(feature = "scripting")]
+                script: None,
+                #[cfg(feature = "netplay")]
+                netplay: None,
+            });
         }
 
-        let (audio_out, audio_tx) = match crate::audio::AudioOutput::new() {
-            Ok(pair) => (Some(pair.0), Some(pair.1)),
-            Err(e) => {
-                eprintln!("rusty2600: failed to start audio: {e}");
-                (None, None)
-            }
-        };
-        emu.audio_tx = audio_tx;
-
-        // `Arc<Mutex<EmuCore>>` is the right shape for the dedicated `emu-thread` + the present
-        // path. `EmuCore` is `Send` (via `Bus::board`'s concrete `Cartridge` enum, not
-        // `Box<dyn Board>`) — the stale blocker this comment used to describe is resolved
-        // (`T-0503-001`, DONE); see `Cargo.toml`'s `emu-thread` feature comment for the history.
-        #[allow(clippy::arc_with_non_send_sync)]
-        let core = Arc::new(Mutex::new(emu));
-
-        #[cfg(feature = "emu-thread")]
-        let (shared_input, frame_rx, runahead_frames) = {
-            let shared_input = Arc::new(crate::emu_thread::SharedInput::new());
-            let (frame_tx, frame_rx) = crate::present_buffer::channel();
-            let runahead_frames = Arc::new(AtomicU32::new(self.config.video.runahead_frames));
-
-            let thread_core = Arc::clone(&core);
-            let thread_input = Arc::clone(&shared_input);
-            let thread_runahead = Arc::clone(&runahead_frames);
-            std::thread::Builder::new()
-                .name("emu-thread".into())
-                .spawn(move || {
-                    loop {
-                        let mut lock = thread_core.lock().unwrap();
-                        let input = thread_input.load();
-                        let paused = lock.paused || !lock.rom_loaded;
-
-                        // Pace the emulator using the audio ring buffer fill ratio.
-                        // If it's over 60% full, sleep to let the audio consumer drain it.
-                        let fill = if paused {
-                            0.0
-                        } else {
-                            lock.audio_tx
-                                .as_ref()
-                                .map_or(0.0, crate::audio::AudioProducer::fill_ratio)
-                        };
-
-                        if !paused && fill < 0.6 {
-                            let ra = thread_runahead.load(Ordering::Relaxed);
-                            crate::runahead::step_frame(&mut lock, &frame_tx, Some(input), ra);
-                            drop(lock);
-                        } else {
-                            drop(lock);
-                            std::thread::sleep(std::time::Duration::from_millis(1));
+        // wasm32: `Gfx::new_async`'s adapter/device acquisition can't run on `pollster::block_on`
+        // (no blocking primitives on the browser's single JS thread — see this module's doc
+        // comment). Kick off the async bring-up as a detached task that writes the finished
+        // `Active` into the shared cell once ready; every other `ApplicationHandler` method
+        // already treats "not ready yet" (a `None` `active`) as a no-op, so this is safe.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let active_cell = Rc::clone(&self.active);
+            let config = self.config.clone();
+            let seed = self.seed;
+            wasm_bindgen_futures::spawn_local(async move {
+                let gfx =
+                    match Gfx::new_async(Arc::clone(&window), &config.video.present_mode).await {
+                        Ok(g) => g,
+                        Err(e) => {
+                            Self::log_error(&format!("wgpu init failed: {e}"));
+                            return;
                         }
-                    }
-                })
-                .expect("failed to spawn emu thread");
+                    };
+                let (egui_ctx, egui_state, egui_renderer) = Self::build_egui(&gfx, &window);
 
-            (shared_input, frame_rx, runahead_frames)
-        };
+                let mut emu = EmuCore::new(seed);
+                emu.region = config.region;
+                // No `pending_rom`/audio on wasm32 startup — ROM loading is wired via a hidden
+                // `<input type=file>` in `wasm.rs::run_winit` (routed through `MenuAction::
+                // OpenRom`'s wasm arm below), and audio is explicitly this release's stretch
+                // goal, not yet wired (see `docs/frontend.md`'s wasm-winit status section).
+                #[allow(clippy::arc_with_non_send_sync)]
+                let core = Arc::new(Mutex::new(emu));
 
-        self.active = Some(Active {
-            window,
-            gfx,
-            egui_ctx,
-            egui_state,
-            egui_renderer,
-            core,
-            host_input: InputState::default(),
-            shell: ShellState::default(),
-            config: self.config.clone(),
-            fullscreen: false,
-            audio_out,
-            #[cfg(not(feature = "emu-thread"))]
-            next_step_at: std::time::Instant::now(),
-            #[cfg(feature = "emu-thread")]
-            shared_input,
-            #[cfg(feature = "emu-thread")]
-            frame_rx,
-            #[cfg(feature = "emu-thread")]
-            runahead_frames,
-            #[cfg(feature = "emu-thread")]
-            last_frame: vec![0u8; (crate::gfx::VCS_W * crate::gfx::VCS_H_NTSC * 4) as usize],
-            last_render_at: std::time::Instant::now(),
-            fps_smoothed: 0.0,
-            #[cfg(feature = "retroachievements")]
-            cheevos,
-            #[cfg(feature = "scripting")]
-            script: None,
-            #[cfg(feature = "netplay")]
-            netplay: None,
-        });
+                *active_cell.borrow_mut() = Some(Active {
+                    window,
+                    gfx,
+                    egui_ctx,
+                    egui_state,
+                    egui_renderer,
+                    core,
+                    host_input: InputState::default(),
+                    shell: ShellState::default(),
+                    config,
+                    fullscreen: false,
+                    next_step_at: web_time::Instant::now(),
+                    last_render_at: web_time::Instant::now(),
+                    fps_smoothed: 0.0,
+                });
+                web_sys::console::log_1(
+                    &"Rusty2600 wasm-winit — armed. File > Open ROM to begin.".into(),
+                );
+            });
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let Some(active) = self.active.as_mut() else {
+        let mut guard = self.active.borrow_mut();
+        let Some(active) = guard.as_mut() else {
             return;
         };
         // Feed egui first; if it consumes the event we still latch keys for the emulator below.
@@ -359,13 +480,143 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(active) = self.active.as_ref() {
+        if let Some(active) = self.active.borrow().as_ref() {
             active.window.request_redraw();
         }
     }
 }
 
 impl App {
+    /// Build the egui integration for `window`/`gfx` — shared by both the native (synchronous)
+    /// and wasm32 (post-`Gfx::new_async`) `resumed()` bring-up paths.
+    fn build_egui(
+        gfx: &Gfx,
+        window: &Arc<Window>,
+    ) -> (egui::Context, egui_winit::State, egui_wgpu::Renderer) {
+        let egui_ctx = egui::Context::default();
+        let egui_state = egui_winit::State::new(
+            egui_ctx.clone(),
+            egui_ctx.viewport_id(),
+            window,
+            None,
+            None,
+            None,
+        );
+        let egui_renderer = egui_wgpu::Renderer::new(
+            &gfx.device,
+            gfx.config.format,
+            egui_wgpu::RendererOptions::default(),
+        );
+        (egui_ctx, egui_state, egui_renderer)
+    }
+
+    /// Log an error to stderr (native) or the browser devtools console (wasm32).
+    fn log_error(msg: &str) {
+        #[cfg(not(target_arch = "wasm32"))]
+        eprintln!("rusty2600: {msg}");
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::error_1(&format!("rusty2600: {msg}").into());
+    }
+
+    /// wasm32's `MenuAction::OpenRom` — `rfd`'s native file dialog isn't available on this
+    /// target (it's not even a wasm32 dependency, see `Cargo.toml`'s
+    /// `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` block), so this drives a
+    /// hidden `<input type=file>` instead, reusing the exact same FileReader +
+    /// `rom_archive::extract_first_rom` pattern `wasm.rs`'s canvas-2D bootstrap already proved.
+    /// The element is created once (cached in `ROM_INPUT`) and `.click()`-ed on every call — a
+    /// synthetic click on a hidden file input is an established, browser-accepted way to open
+    /// the native file picker from a real user gesture (the menu click that got us here).
+    #[cfg(target_arch = "wasm32")]
+    fn trigger_wasm_rom_picker() {
+        use wasm_bindgen::JsCast as _;
+        use wasm_bindgen::prelude::*;
+
+        let input = ROM_INPUT.with(|cell| {
+            let mut cell = cell.borrow_mut();
+            if cell.is_none() {
+                let Some(window) = web_sys::window() else {
+                    return None;
+                };
+                let Some(document) = window.document() else {
+                    return None;
+                };
+                let Ok(el) = document.create_element("input") else {
+                    return None;
+                };
+                let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() else {
+                    return None;
+                };
+                input.set_type("file");
+                input.set_accept(".a26,.bin,.rom,.zip");
+                let style = input.style();
+                let _ = style.set_property("display", "none");
+                if let Some(body) = document.body() {
+                    let _ = body.append_child(&input);
+                }
+
+                let on_change =
+                    Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+                        let Some(target_input) = ev
+                            .target()
+                            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                        else {
+                            return;
+                        };
+                        let Some(files) = target_input.files() else {
+                            return;
+                        };
+                        let Some(file) = files.get(0) else { return };
+                        let filename = file.name();
+
+                        let Ok(reader) = web_sys::FileReader::new() else {
+                            return;
+                        };
+                        let reader_clone = reader.clone();
+                        // `Closure::once_into_js` (not `Closure::<dyn FnMut()>::new` +
+                        // `.forget()`): this callback only ever runs once per file read, so
+                        // `forget()`-ing a `FnMut` closure here would leak its heap allocation on
+                        // every single ROM load — `once_into_js` frees it automatically right
+                        // after its one invocation.
+                        let on_load = Closure::once_into_js(move || {
+                            let Ok(buffer) = reader_clone.result() else {
+                                return;
+                            };
+                            let array = js_sys::Uint8Array::new(&buffer);
+                            let raw_bytes = array.to_vec();
+                            let bytes = if crate::rom_archive::looks_like_zip(&filename) {
+                                match crate::rom_archive::extract_first_rom(&raw_bytes) {
+                                    Ok((extracted, _entry_name)) => extracted,
+                                    Err(e) => {
+                                        Self::log_error(&format!("zip extraction failed: {e}"));
+                                        return;
+                                    }
+                                }
+                            } else {
+                                raw_bytes
+                            };
+                            PENDING_ROM.with(|p| *p.borrow_mut() = Some(bytes));
+                        });
+                        reader.set_onload(Some(on_load.unchecked_ref()));
+                        let _ = reader.read_as_array_buffer(&file);
+                    });
+                input.set_onchange(Some(on_change.as_ref().unchecked_ref()));
+                on_change.forget();
+
+                *cell = Some(input);
+            }
+            cell.clone()
+        });
+        if let Some(input) = input {
+            // The browser only fires `change` when the input's value actually differs from
+            // before — re-picking the SAME file (e.g. reloading after editing a ROM on disk)
+            // would otherwise silently do nothing, since the cached element's `value` still
+            // holds that file's path from last time. Clearing it first guarantees `change`
+            // fires again regardless of which file gets picked.
+            input.set_value("");
+            input.click();
+        }
+    }
+
     /// Build a side-effect-free [`crate::debugger::DebugSnapshot`] from the live
     /// system state, using [`rusty2600_core::Bus::peek_range`] (never the mutating
     /// `cpu_read`) for the disassembly + memory views so opening the debugger can
@@ -477,6 +728,21 @@ impl App {
     // blit, run the egui shell, present); egui UI functions are conventionally long.
     #[allow(clippy::too_many_lines)]
     fn render(active: &mut Active) -> Vec<MenuAction> {
+        // wasm32: a ROM picked via the hidden `<input type=file>` (see
+        // `trigger_wasm_rom_picker`) lands here asynchronously — its `onchange` handler can't
+        // reach `active` directly (it fires from a detached JS callback, not from inside this
+        // render pass), so it stages the bytes in `PENDING_ROM` and this drains them once per
+        // frame, the same "check a shared cell at a known point" pattern `resumed()`'s wasm
+        // branch uses for `Gfx` bring-up.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(bytes) = PENDING_ROM.with(|p| p.borrow_mut().take()) {
+            let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+            match emu.load_rom(&bytes) {
+                Ok(()) => active.shell.status = format!("Loaded ({} bytes)", bytes.len()),
+                Err(e) => active.shell.status = format!("load failed: {e}"),
+            }
+        }
+
         #[cfg(feature = "emu-thread")]
         active.shared_input.store(active.host_input);
 
@@ -484,7 +750,7 @@ impl App {
         // presented cadence, not the emulator's internal frame-production rate, so
         // it reflects what's really on screen (which under `emu-thread` tracks the
         // display's refresh rate, not necessarily the console's ~60 Hz).
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         let dt = now.duration_since(active.last_render_at).as_secs_f32();
         active.last_render_at = now;
         if dt > 0.0 {
@@ -533,7 +799,7 @@ impl App {
 
             #[cfg(not(feature = "emu-thread"))]
             if !netplay_active {
-                let now = std::time::Instant::now();
+                let now = web_time::Instant::now();
                 if now >= active.next_step_at {
                     emu.run_frame(Some(active.host_input));
                     let period = std::time::Duration::from_secs_f64(1.0 / emu.region.frame_rate());
@@ -613,6 +879,7 @@ impl App {
             };
             #[cfg(not(target_arch = "wasm32"))]
             let rom_tag = emu.rom_tag();
+            #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
             let mut info = ShellInfo {
                 board_tier: emu.board_tier().map(str::to_string),
                 region: emu.region,
@@ -689,15 +956,25 @@ impl App {
         let ctx = active.egui_ctx.clone();
         let shell = &mut active.shell;
         let config = &mut active.config;
-        #[cfg(feature = "retroachievements")]
+        // `shell::ShellState::render` gates its own `cheevos`/`script` parameters on
+        // `all(not(target_arch = "wasm32"), feature = "...")` (neither feature is wasm-safe — see
+        // `Cargo.toml`'s doc comments), so the call site here must match EXACTLY, not just the
+        // bare feature flag — a `wasm32` build with either feature enabled (not exercised by this
+        // project's own wasm builds today, but a valid `cargo check` target combination) would
+        // otherwise pass an argument `render` doesn't accept on that target and fail to compile.
+        #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
         let cheevos = &mut active.cheevos;
+        #[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))]
+        let active_script = &active.script;
         let full_output = ctx.run_ui(raw_input, |ui| {
             actions = shell.render(
                 ui,
                 &info,
                 config,
-                #[cfg(feature = "retroachievements")]
+                #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
                 cheevos,
+                #[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))]
+                active_script.as_ref(),
             );
             // The script overlay is a distinct concern from the menu/status-bar
             // chrome `ShellState::render` owns, so it's composited here rather
@@ -774,6 +1051,9 @@ impl App {
     ) {
         for action in actions {
             match action {
+                #[cfg(target_arch = "wasm32")]
+                MenuAction::OpenRom => Self::trigger_wasm_rom_picker(),
+                #[cfg(not(target_arch = "wasm32"))]
                 MenuAction::OpenRom => {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Atari 2600 ROM", &["a26", "bin", "rom", "zip"])

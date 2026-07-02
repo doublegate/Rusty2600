@@ -110,6 +110,41 @@ path and the debug snapshot already take, peeking the bus via
   difficulty switches, all on RIOT `SWCHB`. The frontend surfaces these as UI
   toggles (a real-panel affordance), since many games read them at boot.
 
+### Keyboard controller / Trak-Ball — researched, not modeled (`v2.5.0`)
+
+A RustyNES gap-analysis question: are the Atari Keyboard (Keypad) Controller
+and the CX-22/CX-80 Trak-Ball worth modeling? Checked against Stella's own
+implementation and properties database (`ref-proj/stella/`) rather than
+relying on memory:
+
+- **Keyboard/Keypad Controller** (`Controller::Type::Keyboard`,
+  `ref-proj/stella/src/emucore/Keyboard.hxx`) — a 12-key numeric keypad (0-9,
+  `*`, `#`), wired through the same `AnalogReadout` machinery this crate's
+  own `AnalogPaddle` (`v2.1.0`) already ports. Stella's `stella.pro`
+  properties database tags **40 ROM entries** with this controller,
+  including real official Atari releases (*Brain Games*, 1978) alongside
+  prototypes and homebrew (*Big Bird's Egg Catch*, *Oscar's Trash Race*) —
+  a genuinely real, if minor, peripheral.
+- **Trak-Ball** (`Controller::Type::TrakBall`, a `PointingDevice` subclass
+  using 2-bit quadrature-encoded relative motion, not an absolute-position
+  or RC-circuit signal) — Stella's properties database tags only **4
+  entries (2 distinct ROMs)**, both homebrew hacks (*Missile Command
+  (Trakball)* by Thomas Jentzsch, 2002) — **no official Atari 2600
+  cartridge ever shipped with Trak-Ball support**; the CX-22/CX-80
+  Trak-Ball's real historical home was the 5200/8-bit computer line and
+  arcade cabinets, not the VCS itself.
+
+**Decision: neither is modeled in this arc.** The Trak-Ball has no
+official-release justification at all. The Keyboard controller has some
+real (if minor) historical footing, but at 40 ROMs out of a catalogue of
+several thousand known 2600 titles it remains a genuinely niche peripheral,
+and — unlike the paddle, which nearly every 2600 owner had and which
+directly gated real gameplay accuracy for a meaningful fraction of the
+library (`v2.1.0`) — no title requiring it is load-bearing for this
+project's own accuracy or compatibility goals. Revisit only if a specific,
+concrete user need for a Keyboard-controller title surfaces; this is not a
+permanent "never," just a deliberately deprioritized "not yet."
+
 ## Save-states, rewind, run-ahead
 
 All snapshot/restore and rate control live **in the frontend**, never in the core
@@ -149,8 +184,59 @@ wire format was needed.
 
 ## wasm
 
-`wasm-winit` (default feature) and `wasm-canvas` (lightweight embed) both
-build for `wasm32-unknown-unknown`. The Trunk project lives at
+Two independent wasm32 entry points, selected by feature flag (`src/wasm.rs`;
+see its module doc and `Cargo.toml`'s `[features]` doc comment):
+
+- **`wasm-winit`** (landed v2.5.0, NOT yet the deployed build — see
+  `wasm-canvas` below for what `web/index.html` actually builds today) —
+  the real `app::App`, the SAME winit+wgpu+egui shell the native build
+  uses, compiled for `wasm32-unknown-unknown`. `emu-thread`/`debug-hooks`/
+  `retroachievements`/`scripting`/`netplay` are NOT wasm-safe and must
+  stay off (see `Cargo.toml`'s feature doc comments). Available to build
+  via `data-cargo-no-default-features` + `data-cargo-features="wasm-winit"`
+  once real-browser rendering is confirmed (see the honest-status note
+  below for why that switch hasn't happened yet). ROM loading routes
+  through a hidden `<input type=file>`
+  (`App::trigger_wasm_rom_picker`) rather than `rfd` (native-only, not even
+  a wasm32 dependency); `Config::save()` is a no-op stub on this target (real
+  `localStorage`/IndexedDB persistence is `v2.8.0` scope).
+
+  **Honest status (v2.5.0 landing)**: compiles cleanly (`cargo check
+  --target wasm32-unknown-unknown --no-default-features --features
+  wasm-winit`, zero warnings) and a real `trunk build` produces a working
+  `dist/` bundle. Loaded in a real browser (headless Chromium), `run_winit()`
+  executes and logs correctly — but the `Gfx::new_async` adapter-request step
+  could NOT be verified rendering an actual frame in this sandbox: the
+  available headless-Chromium-with-SwiftShader environment has no
+  `navigator.gpu` (no real WebGPU) and, in this specific setup, wgpu 29's
+  adapter request also failed to fall back to the compiled-in GL/WebGL2
+  backend (`wgpu-hal`'s `gles` feature, confirmed present via `cargo tree -e
+  features`) — see `Cargo.toml`'s wasm32 `wgpu` dependency comment for the
+  full investigation (a likely wgpu-internal `webgpu`-vs-`wgpu_core`
+  build-script exclusivity for this target, not something fixable from this
+  project's own `Cargo.toml` alone, since `egui-wgpu`'s own unconditional
+  `wgpu` dependency reintroduces the `webgpu` feature via Cargo's per-crate
+  feature unification regardless of this crate's own `default-features =
+  false`). **Rendering + keyboard input are therefore UNVERIFIED end-to-end**
+  — real desktop browsers with genuine GPU access (real WebGPU, or a real
+  hardware-accelerated GL driver instead of SwiftShader) may well work where
+  this sandboxed headless environment could not; that is a real, open
+  question for the next release/session with browser access to confirm, not
+  a claimed-working capability. Audio is an explicitly deferred stretch goal
+  (the native `cpal`-based `audio.rs`/`AudioProducer` stays native-only;
+  wasm-winit audio would need to reuse `wasm-canvas`'s proven Web Audio
+  `AudioSink` pattern instead, not attempted yet).
+
+- **`wasm-canvas`** (the older, simpler fallback — **this is what
+  `web/index.html` actually builds and what the live GH-Pages demo
+  deploys, as of `v2.5.0`**) — a bare canvas-2D `requestAnimationFrame`
+  bootstrap with real, proven-working keyboard input, ROM loading
+  (including `.zip` archives), and Web Audio output. This is genuinely
+  complete and live-verified (it was the sole demo through `v2.4.0`, and
+  stays the deployed one through `v2.5.0` too, pending `wasm-winit`'s
+  real-browser rendering confirmation above).
+
+Both build for `wasm32-unknown-unknown`. The Trunk project lives at
 `crates/rusty2600-frontend/web/` (not a repo-root `web/`) — `trunk build
 --release` from that directory produces `dist/`, which `.github/workflows/
 pages.yml` deploys to GitHub Pages (demo at `/`, rustdoc at `/api/`) on every

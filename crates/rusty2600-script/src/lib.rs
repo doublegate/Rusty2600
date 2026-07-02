@@ -31,9 +31,12 @@
 mod bus;
 mod engine;
 mod lock;
+/// Captured `print()`/error output — see `log.rs`'s module doc.
+pub mod log;
 mod overlay;
 
 pub use bus::{CpuSnapshot, JoyDirection, ScriptBus};
 pub use engine::ScriptEngine;
 pub use lock::WritesLocked;
+pub use log::{LogLine, ScriptLog};
 pub use overlay::{Overlay, PixelPrimitive, RectPrimitive, TextPrimitive};

@@ -23,15 +23,23 @@ name = "rusty2600"
 path = "src/main.rs"
 
 [features]
-# `wasm-winit`/`wasm-canvas` are currently IDENTICAL placeholder names for
-# the one wasm32 entry point that actually exists (`src/wasm.rs`, a
-# canvas-2D `requestAnimationFrame` bootstrap with real keyboard input —
-# see its module doc comment) — neither feature gates any code today
-# (both are empty `[]`). The names describe an intended FUTURE split: a
-# real winit + wgpu + egui browser build (matching the native binary, the
-# way RustyNES's own `wasm-winit` feature does) is not yet attempted. Don't
-# read the names as already-shipped capability; `docs/frontend.md`/the GH
-# Pages workflow track the real, current single-implementation state.
+# `wasm-winit` (real as of v2.5.0): the actual native winit+wgpu+egui `App`
+# (`app.rs`/`gfx.rs`/`shader_pass.rs`/`emu_thread.rs`) compiled for
+# `wasm32-unknown-unknown` — see `src/wasm.rs`'s `run_winit()` and its
+# module doc for exactly what does/doesn't work yet on this target
+# (`docs/frontend.md` tracks the authoritative status). `wasm-canvas`
+# stays the OLDER, simpler, still-fully-working fallback (a bare canvas-2D
+# `requestAnimationFrame` bootstrap, `src/wasm.rs`'s `run_canvas()`) — kept
+# as a safety net in case the real build regresses or a browser doesn't
+# support WebGL2/WebGPU. Exactly one of the two should be built for wasm32
+# at a time (see `web/index.html`'s `data-cargo-*` attributes, which
+# explicitly disable default features and select only ONE of the two —
+# currently `wasm-canvas`, the actual deployed GH-Pages build, since
+# `wasm-winit`'s rendering isn't yet confirmed working in a real browser;
+# see `docs/frontend.md`'s wasm status section for exactly why and how to
+# flip it once confirmed). `emu-thread`/`debug-hooks` below are NOT
+# wasm-safe for either wasm feature — see their own doc comments. Neither
+# `wasm-winit` nor `wasm-canvas` does anything on native.
 # `help-tui` adds the ratatui terminal help browser (native-only).
 #
 # `emu-thread` runs `EmuCore` on a dedicated thread (paced by the audio ring
@@ -48,6 +56,16 @@ path = "src/main.rs"
 # real as of v0.5.0. Default-on (same precedent as `emu-thread`) — turn it
 # off explicitly (`--no-default-features --features wasm-winit,help-tui,
 # emu-thread`) for a debugger-free build.
+#
+# Native `default` is UNCHANGED by the v2.5.0 wasm-winit work below — still
+# `emu-thread`+`debug-hooks`+`help-tui` on. The wasm-winit build must NOT use
+# these native defaults (see `web/index.html`): `emu-thread` spawns a real
+# `std::thread`, which `wasm32-unknown-unknown` doesn't support without
+# SharedArrayBuffer+COOP/COEP+atomics (out of scope); `debug-hooks` pulls in
+# `TastudioSaveBranch`'s `rfd::FileDialog` call, and `rfd` is a
+# native-only dependency (not available to the wasm32 target at all, see the
+# `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` block below) —
+# both are explicitly later-release scope (`v2.9.0`'s wasm debugger overlay).
 default = ["wasm-winit", "help-tui", "emu-thread", "debug-hooks"]
 wasm-winit = []
 wasm-canvas = []
@@ -85,7 +103,13 @@ rusty2600-gfx-shaders = { path = "../rusty2600-gfx-shaders", version = "2.3.0" }
 # RustyNES / RustySNES frontends resolve, so a later lift-and-adapt of a sibling
 # module drops in without a version fight. See `references/frontend_reuse.md`.
 winit = "0.30"
-wgpu = { version = "29", features = ["webgl"] }
+# `default-features = false` here + backend features added per-target below. NOTE: this does NOT
+# fully isolate the wasm32 build from wgpu's `webgpu` feature in practice — `egui-wgpu`'s own
+# unconditional `wgpu` dependency re-adds wgpu's defaults (including `webgpu`) via Cargo's
+# per-crate feature unification across the whole dependency graph, regardless of what this
+# `Cargo.toml` requests. See the wasm32 `[target...]` block's comment for the full investigation
+# and its honest, unresolved conclusion.
+wgpu = { version = "29", default-features = false, features = ["wgsl", "std"] }
 cpal = "0.18"
 egui = "0.34"
 egui-wgpu = "0.34"
@@ -118,6 +142,9 @@ web-time = "1.1"
 gilrs = "0.11"
 rfd = "0.17"
 directories = "5"
+# Real native GPU backends (unrelated to wasm32's `webgl`-only block below) — `parking_lot` is
+# wgpu's own default runtime-locking impl, not on by the bare `["wgsl", "std"]` base above.
+wgpu = { version = "29", features = ["dx12", "metal", "vulkan", "gles", "parking_lot"] }
 # clap 4 styled `--help` + `help <topic>` + shell completions (unconditional);
 # the interactive ratatui TUI browser is behind the default-on `help-tui` feature.
 clap = { version = "4", features = ["derive", "color", "cargo"] }
@@ -135,6 +162,24 @@ mlua = { version = "0.10", features = ["lua54", "vendored"], optional = true }
 # GOTCHA: the wasm-bindgen CLI pin in web/Trunk.toml MUST equal the resolved
 # wasm-bindgen LIBRARY version in Cargo.lock (grep -A1 'name = "wasm-bindgen"').
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# Adds `webgl` on top of whatever the workspace's unified feature set already resolves for wgpu
+# (see the base `[dependencies]` entry above). NOTE, from direct investigation: this alone does
+# NOT reliably avoid wgpu's `webgpu` backend path being active for wasm32 — `egui-wgpu` (an
+# unconditional dependency, no target split of its own) pulls in `wgpu`'s OWN default features
+# regardless of what this crate's `Cargo.toml` requests, and Cargo unifies features per-crate
+# across the whole dependency graph, so `webgpu` stays compiled in even with `default-features =
+# false` set on the base entry above. Confirmed by direct testing in a headless-Chromium+
+# SwiftShader sandbox (no real `navigator.gpu`): `Instance::request_adapter` reports "gl support
+# not compiled in" / `webgpu found no adapters` — i.e. genuinely no working adapter was returned
+# in that specific environment, even though `wgpu-hal`'s `gles` feature is provably present per
+# `cargo tree -e features` (wgpu's own source hints at why: `src/backend/webgpu.rs` carries a
+# `// TODO: supported_backends should also include wgpu-core-based backends`, suggesting the
+# webgpu-vs-wgpu-core dispatch decision for wasm32 may be a build-script-level exclusivity, not a
+# simple feature-flag AND). This is UNVERIFIED in a real browser with real GPU access (this
+# sandbox has none) — real end users likely fare better (real WebGPU support, or a real
+# hardware-accelerated GL backend, neither available here), but this is honestly NOT confirmed
+# working end-to-end. See `docs/frontend.md`'s wasm-winit status section.
+wgpu = { version = "29", features = ["webgl"] }
 wasm-bindgen = "0.2.126"
 wasm-bindgen-futures = "0.4.50"
 console_error_panic_hook = "0.1.7"

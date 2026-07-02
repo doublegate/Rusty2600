@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use rusty2600_core::{SaveState, System, detect};
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::audio::AudioProducer;
 use crate::gfx::{MAX_H, MAX_W};
 use crate::input::InputState;
@@ -51,6 +52,11 @@ pub struct EmuCore {
     /// trait has no name; `Tier::name` is the honesty marker).
     board_tier: Option<&'static str>,
     /// The lock-free audio ring producer (pushes samples to the frontend).
+    ///
+    /// Native-only: `AudioProducer` (`crate::audio`, cpal-backed) has no wasm32 story yet — real
+    /// wasm-winit audio (reusing `wasm.rs`'s proven Web Audio `AudioSink` pattern instead of
+    /// cpal) is this release's explicitly deferred stretch goal, see `docs/frontend.md`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub audio_tx: Option<AudioProducer>,
     /// Serialized snapshots of the system state (via [`SaveState`]), stored before
     /// each frame is executed. Used for rewind/run-ahead. Maintains ~600 frames
@@ -124,6 +130,7 @@ impl EmuCore {
             rom_loaded: false,
             framebuffer: vec![0u8; (MAX_W * MAX_H * 4) as usize],
             board_tier: None,
+            #[cfg(not(target_arch = "wasm32"))]
             audio_tx: None,
             snapshots: std::collections::VecDeque::with_capacity(600),
             rewind_capture_suppressed: false,
@@ -298,6 +305,7 @@ impl EmuCore {
                 self.dc_blocker_y = y;
                 out.push(y);
             }
+            #[cfg(not(target_arch = "wasm32"))]
             if let Some(tx) = &mut self.audio_tx {
                 tx.push_samples(&out);
             }
@@ -362,6 +370,7 @@ impl EmuCore {
                 self.dc_blocker_y = y;
                 out.push(y);
             }
+            #[cfg(not(target_arch = "wasm32"))]
             if let Some(tx) = &mut self.audio_tx {
                 tx.push_samples(&out);
             }
@@ -471,6 +480,7 @@ impl EmuCore {
                 self.dc_blocker_x = normalized;
                 self.dc_blocker_y = y;
 
+                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(tx) = &mut self.audio_tx {
                     tx.push_samples(&[y]);
                 }

@@ -6,6 +6,48 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Real winit+wgpu+egui rendering on `wasm32`** (`v2.5.0` "Web Awakens",
+  item 1) — the SAME `App`/`Gfx`/`shader_pass`/`emu_thread` shell the native
+  build uses now compiles for `wasm32-unknown-unknown` behind a real
+  `wasm-winit` feature (previously an empty placeholder). Async GPU bring-up
+  (`Gfx::new_async`, since `pollster::block_on` can't run on the browser's
+  single JS thread) happens via `wasm_bindgen_futures::spawn_local`, writing
+  into a shared `Rc<RefCell<Option<Active>>>` cell once ready; ROM loading
+  routes through a hidden `<input type=file>` instead of `rfd` (native-only).
+  `wasm-canvas` (the older canvas-2D bootstrap) stays available as a proven
+  fallback — kept as the actual GH-Pages-deployed build for now, since
+  `wasm-winit`'s wgpu adapter-request step could not be verified rendering a
+  real frame in this project's sandboxed headless-Chromium test environment
+  (a likely wgpu-internal `webgpu`-vs-`wgpu_core` backend-dispatch
+  limitation for `wasm32`, not something fixable from this crate's own
+  `Cargo.toml` alone — see `docs/frontend.md`'s wasm-winit status section
+  and `Cargo.toml`'s wasm32 `wgpu` dependency comment for the full
+  investigation). Compiles cleanly and a real `trunk build` produces a
+  working bundle; rendering + keyboard input remain genuinely unverified
+  pending a real-browser test.
+- **Debugger Lua console panel** (`v2.5.0` "Web Awakens", `scripting`
+  feature) — `crates/rusty2600-script`'s Lua VM now overrides the default
+  `print` global (which previously went nowhere useful — real stdout,
+  invisible in a GUI app) to route into a new capped `ScriptLog` ring
+  buffer (500 lines, oldest dropped first), matching real Lua `print`
+  semantics (arguments tab-joined via `tostring`). `onFrame` runtime
+  errors are captured into the same log automatically. A new debugger
+  panel (`Debug -> Lua Console`, alongside CPU/TIA/RIOT/Memory/Cheevos)
+  renders the captured history live, oldest-first, with errors in red and
+  a Clear button. Output-only — not an interactive Lua REPL (see the
+  panel's module doc for why).
+- **Documentation-only research decision** (`v2.5.0` "Web Awakens", no code
+  change) — checked whether the Atari Keyboard/Keypad Controller and the
+  Trak-Ball are worth modeling, against Stella's own implementation and
+  properties database rather than assumption. Trak-Ball: zero official
+  Atari 2600 releases used it (only 2 homebrew ROMs in Stella's DB).
+  Keyboard: 40 ROMs including one real official release (*Brain Games*,
+  1978), but still niche relative to the whole catalogue. Neither is
+  modeled this arc — deliberately deprioritized, not permanently ruled
+  out. See `docs/frontend.md`.
+
 ## [2.4.0] - 2026-07-02 - "Save Point"
 
 The first release of the RustyNES gap-closure arc (`v2.4.0 -> v3.0.0`) and
