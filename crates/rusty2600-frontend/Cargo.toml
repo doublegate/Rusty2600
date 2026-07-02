@@ -111,9 +111,9 @@ winit = "0.30"
 # and its honest, unresolved conclusion.
 wgpu = { version = "29", default-features = false, features = ["wgsl", "std"] }
 cpal = "0.18"
-egui = "0.34"
-egui-wgpu = "0.34"
-egui-winit = { version = "0.34", default-features = false, features = ["links", "wayland", "x11"] }
+egui = "0.35"
+egui-wgpu = "0.35"
+egui-winit = { version = "0.35", default-features = false, features = ["links", "wayland", "x11"] }
 thiserror = "2.0"
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
@@ -128,7 +128,7 @@ toml = "1.1"
 # bzip2/lzma/zstd/xz/aes-crypto (unneeded codecs/encryption that would only
 # bloat the native binary and the wasm bundle for no benefit — ROM zips are
 # plain Deflate or Store).
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 # Already transitive deps of wgpu; direct here is free.
 pollster = "0.4"
@@ -141,7 +141,7 @@ web-time = "1.1"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 gilrs = "0.11"
 rfd = "0.17"
-directories = "5"
+directories = "6"
 # Real native GPU backends (unrelated to wasm32's `webgl`-only block below) — `parking_lot` is
 # wgpu's own default runtime-locking impl, not on by the bare `["wgsl", "std"]` base above.
 wgpu = { version = "29", features = ["dx12", "metal", "vulkan", "gles", "parking_lot"] }
@@ -155,7 +155,7 @@ rusty2600-script = { path = "../rusty2600-script", version = "2.3.0", optional =
 rusty2600-netplay = { path = "../rusty2600-netplay", version = "2.3.0", optional = true }
 # Referenced directly (`mlua::Error`) by the `scripting`-gated frontend
 # module; version/features must match `rusty2600-script`'s own pin exactly.
-mlua = { version = "0.10", features = ["lua54", "vendored"], optional = true }
+mlua = { version = "0.11", features = ["lua54", "vendored"], optional = true }
 
 # wasm32 target deps. The chip stack is `no_std + alloc`, so the browser build
 # only needs the wasm-bindgen + web-sys bridge here.

@@ -37,6 +37,47 @@ All notable changes to Rusty2600 are documented here. The format is based on
   `docs/netplay.md`'s new "Browser WebRTC transport" section for the full
   investigation.
 
+### Changed
+
+- **Dependency upgrade sweep** — consolidated all 12 open Dependabot PRs
+  into one reviewed, tested master PR rather than merging each in
+  isolation: `egui`/`egui-wgpu`/`egui-winit` 0.34.3 -> 0.35.0, `zip`
+  2.4.2 -> 8.6.0, `mlua` 0.10.5 -> 0.11.6, `uniffi` 0.28.3 -> 0.32.0
+  (Kotlin/Swift bindings regenerated from a real Linux host build —
+  0.31 changed method checksums, making the old bindings incompatible
+  with the new Rust scaffolding), `actions/checkout` v4 -> v7, and
+  `clap_complete` 4.6.5 -> 4.6.7. All verified compiling + passing the
+  full test suite + clean per-feature `clippy -D warnings` (never
+  `--all-features`) before merging, not just accepted on Dependabot's
+  word.
+- **Two proposed bumps deliberately declined, each with a documented
+  reason and a `dependabot.yml` `ignore` rule** so they stop being
+  re-proposed:
+  - `bincode` 1.3.3 -> 3.0.0 — `bincode` is now unmaintained
+    (RUSTSEC-2025-0141, following a maintainer harassment incident) and
+    3.0.0 is a deliberately broken placeholder release (a stub with a
+    compile error), not real code. `rusty2600-netplay` needs
+    byte-identical wire compatibility with GGRS's own internal bincode
+    1.3.3 usage; staying pinned to 1.3.3 (which the bincode team
+    themselves called "complete... not in need of any updates") is the
+    correct, deliberate choice.
+  - `dtolnay/rust-toolchain` `@1.96` -> `@1.100` — Rust 1.100 does not
+    exist yet (confirmed: `rustup toolchain install 1.100` 404s against
+    the real release server; the actual current stable is 1.96.1). This
+    Action's version tags map directly to Rust release numbers, which
+    Dependabot cannot itself validate.
+  - `wgpu` 29 -> 30 (+ its paired `naga` 29 -> 30) was also investigated
+    but not applied: `egui-wgpu` 0.35.0 (the latest available release)
+    still requires `wgpu` 29.x internally, so bumping this crate's own
+    `wgpu` pin to 30 would put two incompatible `wgpu` major versions in
+    the dependency graph and fail to compile. Revisit once a newer
+    `egui-wgpu` supporting `wgpu` 30 ships.
+- Found and fixed a real, pre-existing `clippy::large_stack_frames`
+  failure in `App::dispatch_actions` under `--features netplay`
+  (confirmed present on `main` before any of these bumps — never caught
+  before since CI only clippy-checks the default feature set), while
+  doing the per-feature clippy verification this sweep required anyway.
+
 ## [2.5.0] - 2026-07-02 - "Web Awakens"
 
 Second release of the RustyNES gap-closure arc, shipped through PR #14 with
