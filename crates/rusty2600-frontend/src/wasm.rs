@@ -1,32 +1,76 @@
 //! The wasm32 entry point (`#[wasm_bindgen(start)]`).
 //!
-//! A canvas-2D WebAssembly bootstrap: `requestAnimationFrame`-driven emulation
-//! with real keyboard input, reusing this crate's own [`crate::input`] model
-//! (the same [`crate::input::KeyBindings`]/[`crate::input::InputState`] the
-//! native build uses) rather than a separate wasm-only input scheme. Browser
-//! `KeyboardEvent.code` values (`"ArrowUp"`, `"KeyZ"`, `"F1"`, ...) are the
-//! same physical-key naming convention winit's `KeyCode` Debug format uses,
-//! so [`crate::input::KeyBindings::action_for`] resolves them directly with
-//! no translation layer.
+//! Two independent implementations, selected by which of `wasm-winit`/`wasm-canvas` is active
+//! (see `Cargo.toml`'s `[features]` doc comment — exactly one should be built at a time):
 //!
-//! This is the ONE wasm entry point that exists today — the `wasm-winit`/
-//! `wasm-canvas` Cargo features are currently identical empty placeholders
-//! (see `Cargo.toml`'s `[features]` doc comment); a real winit + wgpu + egui
-//! browser build (matching the native binary, the way the `wasm-winit` name
-//! implies) is future work, not attempted here.
+//! - [`run_winit`] (`wasm-winit`, the default as of v2.5.0): the REAL `app::App` — the same
+//!   winit+wgpu+egui shell the native build uses — compiled for `wasm32-unknown-unknown`. See
+//!   `app.rs`'s module doc for exactly what does/doesn't work yet on this target.
+//! - [`run_canvas`] (`wasm-canvas`, the older fallback): a canvas-2D `requestAnimationFrame`
+//!   bootstrap with real keyboard input, reusing this crate's own [`crate::input`] model (the
+//!   same [`crate::input::KeyBindings`]/[`crate::input::InputState`] the native build uses)
+//!   rather than a separate wasm-only input scheme. Browser `KeyboardEvent.code` values
+//!   (`"ArrowUp"`, `"KeyZ"`, `"F1"`, ...) are the same physical-key naming convention winit's
+//!   `KeyCode` Debug format uses, so [`crate::input::KeyBindings::action_for`] resolves them
+//!   directly with no translation layer. Kept as a safety net in case `wasm-winit` regresses or a
+//!   browser doesn't support WebGL2/WebGPU — genuinely simpler and lower-risk, still fully
+//!   working.
 
+#[cfg(feature = "wasm-canvas")]
 use std::cell::RefCell;
+#[cfg(feature = "wasm-canvas")]
 use std::rc::Rc;
 
+#[cfg(feature = "wasm-canvas")]
 use crate::input::{InputState, KeyBindings};
+#[cfg(feature = "wasm-canvas")]
 use rusty2600_cart::detect;
+#[cfg(feature = "wasm-canvas")]
 use rusty2600_core::System;
+#[cfg(feature = "wasm-canvas")]
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
+#[cfg(feature = "wasm-canvas")]
 #[allow(unused_imports)]
 use web_sys::*;
 
+/// The `#[wasm_bindgen(start)]` entry point — dispatches to [`run_winit`] if the `wasm-winit`
+/// feature is active (the default), else [`run_canvas`]. Exactly one of the two features should
+/// be enabled per build (see `web/index.html`'s `data-cargo-*` attributes for `wasm-winit`'s
+/// build; `--no-default-features --features wasm-canvas` for the fallback).
+#[cfg(feature = "wasm-winit")]
+#[wasm_bindgen(start)]
+pub fn start() -> Result<(), JsValue> {
+    run_winit()
+}
+
+/// See the `wasm-winit` `start()` above — this is the `wasm-canvas`-only variant.
+#[cfg(all(feature = "wasm-canvas", not(feature = "wasm-winit")))]
+#[wasm_bindgen(start)]
+pub fn start() -> Result<(), JsValue> {
+    run_canvas()
+}
+
+/// Boot the real winit+wgpu+egui `App` on `wasm32-unknown-unknown` (`wasm-winit`).
+///
+/// # Errors
+/// Returns a [`JsValue`] (via [`winit::error::EventLoopError`]'s `Display`) if the winit event
+/// loop itself fails to construct — genuine per-frame errors (a failed `Gfx::new_async`, a
+/// missing DOM element) are logged to the browser console instead, since [`App::run`] on wasm32
+/// returns immediately (see its doc comment) and can't propagate an error from inside the
+/// detached event loop.
+#[cfg(feature = "wasm-winit")]
+pub fn run_winit() -> Result<(), JsValue> {
+    console_error_panic_hook::set_once();
+    web_sys::console::log_1(&"Rusty2600 wasm-winit — boot".into());
+    let app = crate::app::App::with_config(crate::config::Config::default());
+    app.run()
+        .map_err(|e| JsValue::from_str(&format!("event loop error: {e}")))
+}
+
+#[cfg(feature = "wasm-canvas")]
 const ATARI_W: u32 = 160;
+#[cfg(feature = "wasm-canvas")]
 const ATARI_H: u32 = 192; // NTSC active picture height (post-VBLANK crop).
 
 /// NTSC scanlines before the active picture starts (VSYNC + VBLANK) — the
@@ -35,13 +79,16 @@ const ATARI_H: u32 = 192; // NTSC active picture height (post-VBLANK crop).
 /// skipping this offset was a real bug (fixed alongside real audio/keyboard
 /// input): the canvas was showing the top ~40 non-picture scanlines and
 /// cutting off the bottom of the actual picture.
+#[cfg(feature = "wasm-canvas")]
 const NTSC_VBLANK_LINES: usize = 37;
 
 /// The TIA's audio sample rate: two samples pushed per scanline (color
 /// clocks 114 and 227 of each 228-color-clock line), so one sample every
 /// 114 color clocks of the 3.579545 MHz NTSC dot clock.
+#[cfg(feature = "wasm-canvas")]
 const AUDIO_SAMPLE_RATE: f32 = 3_579_545.0 / 114.0;
 
+#[cfg(feature = "wasm-canvas")]
 struct Emu {
     system: Option<System>,
     input: InputState,
@@ -60,6 +107,7 @@ struct Emu {
 /// avoiding the extra complexity of an `AudioWorklet` module for this small
 /// canvas-2D bootstrap). `AudioContext` requires a user gesture to start, so
 /// this is only constructed once the user picks a ROM file.
+#[cfg(feature = "wasm-canvas")]
 struct AudioSink {
     ctx: AudioContext,
     /// The `AudioContext.currentTime` at which the next scheduled buffer
@@ -69,6 +117,7 @@ struct AudioSink {
     next_start: f64,
 }
 
+#[cfg(feature = "wasm-canvas")]
 impl AudioSink {
     fn new() -> Result<Self, JsValue> {
         let ctx = AudioContext::new()?;
@@ -110,6 +159,7 @@ impl AudioSink {
     }
 }
 
+#[cfg(feature = "wasm-canvas")]
 thread_local! {
     static EMU: Rc<RefCell<Emu>> = Rc::new(RefCell::new(Emu {
         system: None,
@@ -121,10 +171,15 @@ thread_local! {
     }));
 }
 
-#[wasm_bindgen(start)]
-pub fn start() -> Result<(), JsValue> {
+/// Boot the canvas-2D fallback bootstrap (`wasm-canvas`) — see this module's doc comment.
+///
+/// # Errors
+/// Returns a [`JsValue`] if a required DOM element (`<canvas id="atari-canvas">`, `<input
+/// id="rom-input">`) is missing, or a browser API call fails.
+#[cfg(feature = "wasm-canvas")]
+pub fn run_canvas() -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
-    web_sys::console::log_1(&"Rusty2600 wasm32 — boot".into());
+    web_sys::console::log_1(&"Rusty2600 wasm32 (canvas) — boot".into());
 
     let window = web_sys::window().ok_or("no window")?;
     let document = window.document().ok_or("no document")?;
@@ -158,7 +213,10 @@ pub fn start() -> Result<(), JsValue> {
 /// silent no-op. Momentary switches (select/reset) should be called with
 /// `pressed = true` on pointer-down and `false` on pointer-up; the latching
 /// toggles (color/difficulty) only need a single `pressed = true` call per
-/// click, matching `apply_action`'s press-edge-only toggle semantics.
+/// click, matching `apply_action`'s press-edge-only toggle semantics. `wasm-canvas`-only — the
+/// `wasm-winit` build's console switches are real egui menu items (`MenuAction::ConsoleSwitch`),
+/// not a JS-exported function.
+#[cfg(feature = "wasm-canvas")]
 #[wasm_bindgen]
 pub fn set_console_switch(name: &str, pressed: bool) {
     use crate::input::InputAction;
@@ -175,6 +233,7 @@ pub fn set_console_switch(name: &str, pressed: bool) {
     EMU.with(|emu| emu.borrow_mut().input.apply_action(action, pressed));
 }
 
+#[cfg(feature = "wasm-canvas")]
 fn install_rom_loader(rom_input: &HtmlInputElement) {
     let on_change = Closure::<dyn FnMut(Event)>::new(move |ev: Event| {
         // Construct (or resume) the `AudioContext` synchronously, right here
@@ -255,6 +314,7 @@ fn install_rom_loader(rom_input: &HtmlInputElement) {
 /// console switches). A bound key's default browser action (e.g. arrow-key
 /// page scroll, `F1` opening help) is suppressed; unbound keys pass through
 /// untouched so devtools shortcuts etc. keep working.
+#[cfg(feature = "wasm-canvas")]
 fn install_keyboard_input(window: &Window) -> Result<(), JsValue> {
     let on_key = |pressed: bool| {
         Closure::<dyn FnMut(KeyboardEvent)>::new(move |ev: KeyboardEvent| {
@@ -280,6 +340,7 @@ fn install_keyboard_input(window: &Window) -> Result<(), JsValue> {
     Ok(())
 }
 
+#[cfg(feature = "wasm-canvas")]
 fn start_raf_loop(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
     let ctx = canvas
         .get_context("2d")?
@@ -392,6 +453,7 @@ fn start_raf_loop(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
     Ok(())
 }
 
+#[cfg(feature = "wasm-canvas")]
 fn request_animation_frame(f: &Closure<dyn FnMut()>) {
     web_sys::window()
         .unwrap()
