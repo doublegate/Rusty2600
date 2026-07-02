@@ -136,13 +136,24 @@ wasm32-safety review of the Settings panel, and real `localStorage`
 config persistence (see the WebAssembly row above). `v2.9.0` "Full Circle"
 built the second wave — a `?settings=` share-link, a wasm32-safe
 `debug-hooks` debugger overlay, and PWA install/offline support (see the
-WebAssembly row above) — see [`CHANGELOG.md`](CHANGELOG.md) for exactly
-what shipped in each release.
+WebAssembly row above). In-browser Lua scripting was investigated for
+real this release (not just re-deferred on old reasoning) and stays
+deliberately unsupported on `wasm32`: `mlua`'s vendored C build is
+confirmed to be a hard wall on `wasm32-unknown-unknown`, and the one
+realistic pure-Rust fallback, `piccolo`, isn't yet a workable substrate
+either — its only published release implements almost none of Lua's
+`string`/`table` stdlib, and its more-complete unpublished branch is
+explicitly pre-1.0-unstable by its own maintainer's admission (see
+`docs/scripting.md`'s `v2.9.0` status section) — see
+[`CHANGELOG.md`](CHANGELOG.md) for exactly what shipped in each release.
 Open follow-up work (each its own well-scoped future release): real
 Xcode-verified iOS build/run (this sandbox has no Xcode toolchain),
 netplay's WebRTC transport and real cross-NAT verification, DPC+/CDF
-per-player console-switch/paddle modeling, and a real HD-pack
-replacement-art library (only a proof-of-mechanism placeholder exists
+per-player console-switch/paddle modeling, in-browser Lua scripting
+(blocked on `piccolo` publishing a crates.io release with real
+`string`/`table` coverage — an upstream milestone, not one this project
+controls), and a real HD-pack replacement-art library (only a
+proof-of-mechanism placeholder exists
 today). The `.r26m` movie format and TAStudio-lite panel shipped in
 v1.7.0; live per-frame auto-recording into the emu-thread's hot path is
 honestly deferred (`docs/movie.md`).
