@@ -50,14 +50,38 @@ re-measure before trusting them for a real regression comparison.
 | `rusty2600-riot::riot_ram_write_then_read` | one RIOT RAM write + read round-trip | ~418 ps/call |
 | `rusty2600-cart::cart_bankf8_read_write` | one `BankF8` read + write (hotspot check on every access) | ~2.5 ns/call |
 | `rusty2600-cart::cart_dpc_register_read` | one `BankDpc` data-fetcher display read (RNG clock + register decode) | ~3.3 ns/call |
+| `rusty2600-core::system_full_ntsc_frame` | one full NTSC frame (262×228 color clocks) driven through the WHOLE `System` — real CPU decode/execute, TIA register writes, RIOT, and cart, via `System::step_instruction` in a loop, not a per-chip proxy | ~1.25 ms/frame |
 
 The TIA-only full-frame figure (~899 µs) is already well under the ≤ 2 ms/frame
 target with the full CPU+RIOT+cart overhead not yet included — comfortable
 headroom, consistent with the "far lighter than RustyNES's workload"
-expectation above. A true end-to-end frame bench (driving `System::step_instruction`
-in a loop until VSYNC, matching what `EmuCore::run_frame` does) is not yet
-part of this suite; add one if/when the ≤ 2 ms target needs real verification
-rather than a per-chip proxy.
+expectation above. The end-to-end `system_full_ntsc_frame` bench above
+(`crates/rusty2600-core/benches/frame_bench.rs`) confirms this holds with the
+full stack included: ~1.25 ms/frame, still comfortably under the ≤ 2 ms
+target.
+
+That bench drives a small hand-assembled synthetic 4 KiB `Rom4K` cartridge
+image (a real NTSC kernel: 3 lines VSYNC, 37 lines VBLANK, 192 visible lines,
+30 lines overscan, looping forever via `WSYNC` beam-stalls) rather than a
+committed game ROM — this project never commits commercial ROMs, and the only
+2600-cartridge-shaped images actually committed under `tests/roms/test_suite/`
+are two generic 6502 CPU conformance binaries, not a TIA-driving kernel. The
+synthetic ROM exercises the same code paths a real game would (CPU decode,
+TIA register writes, the scheduler's `WSYNC`/`RDY` stall), just without real
+graphics content, which the frame-timing bench doesn't need.
+
+## CI-gated performance-regression check
+
+`scripts/bench_regression_check.sh` runs `system_full_ntsc_frame` and fails if
+its measured mean exceeds a fixed **absolute** ceiling (currently
+**3,750,000 ns / 3.75 ms**, roughly 3x the ~1.25 ms measured baseline above —
+deliberately NOT a relative/percentage-based check, since CI runners have
+enough run-to-run timing variance that a relative comparison would flap on
+noise; an absolute ceiling with real headroom above the measured baseline
+still catches any regression severe enough to matter). Wired as the `perf` job
+in `.github/workflows/ci.yml`, `ubuntu-latest` only. Re-baseline the ceiling
+(with a comment explaining why) only after a deliberate, reviewed change
+legitimately moves the measured mean — never to silence a real regression.
 
 ## Determinism is not negotiable for performance
 
