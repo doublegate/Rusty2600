@@ -166,21 +166,52 @@ page-wrap) — this port is an equally-scoped, faithful translation of
 exactly what Stella itself implements, not a superset, and stays
 `BestEffort` tier indefinitely (only one known test ROM exists for it).
 
-AR/Supercharger (`T-0402-015`) and DPC+/CDF/CDFJ/CDFJ+ (`T-0401-006`,
-needing a full ARM7TDMI Thumb interpreter) remain unimplemented and are
-architecturally unlike everything else in this catalogue — both are scoped
-as separate, larger undertakings, not quick additions. AR in particular was
-deliberately NOT attempted alongside 4A50 in v1.5.0 despite being staged in
-the same release plan: even its "fast-load" (ROM-image-only) mode needs a
-bank-config decode, a delayed-write protocol keyed on 5 DISTINCT bus
-accesses (Stella tracks this via a global CPU-side counter this crate has
-no equivalent of — would need to be built from `snoop_read`/`snoop_write`/
-`cpu_read`/`cpu_write` combined), and a synthesized dummy 6502 BIOS stub
-whose exact bytes (Stella's `ourDummyROMCode`/`scrom.asm`) haven't been
-sourced yet — substantially larger than 4A50 or any other scheme here. The
-tiered TODOs above track the remaining board families; the honesty gate's
-oracle set must be extended in lockstep so the pass-rate stays truthful as
-boards land.
+**AR / Supercharger (`T-0402-015`, DONE)**: 6 KiB RAM (three 2 KiB banks) +
+a synthesized 2 KiB dummy BIOS ROM bank, mapped as two independent 2 KiB
+windows (`$1000..=$17FF`/`$1800..=$1FFF`) selected via a 5-bit
+configuration byte at hotspot `$1FF8`. Ported from Stella's
+`CartridgeAR`/`CartAR.cxx`, "fast-load" (ROM-image-only) mode only — the
+separate audio-cassette "sound-load" mode (streaming a real BIOS dump
+against decoded WAV/MP3 tape audio) is deliberately NOT ported; it needs
+an audio-decoding pipeline this `no_std` crate has no business owning, and
+every known AR ROM dump already exists in the fast-load BIN format.
+`BankAr` detects via its images' distinctive size (one or more 8448-byte
+loads back-to-back — never a power-of-2-KiB size, so unambiguous against
+every other scheme in this catalogue). BestEffort tier.
+
+The 5-distinct-access delayed-write protocol Stella tracks via a global
+`M6502` counter is reconstructed here without any `Bus`/`Cpu` change: since
+the `Bus` already calls exactly one of `Board::cpu_read`/`cpu_write`
+(cart-window) or `snoop_read`/`snoop_write` (every other CPU access) for
+EVERY memory access, `BankAr` increments its own counter from all four
+hooks, exactly mirroring Stella's global count. The BIOS's multi-load
+handoff (staging a bank-switch byte + start address into zero-page RIOT
+RAM for the BIOS to read back) needed one small, genuinely reusable
+architecture addition: `Board::take_oob_pokes()` (default empty), drained
+by `Bus::cpu_read`/`cpu_write` into `Riot::ram` directly — the same
+"out-of-band poke bypassing normal bus routing" primitive Stella's own
+`System::pokeOob` provides, not an AR-specific hack.
+
+The dummy BIOS's cosmetic post-exit accumulator value (arbitrary on real
+hardware; Stella seeds it from its own RNG) is a fixed constant here
+rather than any random source, per this project's determinism contract
+(ADR 0004) — unlike `BankDpc`'s patent-described RNG, this byte is not
+gameplay-load-bearing. The `fastscbios` user setting Stella exposes (skip
+vs. show the tape-loading progress bars) has no settings-plumbing
+equivalent in this crate; this port always shows them (authentic stock
+behavior). Stella's `finalizeLoad`/`getImage()` ROM-image re-export
+machinery is not ported — this crate's own `SaveState` format already
+covers persistence uniformly across every board.
+
+DPC+/CDF/CDFJ/CDFJ+ (`T-0401-006`, needing the `rusty2600-thumb` ARM7TDMI
+interpreter wired into a `Board`/`Cartridge` variant) remains unimplemented
+— its own separate, larger undertaking (register-map research per family,
+a `ThumbMemory` impl, a `tick_coprocessor()` hook into the scheduler), not
+attempted alongside AR in this pass. The tiered TODOs above track it; the
+honesty gate's oracle set only needs extending for `Core`/`Curated`
+schemes (never `BestEffort` — `BankAr` correctly does NOT appear in
+`tests/mapper_tier_honesty.rs`'s oracle set, since that gate exists
+precisely to keep `BestEffort` boards OUT of the accuracy-oracle corpus).
 
 ### `Board::snoop_write`/`snoop_read` — bankswitching outside the cart window
 

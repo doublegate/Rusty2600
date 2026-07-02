@@ -125,6 +125,17 @@ pub trait Board {
     fn snoop_read(&mut self, addr: u16, val: u8) {
         let _ = (addr, val);
     }
+
+    /// Drain any out-of-band RIOT-RAM pokes this board staged, to be
+    /// applied directly (bypassing normal bus routing/side-effects) —
+    /// mirrors Stella's `System::pokeOob`, used by `CartridgeAR` to hand a
+    /// loaded game's bank-switch/start-address bytes to its dummy BIOS stub
+    /// via zero-page RIOT RAM the BIOS then reads back through a normal CPU
+    /// instruction. Default empty (no allocation until a board actually
+    /// pushes to it); only `BankAr` currently uses this.
+    fn take_oob_pokes(&mut self) -> alloc::vec::Vec<(u16, u8)> {
+        alloc::vec::Vec::new()
+    }
 }
 
 /// 2 KiB ROM, mirrored into the upper half of the 4 KiB window. Core tier.
@@ -1854,6 +1865,443 @@ impl Board for BankDpc {
     }
 }
 
+/// AR / Supercharger (Starpath/Arcadia): a tape-loading cart with 6 KiB of
+/// RAM (three 2 KiB banks, indices 0-2) plus a synthesized 2 KiB dummy BIOS
+/// ROM bank (index 3), mapped as two independent 2 KiB windows
+/// (`$F000-$F7FF`, `$F800-$FFFF` — i.e. `$1000..=$17FF`/`$1800..=$1FFF` once
+/// masked into this crate's 13-bit cart window) selected via a 5-bit
+/// configuration byte written to hotspot `$1FF8`. Matches Stella's
+/// `CartridgeAR`/`CartAR.cxx` "fast-load" (ROM-image-only) path exactly;
+/// Stella's separate audio-cassette "sound-load" mode (streaming a real
+/// Supercharger BIOS dump against decoded WAV/MP3 tape audio) is
+/// deliberately NOT ported — it needs an audio-file-decoding pipeline this
+/// `no_std` crate has no business owning, and every known AR ROM dump
+/// already exists in the fast-load BIN format. BestEffort tier.
+///
+/// **The 5-distinct-access delayed-write protocol** (`docs/cart.md`'s own
+/// note on why this scheme was deferred past `[1.5.0]`): a read or write to
+/// `$F0xx` (RAM write-enabled) latches the address's low byte into a data-
+/// hold register and arms a pending write; the write commits to the
+/// destination address only if that address is touched exactly 5 DISTINCT
+/// bus accesses later (more resets the pending write). Stella tracks
+/// "distinct accesses" via a global counter on its `M6502`; this crate has
+/// no bus-wide access counter, so `BankAr` builds an equivalent by
+/// incrementing its OWN counter on every one of the four `Board` hooks it
+/// receives (`cpu_read`/`cpu_write` for its own `$1000..=$1FFF` window,
+/// `snoop_read`/`snoop_write` for every other CPU access the `Bus` routes to
+/// TIA/RIOT space) — since the `Bus` already calls exactly one of these four
+/// hooks for EVERY CPU memory access (see `bus.rs`'s `cpu_read`/`cpu_write`),
+/// this reconstructs the same "how many distinct accesses has the CPU made"
+/// count Stella's global counter provides, without needing any change to
+/// the `Bus`/`Cpu` themselves.
+///
+/// **The dummy BIOS's cosmetic "random" exit byte**: the real SC BIOS seeds
+/// the accumulator with an arbitrary value on exit; Stella seeds this from
+/// its own RNG. Per this project's determinism contract (ADR 0004), no cart
+/// board may depend on real entropy — this is cosmetic leftover-register
+/// state no known game depends on (unlike `BankDpc`'s patent-described RNG,
+/// which IS gameplay-load-bearing and is ported as a deterministic LFSR), so
+/// `BankAr` uses a fixed constant (`0x00`) instead of any random source.
+/// Similarly, the `fastscbios` user setting Stella exposes (skip vs. show
+/// the SC BIOS's tape-loading progress bars) has no settings-plumbing
+/// equivalent in this `no_std` crate; this port always shows the progress
+/// bars (`fastscbios = false`), matching stock/authentic SC BIOS behavior.
+///
+/// **Scope cut, documented not silently dropped**: Stella's `finalizeLoad`/
+/// `getImage()` machinery (synthesizing a valid header so a SAVED image can
+/// be re-exported as a standard multi-load BIN) is not ported — this
+/// crate's own save-state format (`rusty2600-core::SaveState`, serde-based
+/// over the whole `System`) already covers persistence for every board
+/// uniformly; a separate ROM-image re-export path has no consumer here.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BankAr {
+    // 3x2KiB RAM (indices 0-2) + 1x2KiB dummy-BIOS ROM (index 3) = 8 KiB.
+    #[serde(with = "serde_bytes_array")]
+    image: [u8; BankAr::IMAGE_SIZE],
+    // Every 8448-byte load block from the ROM file (page data + a 256 B
+    // header), consumed by the `$1850` fast-load hotspot.
+    load_images: alloc::vec::Vec<u8>,
+    image_offset: [u32; 2],
+    write_enabled: bool,
+    power: bool,
+    data_hold_register: u8,
+    /// This board's own reconstruction of Stella's global
+    /// `M6502::distinctAccesses()` counter (see the struct doc comment).
+    distinct_access_count: u32,
+    accesses_at_hold: u32,
+    write_pending: bool,
+    current_bank: u8,
+    /// The last value `snoop_read` observed at zero-page `$0080` — the BIOS
+    /// stages the requested load number there before touching the `$1850`
+    /// hotspot, matching Stella's own "BIOS places load number at 0x80".
+    #[serde(default)]
+    last_zp80: u8,
+    /// Bank-switch/start-address bytes staged for `Board::take_oob_pokes`
+    /// to hand to `rusty2600-core::Bus` (see [`Self::load_into_ram`]).
+    #[serde(default)]
+    pending_oob_pokes: alloc::vec::Vec<(u16, u8)>,
+}
+
+impl BankAr {
+    const BANK_SIZE: usize = 0x0800;
+    const RAM_SIZE: usize = 3 * Self::BANK_SIZE;
+    const IMAGE_SIZE: usize = 4 * Self::BANK_SIZE;
+    const LOAD_SIZE: usize = 8448;
+
+    // Bank-pair configurations, indexed by configuration bits D4-D2 — the
+    // active RAM/ROM bank offset for each of the two 2 KiB windows. Matches
+    // Stella's `CartridgeAR::bankConfiguration`'s `OFFSET_0`/`OFFSET_1`
+    // tables exactly (see that function's own comment for the full
+    // per-configuration RAM/ROM map this encodes).
+    #[allow(clippy::cast_possible_truncation)]
+    const OFFSET_0: [u32; 8] = [
+        2 * Self::BANK_SIZE as u32,
+        0,
+        2 * Self::BANK_SIZE as u32,
+        0,
+        2 * Self::BANK_SIZE as u32,
+        1 * Self::BANK_SIZE as u32,
+        2 * Self::BANK_SIZE as u32,
+        1 * Self::BANK_SIZE as u32,
+    ];
+    #[allow(clippy::cast_possible_truncation)]
+    const OFFSET_1: [u32; 8] = [
+        3 * Self::BANK_SIZE as u32,
+        3 * Self::BANK_SIZE as u32,
+        0,
+        2 * Self::BANK_SIZE as u32,
+        3 * Self::BANK_SIZE as u32,
+        3 * Self::BANK_SIZE as u32,
+        1 * Self::BANK_SIZE as u32,
+        2 * Self::BANK_SIZE as u32,
+    ];
+
+    /// Ported verbatim from Stella's `CartridgeAR::ourDummyROMCode` (a
+    /// synthesized 6502 stub emulating the real SC BIOS's tape-load
+    /// progress-bar UI and the fast-load `$1850` handoff) — see
+    /// `ref-proj/stella/src/emucore/CartAR.cxx`. Two bytes are patched at
+    /// initialization time (offsets 109 and 281, see [`Self::initialize_rom`]).
+    #[rustfmt::skip]
+    const DUMMY_ROM_CODE: [u8; 294] = [
+        0xa5, 0xfa, 0x85, 0x80, 0x4c, 0x18, 0xf8, 0xff,
+        0xff, 0xff, 0x78, 0xd8, 0xa0, 0x00, 0xa2, 0x00,
+        0x94, 0x00, 0xe8, 0xd0, 0xfb, 0x4c, 0x50, 0xf8,
+        0xa2, 0x00, 0xbd, 0x06, 0xf0, 0xad, 0xf8, 0xff,
+        0xa2, 0x00, 0xad, 0x00, 0xf0, 0xea, 0xbd, 0x00,
+        0xf7, 0xca, 0xd0, 0xf6, 0x4c, 0x50, 0xf8, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xa2, 0x03, 0xbc, 0x22, 0xf9, 0x94, 0xfa, 0xca,
+        0x10, 0xf8, 0xa0, 0x00, 0xa2, 0x28, 0x94, 0x04,
+        0xca, 0x10, 0xfb, 0xa2, 0x1c, 0x94, 0x81, 0xca,
+        0x10, 0xfb, 0xa9, 0xff, 0xc9, 0x00, 0xd0, 0x03,
+        0x4c, 0x13, 0xf9, 0xa9, 0x00, 0x85, 0x1b, 0x85,
+        0x1c, 0x85, 0x1d, 0x85, 0x1e, 0x85, 0x1f, 0x85,
+        0x19, 0x85, 0x1a, 0x85, 0x08, 0x85, 0x01, 0xa9,
+        0x10, 0x85, 0x21, 0x85, 0x02, 0xa2, 0x07, 0xca,
+        0xca, 0xd0, 0xfd, 0xa9, 0x00, 0x85, 0x20, 0x85,
+        0x10, 0x85, 0x11, 0x85, 0x02, 0x85, 0x2a, 0xa9,
+        0x05, 0x85, 0x0a, 0xa9, 0xff, 0x85, 0x0d, 0x85,
+        0x0e, 0x85, 0x0f, 0x85, 0x84, 0x85, 0x85, 0xa9,
+        0xf0, 0x85, 0x83, 0xa9, 0x74, 0x85, 0x09, 0xa9,
+        0x0c, 0x85, 0x15, 0xa9, 0x1f, 0x85, 0x17, 0x85,
+        0x82, 0xa9, 0x07, 0x85, 0x19, 0xa2, 0x08, 0xa0,
+        0x00, 0x85, 0x02, 0x88, 0xd0, 0xfb, 0x85, 0x02,
+        0x85, 0x02, 0xa9, 0x02, 0x85, 0x02, 0x85, 0x00,
+        0x85, 0x02, 0x85, 0x02, 0x85, 0x02, 0xa9, 0x00,
+        0x85, 0x00, 0xca, 0x10, 0xe4, 0x06, 0x83, 0x66,
+        0x84, 0x26, 0x85, 0xa5, 0x83, 0x85, 0x0d, 0xa5,
+        0x84, 0x85, 0x0e, 0xa5, 0x85, 0x85, 0x0f, 0xa6,
+        0x82, 0xca, 0x86, 0x82, 0x86, 0x17, 0xe0, 0x0a,
+        0xd0, 0xc3, 0xa9, 0x02, 0x85, 0x01, 0xa2, 0x1c,
+        0xa0, 0x00, 0x84, 0x19, 0x84, 0x09, 0x94, 0x81,
+        0xca, 0x10, 0xfb, 0xa6, 0x80, 0xdd, 0x00, 0xf0,
+        0xa9, 0x9a, 0xa2, 0xff, 0xa0, 0x00, 0x9a, 0x4c,
+        0xfa, 0x00, 0xcd, 0xf8, 0xff, 0x4c,
+    ];
+
+    /// Default 256-byte load header, used when a load's own bytes don't
+    /// carry a valid one. Ported verbatim from Stella's
+    /// `CartridgeAR::ourDefaultHeader` ("This data comes from z26").
+    #[rustfmt::skip]
+    const DEFAULT_HEADER: [u8; 256] = [
+        0xac, 0xfa, 0x0f, 0x18, 0x62, 0x00, 0x24, 0x02,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0x00, 0x04, 0x08, 0x0c, 0x10, 0x14, 0x18, 0x1c,
+        0x01, 0x05, 0x09, 0x0d, 0x11, 0x15, 0x19, 0x1d,
+        0x02, 0x06, 0x0a, 0x0e, 0x12, 0x16, 0x1a, 0x1e,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00,
+    ];
+
+    /// Build from a fast-load BIN image: one or more `LOAD_SIZE`
+    /// (8448-byte) loads back-to-back. Returns `None` if `rom` isn't a
+    /// nonzero multiple of `LOAD_SIZE`, or if there are more than 32 loads
+    /// (matching Stella's own `romBankCount() == 32` cap — the 5-bit
+    /// configuration byte can only address 32 distinct bank pairs).
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        if rom.is_empty() || rom.len() % Self::LOAD_SIZE != 0 {
+            return None;
+        }
+        let num_loads = rom.len() / Self::LOAD_SIZE;
+        if num_loads > 32 {
+            return None;
+        }
+
+        // `rom.len()` is already validated as a nonzero multiple of
+        // `LOAD_SIZE` above, so every load in `rom` is already a full
+        // 8448-byte block (page data + a real 256 B header) — no short-image
+        // padding is needed here, unlike Stella's constructor (which also
+        // accepts a single image shorter than one load and synthesizes a
+        // default header for it; no known AR dump is that malformed).
+        let load_images = rom.to_vec();
+
+        let mut board = Self {
+            image: [0u8; Self::IMAGE_SIZE],
+            load_images,
+            image_offset: [0, 0],
+            write_enabled: false,
+            power: true,
+            data_hold_register: 0,
+            distinct_access_count: 0,
+            accesses_at_hold: 0,
+            write_pending: false,
+            current_bank: 0,
+            last_zp80: 0,
+            pending_oob_pokes: alloc::vec::Vec::new(),
+        };
+        board.reset_state();
+        Some(board)
+    }
+
+    fn reset_state(&mut self) {
+        self.image[..Self::RAM_SIZE].fill(0);
+        self.initialize_rom();
+        self.write_enabled = false;
+        self.power = true;
+        self.data_hold_register = 0;
+        self.distinct_access_count = 0;
+        self.accesses_at_hold = 0;
+        self.write_pending = false;
+        self.last_zp80 = 0;
+        self.pending_oob_pokes.clear();
+        self.bank_configuration(0);
+    }
+
+    /// Synthesize the dummy SC BIOS into the ROM bank (image index 3).
+    /// Matches Stella's `CartridgeAR::initializeROM` exactly, less the two
+    /// nondeterministic inputs it patches from user settings/RNG — see the
+    /// struct doc comment's "cosmetic random exit byte" note.
+    fn initialize_rom(&mut self) {
+        let mut code = Self::DUMMY_ROM_CODE;
+        // offset 109: 0xFF skips the SC BIOS progress-bar UI, 0x00 shows it.
+        // This port always shows it (no settings plumbing in this crate).
+        code[109] = 0x00;
+        // offset 281: the accumulator's cosmetic post-BIOS value; fixed
+        // rather than random per this crate's determinism contract.
+        code[281] = 0x00;
+
+        // Illegal opcode 0x02 jams a real 6502 — matches Stella's own
+        // "fill with an illegal opcode" ROM-bank initialization.
+        self.image[Self::RAM_SIZE..Self::RAM_SIZE + Self::BANK_SIZE].fill(0x02);
+        self.image[Self::RAM_SIZE..Self::RAM_SIZE + code.len()].copy_from_slice(&code);
+
+        // 6502 reset/IRQ vectors -> $F80A (the BIOS entry point).
+        self.image[Self::RAM_SIZE + Self::BANK_SIZE - 4] = 0x0A;
+        self.image[Self::RAM_SIZE + Self::BANK_SIZE - 3] = 0xF8;
+        self.image[Self::RAM_SIZE + Self::BANK_SIZE - 2] = 0x0A;
+        self.image[Self::RAM_SIZE + Self::BANK_SIZE - 1] = 0xF8;
+    }
+
+    const fn image_index(&self, addr: u16) -> usize {
+        let window = if addr & 0x0800 != 0 { 1 } else { 0 };
+        (addr & 0x07FF) as usize + self.image_offset[window] as usize
+    }
+
+    /// Apply a 5-bit bank-pair configuration byte (hotspot `$1FF8`). Matches
+    /// Stella's `CartridgeAR::bankConfiguration` exactly (see its own
+    /// comment for the full per-configuration RAM/ROM map).
+    fn bank_configuration(&mut self, configuration: u8) {
+        let bank_config = usize::from((configuration & 0b0001_1100) >> 2);
+        self.current_bank = configuration & 0b0001_1111;
+        self.power = configuration & 0b0000_0001 == 0;
+        self.write_enabled = configuration & 0b0000_0010 != 0;
+        self.image_offset = [Self::OFFSET_0[bank_config], Self::OFFSET_1[bank_config]];
+    }
+
+    /// Note one more distinct bus access — called from every one of the
+    /// four `Board` hooks this board implements (see the struct doc
+    /// comment). Also cancels a stale pending write, mirroring Stella's own
+    /// "more than 5 intervening accesses cancels the pending write" check.
+    fn note_access(&mut self) {
+        self.distinct_access_count = self.distinct_access_count.wrapping_add(1);
+        if self.write_pending && self.distinct_access_count > self.accesses_at_hold + 5 {
+            self.write_pending = false;
+        }
+    }
+
+    /// The hotspot/delayed-write state machine, run on every cart-window
+    /// access. Returns `true` if a RAM write was committed this call.
+    /// Matches Stella's `CartridgeAR::handleHotspot` exactly.
+    fn handle_hotspot(&mut self, addr: u16) -> bool {
+        if addr & 0x0F00 == 0 && (!self.write_enabled || !self.write_pending) {
+            self.data_hold_register = addr as u8;
+            self.accesses_at_hold = self.distinct_access_count;
+            self.write_pending = true;
+        } else if addr == 0x1FF8 {
+            self.write_pending = false;
+            self.bank_configuration(self.data_hold_register);
+        } else if self.write_enabled
+            && self.write_pending
+            && self.distinct_access_count == self.accesses_at_hold + 5
+        {
+            let mut written = false;
+            if addr & 0x0800 == 0 {
+                let offset = (addr & 0x07FF) as usize + self.image_offset[0] as usize;
+                self.image[offset] = self.data_hold_register;
+                written = true;
+            } else if self.image_offset[1] != 3 * Self::BANK_SIZE as u32 {
+                let offset = (addr & 0x07FF) as usize + self.image_offset[1] as usize;
+                self.image[offset] = self.data_hold_register;
+                written = true;
+            }
+            self.write_pending = false;
+            return written;
+        }
+        false
+    }
+
+    /// Sum-of-bytes checksum, used by the load header's validation scheme
+    /// (each page's checksum + its page-map byte + its stored checksum byte
+    /// must sum to `0x55`). Matches Stella's anonymous-namespace `checksum`.
+    fn checksum(bytes: &[u8]) -> u8 {
+        bytes.iter().fold(0u8, |acc, &b| acc.wrapping_add(b))
+    }
+
+    /// Copy the numbered load's RAM pages into `self.image`, and stage its
+    /// bank-switch/start-address bytes as out-of-band RIOT-RAM pokes
+    /// (`$00FE`/`$00FF`/`$0080`) for the dummy BIOS to read back — matches
+    /// Stella's `CartridgeAR::loadIntoRAM` (a checksum mismatch is tolerated,
+    /// not fatal, matching real hardware's own best-effort tape read; this
+    /// port skips emitting the diagnostic message Stella logs on mismatch,
+    /// since this crate has no message-callback plumbing).
+    fn load_into_ram(&mut self, load: u8) {
+        for image in 0..self.num_loads() {
+            let base = image * Self::LOAD_SIZE;
+            let header_off = base + Self::IMAGE_SIZE;
+            if header_off + 6 > self.load_images.len() || self.load_images[header_off + 5] != load {
+                continue;
+            }
+
+            let mut header = [0u8; 256];
+            header.copy_from_slice(&self.load_images[header_off..header_off + 256]);
+
+            let num_pages = usize::from(header[3]);
+            for j in 0..num_pages.min(24) {
+                let bank = usize::from(header[16 + j] & 0b0000_0011);
+                let page = usize::from((header[16 + j] & 0b0001_1100) >> 2);
+                let src_off = base + j * 256;
+                if bank < 3 && src_off + 256 <= self.load_images.len() {
+                    let src = self.load_images[src_off..src_off + 256].to_vec();
+                    let dst = bank * Self::BANK_SIZE + page * 256;
+                    self.image[dst..dst + 256].copy_from_slice(&src);
+                }
+            }
+
+            // Bank-switch byte + start address, staged for the dummy BIOS
+            // to read back from zero-page ($00FE/$00FF/$0080).
+            self.pending_oob_pokes.push((0x00FE, header[0]));
+            self.pending_oob_pokes.push((0x00FF, header[1]));
+            self.pending_oob_pokes.push((0x0080, header[2]));
+            return;
+        }
+    }
+
+    const fn num_loads(&self) -> usize {
+        self.load_images.len() / Self::LOAD_SIZE
+    }
+}
+
+impl Board for BankAr {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        self.note_access();
+
+        // Fake-BIOS fast-load hotspot: only live when the ROM bank is
+        // mapped into the upper window (image_offset[1] == 3*BANK_SIZE).
+        // The BIOS stages the requested load number at zero-page $0080
+        // before touching this hotspot (observed via `snoop_read`, see
+        // `last_zp80`), matching Stella's own "BIOS places load number at
+        // 0x80" + "triggers a load via hotspot $1850" sequence.
+        if addr == 0x1850 && self.image_offset[1] == 3 * Self::BANK_SIZE as u32 {
+            let load = self.last_zp80;
+            self.load_into_ram(load);
+        }
+
+        self.handle_hotspot(addr);
+        self.image[self.image_index(addr)]
+    }
+
+    fn cpu_write(&mut self, addr: u16, _val: u8) {
+        self.note_access();
+        self.handle_hotspot(addr);
+    }
+
+    fn tier(&self) -> Tier {
+        Tier::BestEffort
+    }
+
+    fn snoop_read(&mut self, addr: u16, val: u8) {
+        self.note_access();
+        if addr == 0x0080 {
+            self.last_zp80 = val;
+        }
+    }
+
+    fn snoop_write(&mut self, addr: u16, val: u8) {
+        self.note_access();
+        // The BIOS's own code stages the requested load number at zero-page
+        // $0080 via a normal `STA $80` before touching the $1850 hotspot
+        // ("The BIOS reads a load number from zero-page address $80" — the
+        // write that puts it there is what this observes; `snoop_read`
+        // above also tracks it, covering either access order).
+        if addr == 0x0080 {
+            self.last_zp80 = val;
+        }
+    }
+
+    fn take_oob_pokes(&mut self) -> alloc::vec::Vec<(u16, u8)> {
+        core::mem::take(&mut self.pending_oob_pokes)
+    }
+}
+
 /// An enum wrapping all supported boards, enabling static dispatch and
 /// `no_std`-compatible serialization without trait objects.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1917,6 +2365,10 @@ pub enum Cartridge {
     /// independently relocatable ROM/RAM segments, previous-access-gated
     /// hotspots in both cart-window and TIA-mirrored space (BestEffort tier)
     Bank4A50(Bank4A50),
+    /// AR / Supercharger (Starpath/Arcadia): 6 KiB RAM + a synthesized 2 KiB
+    /// dummy BIOS ROM, a 5-bit bank-pair-select hotspot at `$1FF8`, and a
+    /// 5-distinct-access delayed-write RAM protocol (BestEffort tier)
+    BankAr(BankAr),
 }
 
 impl Board for Cartridge {
@@ -1944,6 +2396,7 @@ impl Board for Cartridge {
             Self::BankSb(b) => b.cpu_read(addr),
             Self::BankX07(b) => b.cpu_read(addr),
             Self::Bank4A50(b) => b.cpu_read(addr),
+            Self::BankAr(b) => b.cpu_read(addr),
         }
     }
 
@@ -1971,6 +2424,7 @@ impl Board for Cartridge {
             Self::BankSb(b) => b.cpu_write(addr, val),
             Self::BankX07(b) => b.cpu_write(addr, val),
             Self::Bank4A50(b) => b.cpu_write(addr, val),
+            Self::BankAr(b) => b.cpu_write(addr, val),
         }
     }
 
@@ -1998,6 +2452,7 @@ impl Board for Cartridge {
             Self::BankSb(b) => b.tier(),
             Self::BankX07(b) => b.tier(),
             Self::Bank4A50(b) => b.tier(),
+            Self::BankAr(b) => b.tier(),
         }
     }
 
@@ -2025,6 +2480,7 @@ impl Board for Cartridge {
             Self::BankSb(b) => b.tick(),
             Self::BankX07(b) => b.tick(),
             Self::Bank4A50(b) => b.tick(),
+            Self::BankAr(b) => b.tick(),
         }
     }
 
@@ -2052,6 +2508,7 @@ impl Board for Cartridge {
             Self::BankSb(b) => b.tick_coprocessor(),
             Self::BankX07(b) => b.tick_coprocessor(),
             Self::Bank4A50(b) => b.tick_coprocessor(),
+            Self::BankAr(b) => b.tick_coprocessor(),
         }
     }
 
@@ -2079,6 +2536,7 @@ impl Board for Cartridge {
             Self::BankSb(b) => b.snoop_write(addr, val),
             Self::BankX07(b) => b.snoop_write(addr, val),
             Self::Bank4A50(b) => b.snoop_write(addr, val),
+            Self::BankAr(b) => b.snoop_write(addr, val),
         }
     }
 
@@ -2106,6 +2564,14 @@ impl Board for Cartridge {
             Self::BankSb(b) => b.snoop_read(addr, val),
             Self::BankX07(b) => b.snoop_read(addr, val),
             Self::Bank4A50(b) => b.snoop_read(addr, val),
+            Self::BankAr(b) => b.snoop_read(addr, val),
+        }
+    }
+
+    fn take_oob_pokes(&mut self) -> alloc::vec::Vec<(u16, u8)> {
+        match self {
+            Self::BankAr(b) => b.take_oob_pokes(),
+            _ => alloc::vec::Vec::new(),
         }
     }
 }
@@ -2372,6 +2838,19 @@ fn is_probably_4a50(rom: &[u8]) -> bool {
 /// Returns `None` for an unrecognized size / scheme.
 #[must_use]
 pub fn detect(rom: &[u8]) -> Option<Cartridge> {
+    // AR/Supercharger fast-load images are one or more 8448-byte loads
+    // back-to-back (`BankAr::LOAD_SIZE`) — a distinctive size that never
+    // collides with any power-of-2-KiB scheme in the match below (8448,
+    // 16896, 25344, ... vs. 2048/4096/8192/16384/32768/...), so it's
+    // checked unconditionally before the main size-based dispatch, exactly
+    // like every other unambiguous-size scheme (DPC's 10 KiB, FA's 12 KiB).
+    if !rom.is_empty() && rom.len() % BankAr::LOAD_SIZE == 0 {
+        let num_loads = rom.len() / BankAr::LOAD_SIZE;
+        if num_loads >= 1 && num_loads <= 32 {
+            return BankAr::new(rom).map(Cartridge::BankAr);
+        }
+    }
+
     match rom.len() {
         // 2 KiB / 4 KiB: `BankCV` (CommaVid) is the SAME two sizes (2 KiB
         // ROM-only, or 4 KiB "2K RAM-image + 2K ROM"); checked first via its
@@ -3349,5 +3828,165 @@ mod tests {
         img[0xFF00] = 0x0C;
         img[0xFF02] = 0x6E;
         assert!(matches!(detect(&img).unwrap(), Cartridge::Bank4A50(_)));
+    }
+
+    // --- AR / Supercharger --------------------------------------------
+
+    fn ar_single_load(load_number: u8, num_pages: u8) -> alloc::vec::Vec<u8> {
+        let mut load = alloc::vec![0u8; BankAr::LOAD_SIZE];
+        // Header lives at offset IMAGE_SIZE (8192) within the 8448-byte load.
+        let h = BankAr::IMAGE_SIZE;
+        load[h] = 0x07; // bank-switch byte (arbitrary, round-tripped verbatim)
+        load[h + 1] = 0x34; // start address lo
+        load[h + 2] = 0x12; // start address hi (stored at zp $0080 per header[2])
+        load[h + 3] = num_pages;
+        load[h + 5] = load_number;
+        for j in 0..usize::from(num_pages).min(24) {
+            // bank j/8, page j%8 — a simple linear page map.
+            load[h + 16 + j] = ((j % 8) << 2 | (j / 8)) as u8;
+            // Page j's own byte content: fill with a value identifying it,
+            // so a successful copy into RAM is independently verifiable.
+            let page_off = j * 256;
+            load[page_off] = 0xA0 + j as u8;
+        }
+        load
+    }
+
+    #[test]
+    fn detect_resolves_ar_via_load_size_multiple() {
+        let load = ar_single_load(0, 1);
+        assert!(matches!(detect(&load).unwrap(), Cartridge::BankAr(_)));
+
+        // Two loads back-to-back is still unambiguously AR.
+        let mut two = load.clone();
+        two.extend_from_slice(&ar_single_load(1, 1));
+        assert!(matches!(detect(&two).unwrap(), Cartridge::BankAr(_)));
+    }
+
+    #[test]
+    fn ar_reports_besteffort_tier() {
+        let load = ar_single_load(0, 1);
+        assert_eq!(detect(&load).unwrap().tier(), Tier::BestEffort);
+    }
+
+    #[test]
+    fn ar_dummy_bios_is_installed_on_reset() {
+        let load = ar_single_load(0, 1);
+        let mut cart = detect(&load).unwrap();
+        // Reset vectors -> $F80A, i.e. offset IMAGE_SIZE-4..=IMAGE_SIZE-1
+        // within the upper-window ROM bank once mapped in (bank config 0
+        // maps the upper window to the ROM bank, per OFFSET_1[0]).
+        assert_eq!(cart.cpu_read(0x1FFC), 0x0A);
+        assert_eq!(cart.cpu_read(0x1FFD), 0xF8);
+        assert_eq!(cart.cpu_read(0x1FFE), 0x0A);
+        assert_eq!(cart.cpu_read(0x1FFF), 0xF8);
+    }
+
+    /// Drive the config-commit protocol: touch `$1000 | configuration` (bits
+    /// 8-11 are 0 there, hitting the data-hold-latch branch and capturing
+    /// `configuration` itself as the touched address's low byte — see
+    /// `BankAr::handle_hotspot`'s doc comment), then commit via `$1FF8`.
+    fn ar_set_config(cart: &mut Cartridge, configuration: u8) {
+        cart.cpu_write(0x1000 | u16::from(configuration), 0);
+        cart.cpu_write(0x1FF8, 0);
+    }
+
+    #[test]
+    fn ar_bank_configuration_selects_ram_and_rom_windows() {
+        let load = ar_single_load(0, 1);
+        let mut cart = detect(&load).unwrap();
+        // bank_config=0b010=2 -> OFFSET_0[2]=2*BANK (RAM), OFFSET_1[2]=0*BANK
+        // (RAM); D1=1 write-enabled.
+        ar_set_config(&mut cart, 0b0000_1010);
+        // Both windows now map to RAM banks — reads should NOT return the
+        // dummy BIOS's illegal-opcode fill (0x02, only present in the ROM
+        // bank at image index 3).
+        assert_ne!(cart.cpu_read(0x1000), 0x02);
+        assert_ne!(cart.cpu_read(0x1800), 0x02);
+    }
+
+    #[test]
+    fn ar_delayed_write_commits_after_exactly_five_distinct_accesses() {
+        let load = ar_single_load(0, 1);
+        let mut cart = detect(&load).unwrap();
+        // bank_config=2: both windows RAM, write-enabled.
+        ar_set_config(&mut cart, 0b0000_1010);
+
+        // Latch a data-hold byte via a $F0xx access (low byte 0xAB) — this
+        // is distinct access #1 after the config-commit sequence above.
+        cart.cpu_write(0x10AB, 0);
+        // Four more distinct accesses (#2-#5).
+        cart.cpu_read(0x1001);
+        cart.cpu_read(0x1002);
+        cart.cpu_read(0x1003);
+        cart.cpu_read(0x1005);
+        // The 6th distinct access is the commit itself, to the destination
+        // ($1004, in the lower/RAM window per OFFSET_0[2]=2*BANK).
+        cart.cpu_write(0x1004, 0);
+        assert_eq!(
+            cart.cpu_read(0x1004),
+            0xAB,
+            "the held byte (0xAB, the low byte of the $10AB latch address) \
+             should have committed to $1004 on exactly the 5th distinct \
+             access after the latch"
+        );
+    }
+
+    #[test]
+    fn ar_delayed_write_is_cancelled_after_too_many_accesses() {
+        let load = ar_single_load(0, 1);
+        let mut cart = detect(&load).unwrap();
+        ar_set_config(&mut cart, 0b0000_1010);
+
+        cart.cpu_write(0x10CD, 0); // latch (data_hold_register = 0xCD)
+        // Six MORE accesses — more than the 5 that would otherwise commit —
+        // so the pending write is cancelled before it can land.
+        for _ in 0..6 {
+            cart.cpu_read(0x1001);
+        }
+        cart.cpu_write(0x1004, 0);
+        assert_ne!(
+            cart.cpu_read(0x1004),
+            0xCD,
+            "a write pending for more than 5 distinct accesses must be \
+             cancelled, not committed late"
+        );
+    }
+
+    #[test]
+    fn ar_fast_load_hotspot_copies_pages_into_ram() {
+        let load = ar_single_load(0x2A, 2);
+        let mut cart = detect(&load).unwrap();
+        // The BIOS stages the requested load number at zero-page $0080
+        // (this board observes any TIA/RIOT-space access to that address
+        // through `snoop_read`/`snoop_write`, matching real hardware, which
+        // has no notion of "cart peeks vs. pokes" for observation purposes).
+        cart.snoop_write(0x0080, 0x2A);
+        // Default bank configuration (0) maps the upper window to the ROM
+        // bank (OFFSET_1[0] == 3*BANK_SIZE), so the fast-load hotspot at
+        // $1850 is live.
+        let _ = cart.cpu_read(0x1850);
+
+        let pokes = cart.take_oob_pokes();
+        assert_eq!(
+            pokes,
+            alloc::vec![
+                (0x00FEu16, 0x07u8),
+                (0x00FFu16, 0x34u8),
+                (0x0080u16, 0x12u8)
+            ],
+            "loadIntoRAM should stage the bank-switch byte, start address, \
+             and the load's own header[2] byte for the dummy BIOS to read \
+             back from zero-page RIOT RAM"
+        );
+
+        // Reconfigure so RAM bank 0 (where loadIntoRAM copied page 0) is
+        // mapped into the lower window: bank_config=1 -> OFFSET_0[1]=0.
+        ar_set_config(&mut cart, 0b0000_0110);
+        assert_eq!(
+            cart.cpu_read(0x1000),
+            0xA0,
+            "page 0's identifying byte should have been copied into RAM bank 0"
+        );
     }
 }
