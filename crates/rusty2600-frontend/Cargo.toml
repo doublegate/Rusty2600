@@ -151,7 +151,7 @@ web-sys = { version = "0.3.77", features = [
 [dev-dependencies]
 # Validate the embedded WGSL at test time with the same naga wgpu uses at run
 # time, so a shader error fails CI instead of aborting the app.
-naga = { version = "29", features = ["wgsl-in"] }
+naga = { version = "30", features = ["wgsl-in"] }
 
 [lints]
 workspace = true
