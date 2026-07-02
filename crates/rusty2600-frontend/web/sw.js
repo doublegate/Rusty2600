@@ -14,20 +14,30 @@
 "use strict";
 
 const CACHE_NAME = "rusty2600-shell-v1";
+// Prefix every cache this worker ever creates so `activate` can safely identify "an old version
+// of MY OWN shell cache" without touching anything else. Cache Storage is origin-wide, not
+// scoped to this service worker or this path — a sibling GitHub Pages project sharing the same
+// `doublegate.github.io` origin could have its own unrelated caches, and deleting "everything
+// except CACHE_NAME" would wipe those too.
+const CACHE_PREFIX = "rusty2600-shell-";
 
 // Activate as soon as possible — don't wait for existing tabs to close before taking over.
 self.addEventListener("install", () => {
     self.skipWaiting();
 });
 
-// Drop any cache from a previous CACHE_NAME so a new deploy isn't served a stale wasm binary
-// alongside fresh JS glue (a mismatched pair would be a hard boot failure, not a soft one).
+// Drop any PREVIOUS Rusty2600 shell cache (by CACHE_PREFIX, not "every cache but this one") so a
+// new deploy isn't served a stale wasm binary alongside fresh JS glue (a mismatched pair would be
+// a hard boot failure, not a soft one) — without touching caches belonging to anything else on
+// this origin.
 self.addEventListener("activate", (event) => {
     event.waitUntil(
         (async () => {
             const keys = await caches.keys();
             await Promise.all(
-                keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
+                keys
+                    .filter((k) => k.startsWith(CACHE_PREFIX) && k !== CACHE_NAME)
+                    .map((k) => caches.delete(k))
             );
             await self.clients.claim();
         })()
@@ -51,10 +61,16 @@ function cacheKey(request) {
     return request;
 }
 
-// Cache-first for same-origin GETs, with a background revalidate so a stale cached entry is
-// refreshed for next time without blocking this response. Falls back to (and populates the
-// cache from) the network on a cache miss. Cross-origin and non-GET requests pass straight
-// through untouched.
+// Navigation requests (`index.html`) use network-first, not cache-first-then-revalidate: Trunk
+// hashes sub-resource filenames per build, so if a stale cached `index.html` were served while a
+// background fetch silently overwrote it with the NEW `index.html`, a later offline visit would
+// get HTML referencing hashed assets that were never actually fetched/cached — a fully broken
+// offline load. Network-first guarantees the cached `index.html` (whenever it does get updated)
+// always corresponds to a session where its referenced hashed assets were also just fetched and
+// cached, so the offline fallback is always internally consistent. Sub-resources (wasm/JS/CSS/
+// icons/manifest) are immutable-by-hash (or close enough), so cache-first-then-revalidate is
+// safe and faster for them — a stale cache entry there just means using last build's copy of an
+// asset that has since been superseded by a differently-named file anyway.
 self.addEventListener("fetch", (event) => {
     const request = event.request;
     if (request.method !== "GET") {
@@ -66,6 +82,28 @@ self.addEventListener("fetch", (event) => {
     }
 
     const key = cacheKey(request);
+
+    if (request.mode === "navigate") {
+        event.respondWith(
+            (async () => {
+                try {
+                    const response = await fetch(request);
+                    if (response && response.ok) {
+                        const cache = await caches.open(CACHE_NAME);
+                        cache.put(key, response.clone());
+                    }
+                    return response;
+                } catch (err) {
+                    // Offline: fall back to whatever shell was cached during the last successful
+                    // online visit (guaranteed consistent with its own hashed sub-resources).
+                    const cache = await caches.open(CACHE_NAME);
+                    return (await cache.match(key)) || Response.error();
+                }
+            })()
+        );
+        return;
+    }
+
     event.respondWith(
         (async () => {
             const cache = await caches.open(CACHE_NAME);
