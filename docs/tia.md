@@ -147,6 +147,36 @@ region — the same value is yellowish on NTSC, gray on PAL, aqua on SECAM — s
 palette is **region data** (`docs/compatibility.md`). Per
 ref-docs/research-report.md §5.9.
 
+## Object-ID mask (`hd-pack` feature, v2.7.0)
+
+`render_pixel` resolves `current_color` from `pf_pixel`/`bl_pixel`/`p0_pixel`/`p1_pixel`/
+`m0_pixel`/`m1_pixel` (the per-object "on at this dot" booleans) plus the `CTRLPF` bit 2
+priority order. Behind the off-by-default `hd-pack` Cargo feature, `Tia` records a SECOND,
+parallel per-pixel output alongside `video_buffer`: `object_mask: Vec<ObjectTag>`, indexed
+identically (`scanline * 160 + x`). `ObjectTag { object: ObjectId, grp: u8, nusiz: u8 }` names
+which object won color-priority resolution at that dot (`ObjectId::{Background, Playfield,
+Ball, Missile0, Missile1, Player0, Player1}`), plus -- for `Player0`/`Player1` pixels -- the
+exact `GRPx` (VDELP-resolved) and `NUSIZx` byte live when that pixel was rendered.
+
+This is a read-only tap on values `render_pixel` already computes; it does not alter
+`current_color`'s resolution order, and is compiled out entirely when `hd-pack` is off (the
+default), leaving `video_buffer` and every existing behavior byte-identical. Within the
+color-priority groups that share one color (`p0_pixel || m0_pixel`, `p1_pixel || m1_pixel`,
+`pf_pixel || bl_pixel`), the mask picks a single concrete object with a fixed, documented
+precedence (player over its own missile; playfield over ball) since color resolution itself
+never distinguishes them.
+
+Capturing `GRPx`/`NUSIZx` fresh on every `render_pixel` call (not once per frame/scanline) is
+what makes sprite multiplexing (a game rewriting `GRP0`/`GRP1` mid-scanline, between drawn
+columns, to draw more than 2 player objects per line) resolve correctly: pixels before and
+after such a rewrite carry different captured values, matching what was actually drawn at
+each one.
+
+The mask is output-only, consumed by `rusty2600-frontend`'s HD-pack live rendering splice
+(`crate::sprite_pack`, `crate::emu_thread::EmuCore::step_frame`) -- never read back into TIA
+behavior. Missile/ball/playfield/background pixels are tagged but have no HD-pack replacement
+key (`sprite_pack`'s data model is player-only by design; see its own doc comment).
+
 ## Write-register map (anchor subset)
 
 The `regs` module pins the strobes; the full map is the table above. Strobe

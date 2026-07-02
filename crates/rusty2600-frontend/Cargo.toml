@@ -72,8 +72,10 @@ wasm-canvas = []
 emu-thread = []
 help-tui = ["dep:ratatui"]
 debug-hooks = []
-# Output-only TIA tile-source export for an HD-pack / texture-replacement loader.
-hd-pack = []
+# Output-only TIA tile-source export for an HD-pack / texture-replacement loader. Forwards to
+# `rusty2600-core/hd-pack` (-> `rusty2600-tia/hd-pack`) so the object-ID mask this crate's live
+# splice reads is actually compiled into the chip crate.
+hd-pack = ["rusty2600-core/hd-pack"]
 # RetroAchievements integration. Pulls in `rusty2600-cheevos` (the safe
 # `RaClient` wrapper over the vendored rcheevos C library). Off by default so
 # the shipped build links no extra C. `rusty2600-cheevos` itself compiles to

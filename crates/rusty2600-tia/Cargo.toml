@@ -9,6 +9,11 @@ authors.workspace = true
 [features]
 default = ["std"]
 std = []
+# Output-only per-pixel object-ID mask (`ObjectId`/`ObjectTag`, `Tia::object_mask`) parallel to
+# `video_buffer`, feeding the frontend's `hd-pack` sprite-replacement splice. Adds a new, separate
+# output channel only -- `render_pixel`'s existing priority-resolution logic and `video_buffer`'s
+# byte content are untouched when this is off (the default).
+hd-pack = []
 
 [dependencies]
 serde.workspace = true

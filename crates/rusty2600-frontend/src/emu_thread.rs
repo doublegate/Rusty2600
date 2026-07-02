@@ -100,6 +100,12 @@ pub struct EmuCore {
     /// `save_state.rs`'s own module doc for why the core itself stays
     /// agnostic to how this tag is computed.
     rom_tag: Option<u64>,
+    /// The loaded HD-pack sprite-replacement pack, if any (`hd-pack` feature, native-only --
+    /// matches `crate::sprite_pack`'s own gating). Consulted by [`Self::step_frame`]'s live
+    /// splice: a player pixel whose captured `(GRPx, NUSIZx)` has an entry here gets that
+    /// entry's bitmap instead of the flat resolved TIA color.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "hd-pack"))]
+    pub sprite_pack: Option<crate::sprite_pack::SpritePack>,
 }
 
 /// A 64-bit FNV-1a hash of `bytes` — a fast, allocation-free, dependency-free
@@ -139,7 +145,15 @@ impl EmuCore {
             dc_blocker_x: 0.0,
             dc_blocker_y: 0.0,
             rom_tag: None,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "hd-pack"))]
+            sprite_pack: None,
         }
+    }
+
+    /// Installs (or clears) the HD-pack sprite-replacement pack the live splice consults.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "hd-pack"))]
+    pub fn set_sprite_pack(&mut self, pack: Option<crate::sprite_pack::SpritePack>) {
+        self.sprite_pack = pack;
     }
 
     /// Load a raw ROM image: detect the bankswitch board and install it on the Bus.
@@ -398,10 +412,14 @@ impl EmuCore {
 
     /// Produce exactly one frame's worth of color clocks, accumulating beam dots into
     /// `frames` (the dedicated-emu-thread path).
+    // The `hd-pack`-gated splice block adds real source lines to this function's span even when
+    // the feature is off (cfg-stripped code still counts toward clippy's line span) -- same
+    // rationale as `Gfx::new_async`'s own `too_many_lines` allow.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        clippy::cast_lossless
+        clippy::cast_lossless,
+        clippy::too_many_lines
     )]
     pub fn step_frame(&mut self, frames: &FrameProducer, input: Option<(u8, u8, u8, u8, [u8; 4])>) {
         if let Some((swcha, swchb, inpt4, inpt5, paddles)) = input {
@@ -488,12 +506,75 @@ impl EmuCore {
         }
 
         let video = &self.system.bus.tia.video_buffer;
+        #[cfg(all(not(target_arch = "wasm32"), feature = "hd-pack"))]
+        let object_mask = &self.system.bus.tia.object_mask;
+        #[cfg(all(not(target_arch = "wasm32"), feature = "hd-pack"))]
+        let sprite_pack = self.sprite_pack.as_ref();
         for y in 0..active_h as usize {
             let sl = y + vblank_lines as usize;
+            // Tracks the start-x of the current run of contiguous same-(object, GRPx, NUSIZx)
+            // player pixels on this scanline, so a footprint wider than one dot (NUSIZx size
+            // bits) maps its dots onto the replacement bitmap's width in order.
+            #[cfg(all(not(target_arch = "wasm32"), feature = "hd-pack"))]
+            let mut run_start_x = 0usize;
+            #[cfg(all(not(target_arch = "wasm32"), feature = "hd-pack"))]
+            let mut run_key: Option<(rusty2600_core::tia::ObjectId, u8, u8)> = None;
             for x in 0..160usize {
                 let src = sl * 160 + x;
                 let color_idx = video.get(src).copied().unwrap_or(0);
                 let rgb = self.region.lookup(color_idx >> 1);
+
+                // Live HD-pack splice: a player pixel whose captured (GRPx, NUSIZx) matches a
+                // loaded replacement bitmap gets that bitmap's pixel instead of the flat
+                // resolved TIA color, nearest-neighbor scaled onto the object's on-screen
+                // footprint width. Missile/ball/playfield/background pixels are untouched --
+                // `sprite_pack`'s data model has no replacement key for them (see its own doc
+                // comment). Off (or not built with `hd-pack`), this block is entirely absent.
+                #[cfg(all(not(target_arch = "wasm32"), feature = "hd-pack"))]
+                if let Some(pack) = sprite_pack {
+                    let tag = object_mask.get(src).copied().unwrap_or_default();
+                    let is_player = matches!(
+                        tag.object,
+                        rusty2600_core::tia::ObjectId::Player0
+                            | rusty2600_core::tia::ObjectId::Player1
+                    );
+                    let key = is_player.then_some((tag.object, tag.grp, tag.nusiz));
+                    if key != run_key {
+                        run_start_x = x;
+                        run_key = key;
+                    }
+                    if let Some((_, grp, nusiz)) = key
+                        && let Some(bitmap) = pack.lookup(grp, nusiz)
+                        && bitmap.width > 0
+                        && bitmap.height > 0
+                    {
+                        let scale = match nusiz & 0x07 {
+                            5 => 2,
+                            7 => 4,
+                            _ => 1,
+                        };
+                        let footprint_w = 8 * scale;
+                        let run_offset = x - run_start_x;
+                        if run_offset < footprint_w {
+                            let bmp_x = (run_offset * bitmap.width as usize / footprint_w)
+                                .min(bitmap.width as usize - 1);
+                            // A player's on-screen height isn't a first-class TIA concept (a
+                            // game builds it from repeated per-scanline GRPx writes) -- this
+                            // proof-of-mechanism cut samples the bitmap's row by the frame's own
+                            // scanline, not a tracked per-instance sprite row.
+                            let bmp_y = y % bitmap.height as usize;
+                            let idx = (bmp_y * bitmap.width as usize + bmp_x) * 4;
+                            if idx + 2 < bitmap.rgba.len() {
+                                let r = u32::from(bitmap.rgba[idx]);
+                                let g = u32::from(bitmap.rgba[idx + 1]);
+                                let b = u32::from(bitmap.rgba[idx + 2]);
+                                frame.put_dot(x, y, (r << 16) | (g << 8) | b);
+                                continue;
+                            }
+                        }
+                    }
+                }
+
                 frame.put_dot(x, y, rgb);
             }
         }
