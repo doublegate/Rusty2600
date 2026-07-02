@@ -6,6 +6,13 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-07-02 - "Web Awakens"
+
+Second release of the RustyNES gap-closure arc, shipped through PR #14 with
+CI + automated review-bot adjudication (GitHub Copilot, Gemini Code Assist —
+7 findings, all genuine and fixed, including a real memory leak in the new
+wasm ROM-loading path and a latent wasm32 feature-gate compile-error risk).
+
 ### Added
 
 - **Real winit+wgpu+egui rendering on `wasm32`** (`v2.5.0` "Web Awakens",
