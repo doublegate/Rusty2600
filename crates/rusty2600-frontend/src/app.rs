@@ -970,6 +970,39 @@ impl App {
                     }
                 }
                 #[cfg(feature = "netplay")]
+                MenuAction::NetplayConnectStun {
+                    local_port,
+                    remote_public_addr,
+                } => {
+                    let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                    if emu.rom_loaded {
+                        active.shell.status =
+                            "Netplay: discovering public address via STUN...".into();
+                        match crate::netplay_session::NetplaySession::connect_via_stun(
+                            local_port,
+                            remote_public_addr,
+                            emu.system.clone(),
+                            0,
+                        ) {
+                            Ok((session, public_addr)) => {
+                                // See `MenuAction::NetplayConnect`'s identical
+                                // rationale for pausing the background emu-thread.
+                                emu.paused = true;
+                                active.netplay = Some(session);
+                                active.shell.status = format!(
+                                    "Netplay: your address is {public_addr}; \
+                                     connecting to {remote_public_addr}..."
+                                );
+                            }
+                            Err(e) => {
+                                active.shell.status = format!("Netplay STUN connect failed: {e}");
+                            }
+                        }
+                    } else {
+                        active.shell.status = "Netplay: load a ROM first".into();
+                    }
+                }
+                #[cfg(feature = "netplay")]
                 MenuAction::NetplayDisconnect => {
                     active.netplay = None;
                     active

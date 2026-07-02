@@ -12,17 +12,19 @@
 //! networking.
 //!
 //! See `session.rs`'s module docs for the exact scope of what's real in
-//! this release (2-player-only, direct-IP/LAN UDP transport) versus what's
-//! deliberately deferred (STUN/NAT traversal, WebRTC, frontend wiring).
-//! `config.rs`'s module docs explain [`PortInput`] — the per-player wire
-//! type this crate actually uses, and why `rusty2600_core::MovieFrame`
-//! (which packs BOTH joystick ports together) doesn't fit `ggrs::Config`'s
-//! inherently per-player `Input` type directly.
+//! this release (2-player-only UDP transport, direct-IP/LAN or
+//! `[2.3.0]`'s STUN-assisted path) versus what's deliberately deferred
+//! (WebRTC — see `stun.rs`'s module doc for why). `config.rs`'s module
+//! docs explain [`PortInput`] — the per-player wire type this crate
+//! actually uses, and why `rusty2600_core::MovieFrame` (which packs BOTH
+//! joystick ports together) doesn't fit `ggrs::Config`'s inherently
+//! per-player `Input` type directly.
 
 mod checksum;
 mod config;
 mod frame_advance;
 mod session;
+mod stun;
 
 pub use checksum::checksum128;
 pub use config::{PortInput, RustyConfig};
@@ -31,6 +33,7 @@ pub use session::{
     DEFAULT_INPUT_DELAY, DEFAULT_MAX_PREDICTION_WINDOW, LOCAL_PLAYER_HANDLE, NetplayError,
     REMOTE_PLAYER_HANDLE, RollbackSession,
 };
+pub use stun::{DEFAULT_STUN_SERVER, StunError, discover_public_address, hole_punch};
 
 #[cfg(test)]
 mod desync_tests {
