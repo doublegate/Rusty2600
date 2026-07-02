@@ -1,0 +1,14 @@
+# Deliberately placeholder-obvious HD-pack proof-of-mechanism fixture.
+#
+# Keyed to GRP0 = 0xFF (fully-lit 8px sprite), NUSIZ0 = 0 (one copy, normal
+# size) -- the exact register values the synthetic test ROM in
+# `hd_pack_splice.rs` writes. A single opaque magenta pixel: a color no real
+# NTSC/PAL/SECAM TIA palette entry produces, so its appearance in a rendered
+# frame is unambiguous proof the splice substituted this bitmap rather than
+# the flat resolved TIA color.
+[[sprite]]
+grp = 255
+nusiz = 0
+width = 1
+height = 1
+file = "player0_magenta.rgba"

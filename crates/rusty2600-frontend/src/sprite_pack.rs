@@ -12,16 +12,14 @@
 //! exactly what the 2600 actually has: a replacement bitmap keyed by
 //! `(GRPx value, NUSIZx copy mode)`.
 //!
-//! **Scope of this release**: the data model and manifest loader below are
-//! real and tested. Splicing a loaded replacement bitmap into the live wgpu
-//! render path is honestly deferred — the TIA's rendering pipeline
-//! currently flattens every object into one resolved-color `video_buffer`
-//! with no per-pixel "this dot came from P0" tag preserved, so wiring real
-//! HD replacement needs an object-ID mask threaded through the TIA first (a
-//! genuine architectural addition, not a quick splice). Landing the data
-//! model now, rather than not at all, matches the project's convention of
-//! shipping what's real and flagging what's deferred rather than presenting
-//! an approximation as complete (see `docs/STATUS.md`'s Version policy).
+//! **Scope of this release**: the data model and manifest loader below are real and tested, and
+//! (as of v2.7.0 "True Colors") so is the live splice. `rusty2600-tia`'s `hd-pack`-gated
+//! `object_mask` (see `docs/tia.md`) now tags every pixel with which object rendered it plus,
+//! for player pixels, the exact `(GRPx, NUSIZx)` live at that moment; `crate::emu_thread::
+//! EmuCore::step_frame` consults `EmuCore::sprite_pack` against that mask and substitutes a
+//! matching replacement bitmap's pixels for a player object's on-screen footprint, nearest-
+//! neighbor scaled. Still deliberately player-only, matching this module's data model: missile/
+//! ball/playfield/background pixels are tagged by the mask but have no replacement key here.
 
 use std::collections::HashMap;
 use std::path::Path;

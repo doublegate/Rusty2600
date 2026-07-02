@@ -109,6 +109,39 @@ pub struct Collisions {
     pub cxppmm: u8,
 }
 
+/// Which TIA object won color-priority resolution at a given pixel (`hd-pack` feature).
+///
+/// Output-only: fed by [`Tia::object_mask`] to the frontend's HD-pack sprite-replacement
+/// splice, never read back into TIA behavior.
+#[cfg(feature = "hd-pack")]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectId {
+    #[default]
+    Background,
+    Playfield,
+    Ball,
+    Missile0,
+    Missile1,
+    Player0,
+    Player1,
+}
+
+/// One pixel's object identity, plus (for [`ObjectId::Player0`]/[`ObjectId::Player1`] pixels)
+/// the exact `GRPx`/`NUSIZx` pair live when that pixel was rendered (`hd-pack` feature).
+///
+/// The `grp` field is the VDELP-resolved byte actually used to draw the pixel (see
+/// `write_register`'s `GRP0`/`GRP1` double-buffer swap) -- the real on-screen bit pattern, not
+/// necessarily the raw register's current value. Captured fresh every [`Tia::render_pixel`]
+/// call, so a mid-scanline `GRPx` rewrite (sprite multiplexing) yields different captured values
+/// for pixels before and after the write, matching what was actually drawn at each one.
+#[cfg(feature = "hd-pack")]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ObjectTag {
+    pub object: ObjectId,
+    pub grp: u8,
+    pub nusiz: u8,
+}
+
 fn sign_extend_4bit(val: u8) -> i8 {
     let mut v = val >> 4;
     if (v & 0x08) != 0 {
@@ -158,6 +191,17 @@ pub struct Tia {
     /// `video_buffer`. The frontend drains this once per frame.
     #[serde(skip)]
     pub audio_buffer: alloc::vec::Vec<u8>,
+    /// Per-pixel object-identity mask, parallel to `video_buffer` (same `scanline * 160 + x`
+    /// indexing) -- see [`ObjectTag`]. `hd-pack` feature only; a wholly separate output channel
+    /// that does not affect `video_buffer` or any other TIA behavior.
+    #[cfg(feature = "hd-pack")]
+    #[serde(skip)]
+    pub object_mask: alloc::vec::Vec<ObjectTag>,
+    /// Scratch written by `render_pixel`, consumed by `tick_color_clock` into `object_mask` at
+    /// the same point `current_color` is written into `video_buffer`.
+    #[cfg(feature = "hd-pack")]
+    #[serde(skip)]
+    current_object_tag: ObjectTag,
 }
 
 impl Tia {
@@ -380,6 +424,13 @@ impl Tia {
                 self.video_buffer.resize(312 * 160, 0);
             }
             self.video_buffer[idx] = self.current_color;
+            #[cfg(feature = "hd-pack")]
+            {
+                if self.object_mask.len() <= idx {
+                    self.object_mask.resize(312 * 160, ObjectTag::default());
+                }
+                self.object_mask[idx] = self.current_object_tag;
+            }
         }
         // Audio samples twice per scanline (~31.4 kHz), same cadence the dot
         // clock has always run at — see `docs/scheduler.md`'s audio-clock row.
@@ -391,6 +442,10 @@ impl Tia {
     fn render_pixel(&mut self) {
         if self.color_clock < 68 || self.scanline >= 300 {
             self.current_color = 0;
+            #[cfg(feature = "hd-pack")]
+            {
+                self.current_object_tag = ObjectTag::default();
+            }
             return;
         }
         let x = self.color_clock - 68;
@@ -449,6 +504,13 @@ impl Tia {
         let mut p1_pixel = false;
         let mut m0_pixel = false;
         let mut m1_pixel = false;
+        // Captured GRPx (VDELP-resolved, matching the bit test below) for whichever player pixel
+        // ends up "on" -- read here so a mid-scanline GRPx rewrite (sprite multiplexing) is
+        // captured per-pixel, not sampled once at end-of-frame. See `ObjectTag`'s doc comment.
+        #[cfg(feature = "hd-pack")]
+        let mut p0_grp: u8 = 0;
+        #[cfg(feature = "hd-pack")]
+        let mut p1_grp: u8 = 0;
 
         // `cc` here is the visible-window pixel coordinate (`x`), NOT the raw color
         // clock — `pos` (set by `resolve_position`/`HMOVE`) lives in that same 0..159
@@ -495,6 +557,10 @@ impl Tia {
             } else {
                 self.objects.grp[0]
             };
+            #[cfg(feature = "hd-pack")]
+            {
+                p0_grp = grp;
+            }
             let bit = if self.objects.refp[0] {
                 offset
             } else {
@@ -511,6 +577,10 @@ impl Tia {
             } else {
                 self.objects.grp[1]
             };
+            #[cfg(feature = "hd-pack")]
+            {
+                p1_grp = grp;
+            }
             let bit = if self.objects.refp[1] {
                 offset
             } else {
@@ -620,6 +690,95 @@ impl Tia {
             }
         }
         self.current_color = current_color;
+
+        // Mirrors the exact priority order above (read-only tap -- does not affect
+        // `current_color`): the grouped `p0_pixel || m0_pixel` / `p1_pixel || m1_pixel` /
+        // `pf_pixel || bl_pixel` cases share one color each, so within a group this picks a
+        // single concrete object to tag (player over its own missile; playfield over ball,
+        // matching the `bl_pixel && !pf_pixel` special case above) -- an arbitrary but fixed,
+        // documented choice, since color resolution itself never distinguishes them.
+        #[cfg(feature = "hd-pack")]
+        {
+            self.current_object_tag = if pf_priority {
+                if pf_pixel {
+                    ObjectTag {
+                        object: ObjectId::Playfield,
+                        grp: 0,
+                        nusiz: 0,
+                    }
+                } else if bl_pixel {
+                    ObjectTag {
+                        object: ObjectId::Ball,
+                        grp: 0,
+                        nusiz: 0,
+                    }
+                } else if p0_pixel {
+                    ObjectTag {
+                        object: ObjectId::Player0,
+                        grp: p0_grp,
+                        nusiz: self.objects.nusiz[0],
+                    }
+                } else if m0_pixel {
+                    ObjectTag {
+                        object: ObjectId::Missile0,
+                        grp: 0,
+                        nusiz: 0,
+                    }
+                } else if p1_pixel {
+                    ObjectTag {
+                        object: ObjectId::Player1,
+                        grp: p1_grp,
+                        nusiz: self.objects.nusiz[1],
+                    }
+                } else if m1_pixel {
+                    ObjectTag {
+                        object: ObjectId::Missile1,
+                        grp: 0,
+                        nusiz: 0,
+                    }
+                } else {
+                    ObjectTag::default()
+                }
+            } else if p0_pixel {
+                ObjectTag {
+                    object: ObjectId::Player0,
+                    grp: p0_grp,
+                    nusiz: self.objects.nusiz[0],
+                }
+            } else if m0_pixel {
+                ObjectTag {
+                    object: ObjectId::Missile0,
+                    grp: 0,
+                    nusiz: 0,
+                }
+            } else if p1_pixel {
+                ObjectTag {
+                    object: ObjectId::Player1,
+                    grp: p1_grp,
+                    nusiz: self.objects.nusiz[1],
+                }
+            } else if m1_pixel {
+                ObjectTag {
+                    object: ObjectId::Missile1,
+                    grp: 0,
+                    nusiz: 0,
+                }
+            } else if pf_pixel {
+                ObjectTag {
+                    object: ObjectId::Playfield,
+                    grp: 0,
+                    nusiz: 0,
+                }
+            } else if bl_pixel {
+                ObjectTag {
+                    object: ObjectId::Ball,
+                    grp: 0,
+                    nusiz: 0,
+                }
+            } else {
+                ObjectTag::default()
+            };
+        }
     }
 
     #[must_use]
@@ -788,5 +947,111 @@ mod tests {
         tia.write_register(regs::CXCLR, 0);
         assert_eq!(tia.cpu_read(u16::from(regs::CXM0P)), 0);
         assert_eq!(tia.cpu_read(u16::from(regs::CXBLPF)), 0);
+    }
+}
+
+#[cfg(all(test, feature = "hd-pack"))]
+mod hd_pack_tests {
+    use super::*;
+
+    #[test]
+    fn no_objects_on_tags_background() {
+        let mut tia = Tia::new();
+        for _ in 0..69 {
+            tia.tick_color_clock();
+        }
+        let idx = (tia.scanline as usize) * 160;
+        assert_eq!(tia.object_mask[idx].object, ObjectId::Background);
+    }
+
+    #[test]
+    fn player0_pixel_is_tagged_with_captured_grp_and_nusiz() {
+        let mut tia = Tia::new();
+        tia.objects.grp[0] = 0xFF; // fully-lit: bit 7 (offset 0) is on
+        tia.objects.nusiz[0] = 0b0000_0010; // arbitrary non-zero copy-mode bits
+        tia.objects.pos[0] = 0;
+
+        for _ in 0..69 {
+            tia.tick_color_clock(); // renders x = 0
+        }
+
+        let idx = (tia.scanline as usize) * 160;
+        let tag = tia.object_mask[idx];
+        assert_eq!(tag.object, ObjectId::Player0);
+        assert_eq!(tag.grp, 0xFF);
+        assert_eq!(tag.nusiz, 0b0000_0010);
+    }
+
+    #[test]
+    fn missile0_pixel_is_tagged() {
+        let mut tia = Tia::new();
+        tia.objects.enam[0] = true;
+        tia.objects.pos[2] = 0; // missile 0 at x = 0
+        // player 0 left off (grp[0] == 0) so only the missile is on.
+
+        for _ in 0..69 {
+            tia.tick_color_clock();
+        }
+
+        let idx = (tia.scanline as usize) * 160;
+        assert_eq!(tia.object_mask[idx].object, ObjectId::Missile0);
+    }
+
+    #[test]
+    fn playfield_pixel_is_tagged_when_players_are_off() {
+        let mut tia = Tia::new();
+        tia.objects.pf = 1 << 16; // PF0 bit 0 -> pf_idx 0, the x=0..3 dots
+
+        for _ in 0..69 {
+            tia.tick_color_clock();
+        }
+
+        let idx = (tia.scanline as usize) * 160;
+        assert_eq!(tia.object_mask[idx].object, ObjectId::Playfield);
+    }
+
+    #[test]
+    fn ball_pixel_is_tagged_when_nothing_else_is_on() {
+        let mut tia = Tia::new();
+        tia.objects.enabl = true;
+        tia.objects.pos[4] = 0; // ball at x = 0
+
+        for _ in 0..69 {
+            tia.tick_color_clock();
+        }
+
+        let idx = (tia.scanline as usize) * 160;
+        assert_eq!(tia.object_mask[idx].object, ObjectId::Ball);
+    }
+
+    // The multiplexing case the mask exists for: a game rewrites GRP0 between drawn columns to
+    // draw more than 2 player objects per scanline. The mask must capture the GRPx value LIVE AT
+    // EACH PIXEL's render time, not one end-of-frame/end-of-scanline sample -- otherwise every
+    // multiplexed pixel would incorrectly look up the same (wrong) HD-pack replacement.
+    #[test]
+    fn grp0_rewrite_mid_scanline_is_captured_per_pixel() {
+        let mut tia = Tia::new();
+        tia.objects.nusiz[0] = 0;
+        tia.objects.pos[0] = 0;
+        tia.objects.grp[0] = 0xFF; // bit 7 (x=0's offset 0) lit
+
+        for _ in 0..68 {
+            tia.tick_color_clock(); // renders x = 0 with grp = 0xFF (color_clock reaches 68)
+        }
+        tia.objects.grp[0] = 0x40; // multiplex: rewrite before the next dot; bit 6 (x=1's offset 1) lit
+        tia.tick_color_clock(); // renders x = 1 with grp = 0x40
+
+        let sl = tia.scanline as usize;
+        let tag_x0 = tia.object_mask[sl * 160];
+        let tag_x1 = tia.object_mask[sl * 160 + 1];
+
+        assert_eq!(tag_x0.object, ObjectId::Player0);
+        assert_eq!(tag_x0.grp, 0xFF);
+        assert_eq!(tag_x1.object, ObjectId::Player0);
+        assert_eq!(tag_x1.grp, 0x40);
+        assert_ne!(
+            tag_x0.grp, tag_x1.grp,
+            "mid-scanline GRP0 rewrite must be captured per-pixel, not sampled once for the whole line"
+        );
     }
 }
