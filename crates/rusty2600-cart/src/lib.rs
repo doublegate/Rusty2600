@@ -1937,14 +1937,14 @@ impl DpcPlusFracFetcher {
 }
 
 /// One DPC+ music-mode data fetcher: a 32-bit phase accumulator selecting a
-/// sample from a 32-byte waveform table. **`count` is never advanced** —
-/// DPC+'s music-mode continuous-time audio (`Step()` in the reference,
-/// driven by elapsed CPU cycles) is honestly NOT implemented; the register
-/// read/write plumbing (`$05`, `$5D..=$5F`, `$75..=$77`) round-trips
-/// correctly, but the waveform-index math always samples index 0 of
-/// whichever waveform is selected. Documented in `docs/cart.md`, not
-/// silently dropped — a `rusty2600-tia` audio-timing follow-up, not a
-/// mobile/cart-catalogue-breadth one.
+/// sample from a 32-byte waveform table. `count` advances by `freq` every
+/// 59th call to [`Board::tick`] (`[2.3.0]`, `BankDpcPlus::tick`) — a
+/// self-contained `rusty2600-cart` fix, not the `rusty2600-tia`
+/// audio-timing follow-up this doc comment used to predict, since
+/// `Board::tick()` was already called once per CPU cycle from
+/// `rusty2600-core`'s scheduler and only needed a real override here. See
+/// `docs/cart.md`'s DPC+ section for the derivation of the 59-count divide
+/// (matches Gopher2600's own "same 20kHz as the DPC format" commentary).
 #[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct DpcPlusMusicFetcher {
     waveform: u8,
@@ -2044,6 +2044,9 @@ pub struct BankDpcPlus {
     /// `true` while a CALLFUNCTION is executing — gates bankswitch hotspots,
     /// mirroring Gopher2600's `callfn.IsActive()`.
     arm_active: bool,
+    /// CPU-cycle counter driving the music fetchers' 59-count divide (see
+    /// [`Board::tick`]'s `BankDpcPlus` impl).
+    beats: u32,
 }
 
 impl BankDpcPlus {
@@ -2097,6 +2100,7 @@ impl BankDpcPlus {
             lda_pending: false,
             parameters: alloc::vec::Vec::new(),
             arm_active: false,
+            beats: 0,
         })
     }
 
@@ -2215,9 +2219,10 @@ impl BankDpcPlus {
             0x03 => (self.rng.0 >> 16) as u8,
             0x04 => (self.rng.0 >> 24) as u8,
             0x05 => {
-                // Music-fetcher 3-channel sum. `count` is never advanced
-                // (see `DpcPlusMusicFetcher`'s doc), so this always samples
-                // waveform index 0 for each active channel.
+                // Music-fetcher 3-channel sum. `count` advances via
+                // `Board::tick` (see `DpcPlusMusicFetcher`'s doc), so each
+                // channel's waveform-table index moves over time instead of
+                // staying pinned at index 0.
                 let mut sum: u8 = 0;
                 for m in &self.music {
                     let idx = (usize::from(m.waveform) << 5) + ((m.count >> 27) as usize);
@@ -2465,6 +2470,922 @@ impl Board for BankDpcPlus {
 
     fn tier(&self) -> Tier {
         Tier::BestEffort
+    }
+
+    /// Advances the 3 music fetchers' phase accumulators. Called once per
+    /// CPU cycle (`rusty2600-core`'s scheduler already drives `Board::tick`
+    /// at that rate); every 59th call — dividing the ~1.19 MHz CPU-cycle
+    /// rate down to DPC+'s 20 kHz music-sample rate, matching Gopher2600's
+    /// own `Step()` — advances each `count` by its `freq` (wrapping u32
+    /// add). This is what makes register `$05`'s waveform-index math
+    /// (`(waveform << 5) + (count >> 27)`) actually change over time
+    /// instead of always sampling index 0.
+    fn tick(&mut self) {
+        self.beats = self.beats.wrapping_add(1);
+        if self.beats % 59 == 0 {
+            self.beats = 0;
+            for m in &mut self.music {
+                m.count = m.count.wrapping_add(m.freq);
+            }
+        }
+    }
+}
+
+/// CDF/CDFJ/CDFJ+ (Harmony/Melody ARM coprocessor, `T-0401-006`): the
+/// second ARM-coprocessor cart family after DPC+, ported from Gopher2600's
+/// Go `hardware/memory/cartridge/cdf` package (`cdf.go`/`version.go`/
+/// `registers.go`/`streams.go`/`state.go`/`static.go`, ~1,600 lines total),
+/// not Stella's C++ `CartCDF.cxx` — matching this project's established
+/// precedent for ARM-adjacent code. One [`BankCdf`] struct handles all four
+/// versions (CDF0/CDF1/CDFJ/CDFJ+) via a [`CdfVersion`] const-table,
+/// mirroring both the reference's own design and this crate's single
+/// catalogue row "CDF / CDFJ / CDFJ+" (`docs/cart.md`) — the four versions
+/// differ only in numeric register-address constants, not mechanism.
+///
+/// **Architecturally different from [`BankDpcPlus`] in one important way**:
+/// CDF has NO plain memory-mapped register-READ window at all. Every data-
+/// fetcher and music-fetcher read is available EXCLUSIVELY through the
+/// FastFetch `LDA #immediate`/`LDX #immediate`/`LDY #immediate` redirect
+/// mechanism — there is no `$1000..=$107F`-style fixed address a game can
+/// plain `LDA $absolute` from (writes DO have four plain hotspots:
+/// `$1FF0` DSWRITE, `$1FF1` DSPTR, `$1FF2` SETMODE, `$1FF3` CALLFN).
+/// Datastream fetcher pointers/increments also live directly inside the
+/// ARM's own `driver_ram` (read/written as little-endian `u32`s at
+/// `version.fetcher_base + reg*4` / `increment_base + reg*4`), not as
+/// separate Rust struct fields — this crate mirrors that exactly rather
+/// than "flattening" it into host fields, since the ARM's own driver code
+/// reads/writes those SAME bytes directly. Only the 3 music fetchers
+/// (`Waveform`/`Freq`/`Count`) are plain host-side fields, matching
+/// [`DpcPlusMusicFetcher`]'s precedent.
+///
+/// **`ARMinterrupt` is real for CDF** (unlike DPC+'s no-op stub): the
+/// compiled driver ROM services 4 calls ("Set music note"/"Reset wave"/
+/// "Get wave pointer"/"Set wave size") via a `BLX <reg>` to a non-Thumb
+/// address. `rusty2600-thumb`'s format-5 `BX`/`BLX` handler reports this as
+/// [`rusty2600_thumb::Fault::UnimplementedPeripheral`] — but **the dispatch
+/// key this board uses is [`rusty2600_thumb::Arm7Tdmi::instruction_pc`]
+/// (the `BLX` instruction's OWN address), NOT the address the `Fault`
+/// carries** (the branch TARGET register's post-`+2` value — a different
+/// quantity). Verified by tracing Gopher2600's own `arm/thumb.go`: it calls
+/// `hook.ARMinterrupt(registers[rPC]-4, registers[2], registers[3])`, and
+/// at that exact point in execution `registers[rPC]` holds
+/// `instruction_address + 4` (matching `rusty2600-thumb`'s own "PC reads as
+/// current instruction + 4 during execution" convention exactly), so
+/// `registers[rPC]-4 == instruction_address` — the `BLX` call site, not
+/// where it would have branched to. No `rusty2600-thumb` crate change was
+/// needed once this was traced precisely; `run_arm`'s dispatch loop catches
+/// `Fault::UnimplementedPeripheral`, ignores the fault's own payload, reads
+/// `arm.instruction_pc()` instead, services one of the 4 known calls if the
+/// address matches this version's known call-site table, writes results
+/// back via `set_register`, and resumes at `arm.register(REG_LR) + 2` —
+/// [`rusty2600_thumb::Arm7Tdmi::set_register`] already re-applies its own
+/// `+2` PC-storage convention internally, so no extra `+2` is added here.
+///
+/// **Honest scope note**: DPC+'s bank count is derived from image size;
+/// CDF's `NumBanks()` is a HARDCODED `7` in the reference for every
+/// version, even CDFJ+ (whose bankswitch table addresses 8 slots,
+/// `$1FF4..=$1FFB` -> banks 0-7). This looks like it could be an upstream
+/// quirk or an intentional "CDFJ+ never actually ships an 8th bank"
+/// convention — it's ported EXACTLY (not "fixed" on a guess) since no real
+/// CDFJ+ ROM was available to verify against; a bank-7 selection on CDFJ+
+/// safely falls through to an empty/open-bus read via checked indexing
+/// rather than panicking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CdfKind {
+    /// The oldest CDF version (two known ROMs use it), identified by a
+    /// twice-repeated `"CDF\x00"` signature.
+    Cdf0,
+    /// `CDF1`, identified by a twice-repeated `"CDF\x01"` signature.
+    Cdf1,
+    /// `CDFJ`, identified by a `"CDFJ"` signature (not `"PLUSCDFJ"`).
+    Cdfj,
+    /// `CDFJ+`, identified by a `"PLUSCDFJ"` signature — the only version
+    /// with a runtime-derived (not fixed-table) set of constants.
+    CdfjPlus,
+}
+
+/// Per-version register-address/shift constants, ported from Gopher2600's
+/// `version.go`. `CDF0`/`CDF1`/`CDFJ` use a fixed table; `CDFJ+`
+/// additionally needs a runtime byte-pattern scan of the driver ROM's
+/// first 2048 bytes for `fast_ldx`/`fast_ldy`/`datastream_offset`, which
+/// are NOT static constants in the reference (see [`CdfVersion::detect`]).
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+struct CdfVersion {
+    kind: CdfKind,
+    /// Byte offset into `driver_ram` where datastream N's 4-byte
+    /// little-endian pointer lives (`fetcher_base + reg*4`).
+    fetcher_base: u32,
+    /// Byte offset into `driver_ram` where datastream N's 4-byte
+    /// little-endian increment lives (`increment_base + reg*4`).
+    increment_base: u32,
+    /// Byte offset into `driver_ram` where music fetcher N's 4-byte
+    /// little-endian base address lives (`music_base + n*4`).
+    music_base: u32,
+    /// Which datastream index is the "amplitude" (music-sum) register.
+    amplitude_register: u8,
+    /// Mask applied to a candidate FastJMP operand's high byte — `0xff`
+    /// requires exactly `$0000`; `0xfe` also accepts `$0001` (CDFJ/CDFJ+).
+    fast_jmp_mask: u8,
+    fetcher_shift: u32,
+    increment_shift: u32,
+    music_fetcher_shift: u32,
+    /// Mask applied when shifting a new low byte into a datastream
+    /// pointer via the `$1FF1` DSPTR hotspot.
+    fetcher_mask: u32,
+    /// CDFJ+-only: whether `LDX #immediate` also arms FastFetch (driver-
+    /// byte-scanned, not a fixed per-version constant).
+    fast_ldx: bool,
+    /// CDFJ+-only: whether `LDY #immediate` also arms FastFetch.
+    fast_ldy: bool,
+    /// CDFJ+-only: an additional offset added to the datastream index a
+    /// FastFetch redirect resolves to (driver-byte-scanned).
+    datastream_offset: u8,
+    /// ARM reset vectors: `(stack pointer, link register, program
+    /// counter)`. Formula-derived for CDF0/CDF1/CDFJ (`SP` near the top of
+    /// `variables_ram`, `LR` = the custom-ROM entry, `PC` = `LR + 8`); for
+    /// CDFJ+ read from FIXED FILE OFFSETS `0x17f4`/`0x17f8` in the ROM
+    /// image itself (`version.go`'s CDFJ+ case), since that version has no
+    /// `variables_ram` segment to derive a formula-based stack top from.
+    entry_sp: u32,
+    entry_lr: u32,
+    entry_pc: u32,
+}
+
+impl CdfVersion {
+    /// Build the version's constant table. `rom` is needed only for
+    /// `CdfjPlus`'s runtime driver-byte scan; the other three versions use
+    /// a fixed table and ignore it.
+    fn detect(kind: CdfKind, rom: &[u8]) -> Self {
+        match kind {
+            CdfKind::Cdfj => Self {
+                kind,
+                fetcher_base: 0x0098,
+                increment_base: 0x0124,
+                music_base: 0x01b0,
+                amplitude_register: 35,
+                fast_jmp_mask: 0xfe,
+                fetcher_shift: 20,
+                increment_shift: 12,
+                music_fetcher_shift: 20,
+                fetcher_mask: 0xf000_0000,
+                fast_ldx: false,
+                fast_ldy: false,
+                datastream_offset: 0,
+                entry_sp: Self::FORMULA_ENTRY_SP,
+                entry_lr: Self::FORMULA_ENTRY_LR,
+                entry_pc: Self::FORMULA_ENTRY_PC,
+            },
+            CdfKind::Cdf0 => Self {
+                kind,
+                fetcher_base: 0x06e0,
+                increment_base: 0x0768,
+                music_base: 0x07f0,
+                amplitude_register: 34,
+                fast_jmp_mask: 0xff,
+                fetcher_shift: 20,
+                increment_shift: 12,
+                music_fetcher_shift: 20,
+                fetcher_mask: 0xf000_0000,
+                fast_ldx: false,
+                fast_ldy: false,
+                datastream_offset: 0,
+                entry_sp: Self::FORMULA_ENTRY_SP,
+                entry_lr: Self::FORMULA_ENTRY_LR,
+                entry_pc: Self::FORMULA_ENTRY_PC,
+            },
+            CdfKind::Cdf1 => Self {
+                kind,
+                fetcher_base: 0x00a0,
+                increment_base: 0x0128,
+                music_base: 0x01b0,
+                amplitude_register: 34,
+                fast_jmp_mask: 0xff,
+                fetcher_shift: 20,
+                increment_shift: 12,
+                music_fetcher_shift: 20,
+                fetcher_mask: 0xf000_0000,
+                fast_ldx: false,
+                fast_ldy: false,
+                datastream_offset: 0,
+                entry_sp: Self::FORMULA_ENTRY_SP,
+                entry_lr: Self::FORMULA_ENTRY_LR,
+                entry_pc: Self::FORMULA_ENTRY_PC,
+            },
+            CdfKind::CdfjPlus => {
+                // Driver-byte scan (ported from `version.go`'s CDFJ+ case):
+                // `fast_ldx`/`fast_ldy` are detected by searching the first
+                // 2048 bytes for an `LDX`/`LDY #immediate` opcode followed
+                // by a specific 3-byte operand sequence; `datastream_offset`
+                // is the byte immediately before a `20 42 e2` marker.
+                let scan = &rom[..rom.len().min(2048)];
+                let fast_ldx = contains_subslice(scan, &[0xA2, 0x00, 0x52, 0x13]);
+                let fast_ldy = contains_subslice(scan, &[0xA0, 0x00, 0x52, 0x13]);
+                let datastream_offset = find_subslice(scan, &[0x20, 0x42, 0xE2])
+                    .filter(|&offset| offset > 0)
+                    .map_or(0, |offset| scan[offset - 1]);
+
+                // Entry vectors are read from fixed file offsets for
+                // CDFJ+, not derived by formula (`version.go`): SP at
+                // 0x17f4, LR at 0x17f8 (masked to clear bit 0 — the Thumb-
+                // mode marker bit is not part of the address), PC = LR.
+                let entry_sp = read_u32_le(rom, 0x17f4);
+                let entry_lr = read_u32_le(rom, 0x17f8) & 0xffff_fffe;
+                Self {
+                    kind,
+                    fetcher_base: 0x0098,
+                    increment_base: 0x0124,
+                    music_base: 0x01b0,
+                    amplitude_register: 35,
+                    fast_jmp_mask: 0xfe,
+                    fetcher_shift: 16,
+                    increment_shift: 8,
+                    music_fetcher_shift: 12,
+                    fetcher_mask: 0xff00_0000,
+                    fast_ldx,
+                    fast_ldy,
+                    datastream_offset,
+                    entry_sp,
+                    entry_lr,
+                    entry_pc: entry_lr,
+                }
+            }
+        }
+    }
+
+    /// The formula-derived reset vectors shared by CDF0/CDF1/CDFJ (not
+    /// CDFJ+, which reads its own from fixed file offsets — see
+    /// [`Self::detect`]). `SP` sits near the top of `variables_ram`; `LR`
+    /// is the custom-ROM entry point; `PC` starts 8 bytes past it (a small
+    /// header Gopher2600's own driver convention reserves).
+    const FORMULA_ENTRY_SP: u32 = BankCdf::SRAM_BASE | 0x0000_1fdc;
+    const FORMULA_ENTRY_LR: u32 = BankCdf::FLASH_BASE | 0x0000_0800;
+    const FORMULA_ENTRY_PC: u32 = Self::FORMULA_ENTRY_LR + 8;
+}
+
+/// `rom.windows(needle.len()).any(|w| w == needle)`, spelled out as a plain
+/// loop since this crate has no dependency that already provides it.
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    find_subslice(haystack, needle).is_some()
+}
+
+/// The byte offset of the first occurrence of `needle` in `haystack`, or
+/// `None`.
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Little-endian `u32` read, `0` (not a panic) on an out-of-bounds `idx` —
+/// this crate never trusts an untrusted-input-derived offset to be in
+/// range.
+fn read_u32_le(buf: &[u8], idx: usize) -> u32 {
+    buf.get(idx..idx + 4)
+        .map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+/// Little-endian `u32` write, a silent no-op (not a panic) on an
+/// out-of-bounds `idx`.
+fn write_u32_le(buf: &mut [u8], idx: usize, val: u32) {
+    if let Some(slot) = buf.get_mut(idx..idx + 4) {
+        slot.copy_from_slice(&val.to_le_bytes());
+    }
+}
+
+/// One CDF music-mode data fetcher — identical shape to
+/// [`DpcPlusMusicFetcher`] (a 32-bit phase accumulator selecting a sample
+/// from a waveform table), advanced by [`Board::tick`]'s `BankCdf` impl the
+/// same 59-CPU-cycle-divide way. Unlike DPC+, `Freq` is set directly by the
+/// `ARMinterrupt`-serviced "Set music note" call (no `freq_ram` lookup
+/// table — CDF has no frequency-table segment at all).
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+struct CdfMusicFetcher {
+    waveform: u8,
+    freq: u32,
+    count: u32,
+}
+
+impl Default for CdfMusicFetcher {
+    fn default() -> Self {
+        // `registers.go`'s `Registers.initialise()`: every music fetcher
+        // starts at waveform index 0x1b, not 0.
+        Self {
+            waveform: 0x1b,
+            freq: 0,
+            count: 0,
+        }
+    }
+}
+
+/// The 6507-side board state for CDF/CDFJ/CDFJ+ — see the type's own doc
+/// comment above [`CdfKind`] for the full architecture writeup.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BankCdf {
+    version: CdfVersion,
+    driver_rom: alloc::vec::Vec<u8>,
+    /// The ARM's flat, linear view of everything after the 2 KiB driver —
+    /// for CDFJ+ this is also, byte-for-byte, the SAME data the 6507's
+    /// bank window reads from (no gap); for CDF0/CDF1/CDFJ the 6507's bank
+    /// window starts `CUSTOM_SIZE` bytes further in (see
+    /// [`Self::bank_window_offset`]).
+    custom_rom: alloc::vec::Vec<u8>,
+    /// A mutable copy of `driver_rom`. Datastream fetcher pointers/
+    /// increments and music-fetcher base addresses live INSIDE this RAM
+    /// (little-endian `u32`s at version-specific byte offsets) — not as
+    /// separate Rust fields — because the ARM driver code reads/writes
+    /// those same bytes directly.
+    driver_ram: alloc::vec::Vec<u8>,
+    data_ram: alloc::vec::Vec<u8>,
+    /// Empty for CDFJ+ (no variables segment in that version).
+    variables_ram: alloc::vec::Vec<u8>,
+    bank: usize,
+    fast_fetch: bool,
+    sample_mode: bool,
+    /// Countdown (`0..=2`) armed by an `LDA`/`LDX`/`LDY #immediate` opcode
+    /// fetch, consumed by the next real read (`cpu_read`'s FastFetch
+    /// branch) — mirrors Gopher2600's `state.fastLoad`. Decremented BOTH by
+    /// `Board::tick` (once per CPU cycle, unconditionally) and by
+    /// `cpu_read` (when the FastFetch branch actually consumes it) —
+    /// ported as two independent decrements exactly as the reference has
+    /// them, not merged into one, since they serve different purposes
+    /// (a blanket per-cycle timeout vs. "this specific read consumed it").
+    fast_load: u8,
+    /// Countdown (`0..=2`) armed by a `JMP absolute` opcode whose operand
+    /// matches the FastJMP pattern — mirrors `state.fastJMP`. Includes the
+    /// documented "Galagon NTSC demo ROM" phantom-read guard (see
+    /// [`Self::cpu_read`]).
+    fast_jmp: u8,
+    music: [CdfMusicFetcher; 3],
+    /// CPU-cycle counter driving the music fetchers' 59-count divide (same
+    /// mechanism as [`BankDpcPlus`]'s own `beats` field, independent
+    /// instance).
+    beats: u32,
+    /// `true` while a CALLFN is executing — gates bankswitch hotspots,
+    /// mirroring Gopher2600's `callfn.IsActive()`. Not load-bearing under
+    /// this crate's synchronous call-and-block ARM execution model (no
+    /// other 6507 access can interleave with a running CALLFN), but ported
+    /// for documentation parity with the reference and defensively in case
+    /// that execution model ever changes.
+    arm_active: bool,
+}
+
+impl BankCdf {
+    const DRIVER_SIZE: usize = 2048;
+    const CUSTOM_SIZE: usize = 2048;
+    const BANK_SIZE: usize = 4096;
+    /// Hardcoded to 7 in the reference for EVERY version, including
+    /// CDFJ+ — see the type doc's "Honest scope note".
+    const NUM_BANKS: usize = 7;
+    const DATA_RAM_SIZE_STANDARD: usize = 0x1000;
+    const DATA_RAM_SIZE_CDFJ_PLUS: usize = 0x7800;
+    const VARIABLES_RAM_SIZE: usize = 0x0800;
+    const DS_COMM: u32 = 32;
+    const DS_JMP: u32 = 33;
+    /// Same defensive per-CALLFN step cap as `BankDpcPlus` — real silicon
+    /// has no such limit; this only bounds a malformed/buggy ROM.
+    const ARM_STEP_SAFETY_CAP: u32 = 4_000_000;
+
+    const FLASH_BASE: u32 = 0x0000_0000;
+    const SRAM_BASE: u32 = 0x4000_0000;
+
+    /// Build a `BankCdf` of the given `kind` from a full ROM image.
+    /// Returns `None` if the image is too small to hold the driver plus
+    /// (for CDF0/CDF1/CDFJ) the shared custom-code prelude plus all 7
+    /// 6507-visible banks.
+    #[must_use]
+    pub fn new(rom: &[u8], kind: CdfKind) -> Option<Self> {
+        if rom.len() <= Self::DRIVER_SIZE {
+            return None;
+        }
+        let version = CdfVersion::detect(kind, rom);
+
+        let driver_rom = rom[..Self::DRIVER_SIZE].to_vec();
+        let custom_rom = rom[Self::DRIVER_SIZE..].to_vec();
+
+        let min_custom_len = if kind == CdfKind::CdfjPlus {
+            Self::NUM_BANKS * Self::BANK_SIZE
+        } else {
+            Self::CUSTOM_SIZE + Self::NUM_BANKS * Self::BANK_SIZE
+        };
+        if custom_rom.len() < min_custom_len {
+            return None;
+        }
+
+        let driver_ram = driver_rom.clone();
+
+        let data_ram_len = if kind == CdfKind::CdfjPlus {
+            Self::DATA_RAM_SIZE_CDFJ_PLUS
+        } else {
+            Self::DATA_RAM_SIZE_STANDARD
+        };
+        let data_ram = alloc::vec![0u8; data_ram_len];
+
+        let variables_ram = if kind == CdfKind::CdfjPlus {
+            alloc::vec::Vec::new()
+        } else {
+            alloc::vec![0u8; Self::VARIABLES_RAM_SIZE]
+        };
+
+        Some(Self {
+            version,
+            driver_rom,
+            custom_rom,
+            driver_ram,
+            data_ram,
+            variables_ram,
+            bank: 0,
+            fast_fetch: false,
+            sample_mode: false,
+            fast_load: 0,
+            fast_jmp: 0,
+            music: [CdfMusicFetcher::default(); 3],
+            beats: 0,
+            arm_active: false,
+        })
+    }
+
+    /// The byte offset into `custom_rom` where the CURRENT bank's
+    /// 6507-visible 4 KiB window starts (see [`Self::custom_rom`]'s doc
+    /// comment for why this differs by version).
+    fn bank_window_offset(&self) -> usize {
+        if self.version.kind == CdfKind::CdfjPlus {
+            self.bank * Self::BANK_SIZE
+        } else {
+            Self::CUSTOM_SIZE + self.bank * Self::BANK_SIZE
+        }
+    }
+
+    fn read_datastream_pointer(&self, reg: u32) -> u32 {
+        read_u32_le(
+            &self.driver_ram,
+            (self.version.fetcher_base + reg * 4) as usize,
+        )
+    }
+
+    fn update_datastream_pointer(&mut self, reg: u32, data: u32) {
+        write_u32_le(
+            &mut self.driver_ram,
+            (self.version.fetcher_base + reg * 4) as usize,
+            data,
+        );
+    }
+
+    fn read_datastream_increment(&self, reg: u32) -> u32 {
+        read_u32_le(
+            &self.driver_ram,
+            (self.version.increment_base + reg * 4) as usize,
+        )
+    }
+
+    fn read_music_fetcher_base(&self, mus: usize) -> u32 {
+        read_u32_le(
+            &self.driver_ram,
+            (self.version.music_base + (mus as u32) * 4) as usize,
+        )
+    }
+
+    /// Read one byte from `data_ram` at datastream `reg`'s current
+    /// pointer, then advance the pointer by `increment << increment_shift`
+    /// — the general-purpose datastream read path (`streamData` in the
+    /// reference), used by every FastFetch-redirected data-fetcher read.
+    fn stream_data(&mut self, reg: u32) -> u8 {
+        let ptr = self.read_datastream_pointer(reg);
+        let inc = self.read_datastream_increment(reg);
+        let idx = (ptr >> self.version.fetcher_shift) as usize;
+        let output = self.data_ram.get(idx).copied().unwrap_or(0);
+        let new_ptr = ptr.wrapping_add(inc << self.version.increment_shift);
+        self.update_datastream_pointer(reg, new_ptr);
+        output
+    }
+
+    /// Bankswitch on hotspot access (`$1FF4..=$1FFB`) — checked on EVERY
+    /// real (non-`peek`) access, read or write, matching the reference's
+    /// `bankswitch()` being called from both `Access` and `AccessVolatile`.
+    /// Returns `true` if `addr` was a bankswitch hotspot (caller should
+    /// treat the access as fully consumed — no further register decode).
+    fn bankswitch(&mut self, addr: u16) -> bool {
+        let a = addr & 0x0FFF;
+        if !(0x0ff4..=0x0ffb).contains(&a) {
+            return false;
+        }
+        if self.arm_active {
+            return true;
+        }
+        self.bank = if self.version.kind == CdfKind::CdfjPlus {
+            // CDFJ+: linear, $0ff4..=$0ffb -> banks 0..=7.
+            usize::from(a - 0x0ff4)
+        } else {
+            // CDF0/CDF1/CDFJ: non-linear table, ported literally from
+            // `cdf.go`'s `bankswitch()` (note $0ff4 AND $0ffb both select
+            // bank 6 — a genuine duplicate in the reference, not a typo).
+            match a {
+                0x0ff4 => 6,
+                0x0ff5 => 0,
+                0x0ff6 => 1,
+                0x0ff7 => 2,
+                0x0ff8 => 3,
+                0x0ff9 => 4,
+                0x0ffa => 5,
+                _ => 6, // 0x0ffb
+            }
+        };
+        true
+    }
+
+    /// Synchronously run the ARM coprocessor to completion — the CALLFN
+    /// entry point (`$1FF3` write of `254`/`255`), identical shape to
+    /// [`BankDpcPlus::run_arm`]. See the type doc for the `ARMinterrupt`
+    /// dispatch's `instruction_pc`-not-`Fault`-payload subtlety.
+    fn run_arm(&mut self) {
+        self.arm_active = true;
+        let version = self.version;
+        let mem = CdfArmMemory {
+            driver_rom: &mut self.driver_rom,
+            custom_rom: &mut self.custom_rom,
+            driver_ram: &mut self.driver_ram,
+            data_ram: &mut self.data_ram,
+            variables_ram: &mut self.variables_ram,
+            version,
+        };
+        let mut arm = rusty2600_thumb::Arm7Tdmi::new(mem);
+        for _ in 0..Self::ARM_STEP_SAFETY_CAP {
+            let (outcome, _cycles) = arm.step();
+            match outcome {
+                rusty2600_thumb::StepOutcome::Normal => {}
+                rusty2600_thumb::StepOutcome::ProgramEnded => break,
+                rusty2600_thumb::StepOutcome::Fault(
+                    rusty2600_thumb::Fault::UnimplementedPeripheral(_),
+                ) => {
+                    // The call-site address, NOT the fault's own payload
+                    // (the branch-target register value) — see the type
+                    // doc's `ARMinterrupt` writeup for why.
+                    let call_site = arm.instruction_pc();
+                    let val1 = arm.register(2);
+                    let val2 = arm.register(3);
+                    // A disjoint-fields associated fn, not `&mut self` —
+                    // `arm`'s `CdfArmMemory` already holds a `&mut` borrow
+                    // of `self.driver_rom`/etc.; only `self.music` needs
+                    // touching here, so it's passed explicitly.
+                    match Self::service_arm_interrupt(
+                        &mut self.music,
+                        version.kind,
+                        call_site,
+                        val1,
+                        val2,
+                    ) {
+                        Some(result) => {
+                            if let Some(value) = result {
+                                arm.set_register(2, value);
+                            }
+                            // Traced precisely against both the Go
+                            // reference (`registers[rPC] = registers[rLR]
+                            // + 2`, a RAW assignment under its own "+2 at
+                            // rest" convention) and this crate's
+                            // `set_register` (which ALSO applies a "+2 at
+                            // rest" adjustment internally): passing the
+                            // raw LR value straight through — with NO
+                            // extra addition here — reproduces the
+                            // reference's exact resume target. Adding a
+                            // second `+2` (an earlier version of this code
+                            // did) double-applies the adjustment and
+                            // resumes one instruction too far ahead.
+                            let lr = arm.register(rusty2600_thumb::REG_LR);
+                            arm.set_register(rusty2600_thumb::REG_PC, lr);
+                        }
+                        None => break,
+                    }
+                }
+                rusty2600_thumb::StepOutcome::Fault(_) => break,
+            }
+        }
+        self.arm_active = false;
+    }
+
+    /// Services one of the 4 known `ARMinterrupt` call sites ("Set music
+    /// note"/"Reset wave"/"Get wave pointer"/"Set wave size"), matching
+    /// Gopher2600's `cdf.ARMinterrupt`. `None` if `call_site` isn't
+    /// recognized (the caller treats this as terminal, matching the
+    /// reference's "not serviced" ending the program) or `val1` names an
+    /// out-of-range music-fetcher index. `Some(None)` for calls that don't
+    /// write a result register; `Some(Some(value))` for "Get wave pointer"
+    /// (write `value` into R2).
+    fn service_arm_interrupt(
+        music: &mut [CdfMusicFetcher; 3],
+        kind: CdfKind,
+        call_site: u32,
+        val1: u32,
+        val2: u32,
+    ) -> Option<Option<u32>> {
+        // Flash-relative call-site addresses differ only for CDF0; the
+        // other three versions share one table (`cdf.go`'s `ARMinterrupt`).
+        let (set_note, reset_wave, get_wave_ptr, set_wave_size) = if kind == CdfKind::Cdf0 {
+            (
+                Self::FLASH_BASE | 0x0000_06e2,
+                Self::FLASH_BASE | 0x0000_06e6,
+                Self::FLASH_BASE | 0x0000_06ea,
+                Self::FLASH_BASE | 0x0000_06ee,
+            )
+        } else {
+            (
+                Self::FLASH_BASE | 0x0000_0752,
+                Self::FLASH_BASE | 0x0000_0756,
+                Self::FLASH_BASE | 0x0000_075a,
+                Self::FLASH_BASE | 0x0000_075e,
+            )
+        };
+        if call_site != set_note
+            && call_site != reset_wave
+            && call_site != get_wave_ptr
+            && call_site != set_wave_size
+        {
+            return None;
+        }
+        let idx = val1 as usize;
+        let fetcher = music.get_mut(idx)?;
+        if call_site == set_note {
+            fetcher.freq = val2;
+            Some(None)
+        } else if call_site == reset_wave {
+            fetcher.count = 0;
+            Some(None)
+        } else if call_site == get_wave_ptr {
+            Some(Some(fetcher.count))
+        } else {
+            // set_wave_size — the only remaining matched case.
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                fetcher.waveform = val2 as u8;
+            }
+            Some(None)
+        }
+    }
+}
+
+/// The `ThumbMemory` implementation for `BankCdf`'s ARM coprocessor,
+/// mirroring `static.go`'s `MapAddress`/`ResetVectors` (segment order:
+/// data RAM, variables RAM, custom ROM, driver RAM, driver ROM — most-
+/// likely-first, matching the reference exactly rather than optimizing the
+/// order for this crate's own access patterns).
+struct CdfArmMemory<'a> {
+    driver_rom: &'a mut alloc::vec::Vec<u8>,
+    custom_rom: &'a mut alloc::vec::Vec<u8>,
+    driver_ram: &'a mut alloc::vec::Vec<u8>,
+    data_ram: &'a mut alloc::vec::Vec<u8>,
+    variables_ram: &'a mut alloc::vec::Vec<u8>,
+    version: CdfVersion,
+}
+
+impl CdfArmMemory<'_> {
+    fn data_ram_origin(&self) -> u32 {
+        BankCdf::SRAM_BASE | 0x0000_0800
+    }
+    fn variables_ram_origin(&self) -> u32 {
+        BankCdf::SRAM_BASE | 0x0000_1800
+    }
+    fn custom_rom_origin(&self) -> u32 {
+        BankCdf::FLASH_BASE | 0x0000_0800
+    }
+    fn driver_ram_origin(&self) -> u32 {
+        BankCdf::SRAM_BASE
+    }
+    fn driver_rom_origin(&self) -> u32 {
+        BankCdf::FLASH_BASE
+    }
+}
+
+impl rusty2600_thumb::ThumbMemory for CdfArmMemory<'_> {
+    fn map(&mut self, addr: u32, _write: bool, _executing: bool) -> Option<(&mut [u8], u32)> {
+        // Compute every origin/length FIRST (all `&self` calls) before
+        // taking any `&mut` borrow of the underlying buffers — same
+        // borrow-check reasoning `DpcPlusArmMemory::map` already
+        // documents.
+        let origins = [
+            self.data_ram_origin(),
+            self.variables_ram_origin(),
+            self.custom_rom_origin(),
+            self.driver_ram_origin(),
+            self.driver_rom_origin(),
+        ];
+        let bufs: [&mut alloc::vec::Vec<u8>; 5] = [
+            self.data_ram,
+            self.variables_ram,
+            self.custom_rom,
+            self.driver_ram,
+            self.driver_rom,
+        ];
+        for (origin, buf) in origins.into_iter().zip(bufs) {
+            let len = buf.len() as u32;
+            if len == 0 {
+                continue; // variables_ram is empty for CDFJ+
+            }
+            if addr >= origin && addr < origin + len {
+                return Some((buf.as_mut_slice(), origin));
+            }
+        }
+        None
+    }
+
+    fn reset_vectors(&self) -> (u32, u32, u32) {
+        (
+            self.version.entry_sp,
+            self.version.entry_lr,
+            self.version.entry_pc,
+        )
+    }
+
+    fn is_executable(&self, _addr: u32) -> bool {
+        true
+    }
+}
+
+impl Board for BankCdf {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        if self.bankswitch(addr) {
+            return 0;
+        }
+        let a = addr & 0x0FFF;
+        let window_offset = self.bank_window_offset();
+        let mut data = self
+            .custom_rom
+            .get(window_offset + usize::from(a))
+            .copied()
+            .unwrap_or(0);
+
+        if self.fast_fetch && self.fast_jmp > 0 {
+            // The documented "Galagon NTSC demo ROM" phantom-read guard:
+            // only trust a `fastJmp == 2` state if the byte immediately
+            // before this one really was a `JMP absolute` opcode — a
+            // speculative/phantom read landing on `$4c $00 $00` by chance
+            // must not be treated as a real jump.
+            let prev_byte = self
+                .custom_rom
+                .get(window_offset + usize::from(a).wrapping_sub(1))
+                .copied();
+            if self.fast_jmp < 2 || (self.fast_jmp == 2 && prev_byte == Some(0x4C)) {
+                self.fast_jmp -= 1;
+                let reg_byte = self
+                    .custom_rom
+                    .get(
+                        window_offset + usize::from(a).wrapping_sub(1) + usize::from(self.fast_jmp),
+                    )
+                    .copied()
+                    .unwrap_or(0);
+                let reg = u32::from(reg_byte) + Self::DS_JMP;
+                let ptr = self.read_datastream_pointer(reg);
+                let idx = (ptr >> self.version.fetcher_shift) as usize;
+                let Some(&byte) = self.data_ram.get(idx) else {
+                    return 0;
+                };
+                let new_ptr = ptr.wrapping_add(1 << self.version.fetcher_shift);
+                self.update_datastream_pointer(reg, new_ptr);
+                return byte;
+            }
+            self.fast_jmp = 0;
+        }
+
+        if self.fast_fetch && self.fast_load > 0 {
+            self.fast_load -= 1;
+
+            let ds_offset = self.version.datastream_offset;
+            if data >= ds_offset && data <= ds_offset.wrapping_add(Self::DS_COMM as u8) {
+                return self.stream_data(u32::from(data - ds_offset));
+            }
+
+            if data == self.version.amplitude_register.wrapping_add(ds_offset) {
+                if self.sample_mode {
+                    let base = self.read_music_fetcher_base(0);
+                    let addr = base.wrapping_add(
+                        self.music[0].count >> (self.version.music_fetcher_shift + 1),
+                    );
+                    let mut sample = self.data_ram.get(addr as usize).copied().unwrap_or(0);
+                    if self.music[0].count & (1 << self.version.music_fetcher_shift) == 0 {
+                        sample >>= 4;
+                    }
+                    return sample;
+                }
+                let mut sum: u8 = 0;
+                for i in 0..self.music.len() {
+                    let base = self.read_music_fetcher_base(i);
+                    let m = base.wrapping_add(self.music[i].count >> self.music[i].waveform);
+                    sum = sum.wrapping_add(self.data_ram.get(m as usize).copied().unwrap_or(0));
+                }
+                return sum;
+            }
+            // `data` was higher than the amplitude register: the `0xa9`/
+            // etc. seen previously was just a normal value, not a real
+            // FastFetch trigger — fall through and return the plain byte.
+        }
+
+        if self.fast_fetch {
+            match data {
+                0x4c => {
+                    // JMP absolute — arm FastJMP only if the operand's
+                    // high byte (masked) is 0 and the low byte is also 0
+                    // (an address of $0000, or $0001 for CDFJ/CDFJ+ per
+                    // `fast_jmp_mask`).
+                    let op_lo = self
+                        .custom_rom
+                        .get(window_offset + ((usize::from(a) + 1) & 0x0FFF))
+                        .copied()
+                        .unwrap_or(0xFF);
+                    let op_hi = self
+                        .custom_rom
+                        .get(window_offset + ((usize::from(a) + 2) & 0x0FFF))
+                        .copied()
+                        .unwrap_or(0xFF);
+                    if op_lo & self.version.fast_jmp_mask == 0x00 && op_hi == 0x00 {
+                        self.fast_jmp = 2;
+                    }
+                }
+                0xa9 => self.fast_load = 2, // LDA #immediate
+                0xa2 if self.version.fast_ldx => self.fast_load = 2, // LDX #immediate
+                0xa0 if self.version.fast_ldy => self.fast_load = 2, // LDY #immediate
+                _ => {}
+            }
+        }
+
+        data
+    }
+
+    fn cpu_write(&mut self, addr: u16, val: u8) {
+        if self.arm_active {
+            return;
+        }
+        if self.bankswitch(addr) {
+            return;
+        }
+        let a = addr & 0x0FFF;
+        match a {
+            0x0ff0 => {
+                // DSWRITE
+                let v = self.read_datastream_pointer(Self::DS_COMM);
+                let idx = (v >> self.version.fetcher_shift) as usize;
+                let Some(slot) = self.data_ram.get_mut(idx) else {
+                    return;
+                };
+                *slot = val;
+                let new_v = v.wrapping_add(1 << self.version.fetcher_shift);
+                self.update_datastream_pointer(Self::DS_COMM, new_v);
+            }
+            0x0ff1 => {
+                // DSPTR — the register is written one byte at a time; each
+                // write shifts the existing 32-bit pointer up by 8 bits,
+                // masks it, then ORs the new byte in at the low end
+                // (scaled by `fetcher_shift`).
+                let mut v = self.read_datastream_pointer(Self::DS_COMM) << 8;
+                v &= self.version.fetcher_mask;
+                v |= u32::from(val) << self.version.fetcher_shift;
+                self.update_datastream_pointer(Self::DS_COMM, v);
+            }
+            0x0ff2 => {
+                // SETMODE
+                self.fast_fetch = val & 0x0f != 0x0f;
+                self.sample_mode = val & 0xf0 != 0xf0;
+                if !self.fast_fetch {
+                    self.fast_load = 0;
+                    self.fast_jmp = 0;
+                }
+            }
+            0x0ff3 => {
+                // CALLFN — the only real trigger during actual gameplay: a
+                // real (non-`poke`) write to $0ff4 always hits `bankswitch`
+                // above and returns before reaching this match at all, so
+                // $0ff4's CALLFN alias in the reference is effectively
+                // debugger-only and isn't ported.
+                if val == 0xfe || val == 0xff {
+                    self.run_arm();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn tier(&self) -> Tier {
+        Tier::BestEffort
+    }
+
+    /// Ported from `cdf.go`'s `Step(clock)`: called once per CPU cycle
+    /// (`rusty2600-core`'s scheduler already drives `Board::tick` at that
+    /// rate — no scheduler change needed, same as `BankDpcPlus`).
+    /// Unconditionally decrements `fast_load` (a phantom-read filter,
+    /// independent of `cpu_read`'s own consuming decrement — see
+    /// `fast_load`'s field doc), then every 59th call advances the 3 music
+    /// fetchers' phase accumulators by their `freq` (the same 20 kHz-from-
+    /// 1.19 MHz divide DPC+ uses, "same as the DPC format" per
+    /// Gopher2600's own commentary).
+    fn tick(&mut self) {
+        if self.fast_load > 0 {
+            self.fast_load -= 1;
+        }
+
+        self.beats = self.beats.wrapping_add(1);
+        if self.beats % 59 == 0 {
+            self.beats = 0;
+            for m in &mut self.music {
+                m.count = m.count.wrapping_add(m.freq);
+            }
+        }
     }
 }
 
@@ -2977,6 +3898,12 @@ pub enum Cartridge {
     /// selected via `$1FF6..=$1FFB`, an `$5A` "CALLFUNCTION" register
     /// entry point (BestEffort tier)
     BankDpcPlus(BankDpcPlus),
+    /// CDF/CDFJ/CDFJ+ (Harmony/Melody ARM coprocessor): the second
+    /// ARM7TDMI Thumb-1-driven family, closing the cart catalogue to
+    /// 26/26. FastFetch-gated data/music fetchers (no plain register-read
+    /// window at all), a real `ARMinterrupt` dispatch (unlike DPC+'s
+    /// no-op stub), 7 banks selected via `$1FF4..=$1FFB` (BestEffort tier)
+    BankCdf(BankCdf),
 }
 
 impl Board for Cartridge {
@@ -3006,6 +3933,7 @@ impl Board for Cartridge {
             Self::Bank4A50(b) => b.cpu_read(addr),
             Self::BankAr(b) => b.cpu_read(addr),
             Self::BankDpcPlus(b) => b.cpu_read(addr),
+            Self::BankCdf(b) => b.cpu_read(addr),
         }
     }
 
@@ -3035,6 +3963,7 @@ impl Board for Cartridge {
             Self::Bank4A50(b) => b.cpu_write(addr, val),
             Self::BankAr(b) => b.cpu_write(addr, val),
             Self::BankDpcPlus(b) => b.cpu_write(addr, val),
+            Self::BankCdf(b) => b.cpu_write(addr, val),
         }
     }
 
@@ -3064,6 +3993,7 @@ impl Board for Cartridge {
             Self::Bank4A50(b) => b.tier(),
             Self::BankAr(b) => b.tier(),
             Self::BankDpcPlus(b) => b.tier(),
+            Self::BankCdf(b) => b.tier(),
         }
     }
 
@@ -3093,6 +4023,7 @@ impl Board for Cartridge {
             Self::Bank4A50(b) => b.tick(),
             Self::BankAr(b) => b.tick(),
             Self::BankDpcPlus(b) => b.tick(),
+            Self::BankCdf(b) => b.tick(),
         }
     }
 
@@ -3122,6 +4053,7 @@ impl Board for Cartridge {
             Self::Bank4A50(b) => b.tick_coprocessor(),
             Self::BankAr(b) => b.tick_coprocessor(),
             Self::BankDpcPlus(b) => b.tick_coprocessor(),
+            Self::BankCdf(b) => b.tick_coprocessor(),
         }
     }
 
@@ -3151,6 +4083,7 @@ impl Board for Cartridge {
             Self::Bank4A50(b) => b.snoop_write(addr, val),
             Self::BankAr(b) => b.snoop_write(addr, val),
             Self::BankDpcPlus(b) => b.snoop_write(addr, val),
+            Self::BankCdf(b) => b.snoop_write(addr, val),
         }
     }
 
@@ -3180,6 +4113,7 @@ impl Board for Cartridge {
             Self::Bank4A50(b) => b.snoop_read(addr, val),
             Self::BankAr(b) => b.snoop_read(addr, val),
             Self::BankDpcPlus(b) => b.snoop_read(addr, val),
+            Self::BankCdf(b) => b.snoop_read(addr, val),
         }
     }
 
@@ -3187,6 +4121,7 @@ impl Board for Cartridge {
         match self {
             Self::BankAr(b) => b.take_oob_pokes(),
             Self::BankDpcPlus(b) => b.take_oob_pokes(),
+            Self::BankCdf(b) => b.take_oob_pokes(),
             _ => alloc::vec::Vec::new(),
         }
     }
@@ -3473,6 +4408,51 @@ fn is_probably_dpc_plus(rom: &[u8]) -> bool {
     false
 }
 
+/// Content-signature detection for CDF/CDFJ/CDFJ+, ported directly from
+/// Gopher2600's `fingerprintCDF` (`hardware/memory/cartridge/fingerprint.go`).
+/// Checked, in order, within the first 2048 bytes only (fingerprinting
+/// beyond that risks a false positive): the literal ASCII `"PLUSCDFJ"` ->
+/// [`CdfKind::CdfjPlus`]; else `"CDFJ"` -> [`CdfKind::Cdfj`]; else a
+/// sliding 4-byte window looking for `"CDF"` followed by a version byte of
+/// `0` or `1`, appearing TWICE with the SAME version byte both times ->
+/// [`CdfKind::Cdf0`]/[`CdfKind::Cdf1`].
+fn fingerprint_cdf(rom: &[u8]) -> Option<CdfKind> {
+    let scan = &rom[..rom.len().min(2048)];
+    if contains_subslice(scan, b"PLUSCDFJ") {
+        return Some(CdfKind::CdfjPlus);
+    }
+    if contains_subslice(scan, b"CDFJ") {
+        return Some(CdfKind::Cdfj);
+    }
+
+    let limit = scan.len().min(0x0800);
+    if limit < 4 {
+        return None;
+    }
+    let mut seen_version: Option<u8> = None;
+    for window in scan[..limit].windows(4) {
+        if &window[..3] != b"CDF" {
+            continue;
+        }
+        let version_byte = window[3];
+        if version_byte != 0 && version_byte != 1 {
+            continue;
+        }
+        match seen_version {
+            None => seen_version = Some(version_byte),
+            Some(v) if v == version_byte => {
+                return Some(if version_byte == 0 {
+                    CdfKind::Cdf0
+                } else {
+                    CdfKind::Cdf1
+                });
+            }
+            Some(_) => {}
+        }
+    }
+    None
+}
+
 /// Detect the bankswitch scheme from a ROM image and build the board.
 ///
 /// Same-size same-catalogue collisions (CV vs plain 2K/4K, Superchip vs
@@ -3508,6 +4488,15 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
     if is_probably_dpc_plus(rom) {
         if let Some(board) = BankDpcPlus::new(rom) {
             return Some(Cartridge::BankDpcPlus(board));
+        }
+    }
+
+    // CDF/CDFJ/CDFJ+ (`T-0401-006`): same reasoning as DPC+ above — content-
+    // signature-gated (`fingerprint_cdf`), never size alone, checked before
+    // the main size-based match.
+    if let Some(kind) = fingerprint_cdf(rom) {
+        if let Some(board) = BankCdf::new(rom, kind) {
+            return Some(Cartridge::BankCdf(board));
         }
     }
 
@@ -3686,11 +4675,11 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
         // whose exact bytes (Stella's `ourDummyROMCode`/`scrom.asm`) haven't
         // been sourced yet — a substantially larger, still-separately-scoped
         // item versus every other scheme in this catalogue, including 4A50.
-        // TODO(T-0401-006): DPC+, CDF/CDFJ/CDFJ+ (BestEffort) — both need a
-        // full ARM7TDMI Thumb interpreter via tick_coprocessor (see
-        // Gopher2600's arm.go/thumb.go for the reference implementation);
-        // deliberately not attempted here, same call as v0.4.x's own
-        // scoping of this family.
+        // T-0401-006 (DONE, `[2.2.0]`/`[2.3.0]`): DPC+ (`BankDpcPlus`) and
+        // CDF/CDFJ/CDFJ+ (`BankCdf`) both now wire `rusty2600-thumb`'s ARM7TDMI
+        // Thumb interpreter — via a SYNCHRONOUS call-and-block `run_arm()`
+        // triggered from `cpu_write`'s CALLFN handler, not `tick_coprocessor`
+        // (which stays unused; this stale comment previously said otherwise).
         // TODO(T-0401-007): pirate / homebrew BMC schemes (BestEffort).
         _ => None,
     }
@@ -4842,6 +5831,78 @@ mod tests {
     }
 
     #[test]
+    fn dpc_plus_music_fetcher_count_advances_every_59_ticks() {
+        let rom = dpc_plus_rom_with_arm_program(1);
+        let mut cart = BankDpcPlus::new(&rom).unwrap();
+        cart.music[0].freq = 0x1234_5678;
+        assert_eq!(cart.music[0].count, 0, "count starts at zero");
+
+        for _ in 0..58 {
+            Board::tick(&mut cart);
+        }
+        assert_eq!(
+            cart.music[0].count, 0,
+            "count must not advance before the 59th tick"
+        );
+
+        Board::tick(&mut cart);
+        assert_eq!(
+            cart.music[0].count, 0x1234_5678,
+            "the 59th tick should add freq to count exactly once"
+        );
+
+        for _ in 0..58 {
+            Board::tick(&mut cart);
+        }
+        Board::tick(&mut cart);
+        assert_eq!(
+            cart.music[0].count,
+            0x1234_5678u32.wrapping_mul(2),
+            "a second 59-tick period should advance count by freq again"
+        );
+    }
+
+    #[test]
+    fn dpc_plus_music_register_output_changes_as_count_advances() {
+        // Proves the fix end-to-end through the actual $05 register read
+        // (a 3-channel sum), not just that the internal `count` field
+        // mutates in isolation: channels 1/2 are left at their idle
+        // defaults (freq=0, so their contribution never changes) and
+        // pointed at a data_ram byte of 0 so they contribute nothing to
+        // the sum, isolating channel 0's contribution as it advances from
+        // waveform index 0 to index 1 (`count >> 27` selects the index).
+        let rom = dpc_plus_rom_with_arm_program(1);
+        let mut cart = BankDpcPlus::new(&rom).unwrap();
+        cart.data_ram[0] = 0x00; // channels 1/2 idle at index 0: contribute 0
+        cart.data_ram[1] = 0x22; // channel 0's index-1 sample once count advances
+        cart.music[0].waveform = 0;
+
+        assert_eq!(
+            cart.cpu_read(0x1005),
+            0x00,
+            "before any ticks, all 3 channels sample index 0 (byte 0x00)"
+        );
+
+        // A single freq=1<<27 add from count=0 lands exactly on the
+        // count>>27 == 1 boundary, selecting waveform-table index 1.
+        cart.music[0].freq = 1 << 27;
+        for _ in 0..59 {
+            Board::tick(&mut cart);
+        }
+        assert_eq!(
+            cart.music[0].count,
+            1 << 27,
+            "count should now select index 1"
+        );
+        assert_eq!(
+            cart.cpu_read(0x1005),
+            0x22,
+            "register $05 should now include channel 0's index-1 sample, \
+             proving the phase accumulator is live end-to-end"
+        );
+    }
+
+    #[test]
     fn dpc_plus_fast_fetch_redirects_lda_immediate_operand() {
         let rom = dpc_plus_rom_with_arm_program(1);
         let mut cart = BankDpcPlus::new(&rom).unwrap();
@@ -4906,5 +5967,416 @@ mod tests {
         assert_eq!(cart.data_ram[0x0050], 0x7E);
         assert_eq!(cart.data_ram[0x0151], 0x7E);
         assert_eq!(cart.data_ram[0x0252], 0x7E);
+    }
+
+    // ===== CDF/CDFJ/CDFJ+ (`T-0401-006`) =====
+
+    /// Build a minimal, structurally-valid CDFJ image (non-CDFJ+: driver +
+    /// shared 2 KiB custom prelude + 7 banks) with a real, hand-assembled
+    /// Thumb-1 program at the ARM entry point (`custom_rom` offset 8,
+    /// matching `CdfVersion::FORMULA_ENTRY_PC` = `custom_rom_origin + 8`).
+    /// Same program DPC+'s own test uses: `MOV R0, #0x42` / `LDR R1, [PC,
+    /// #4]` (loads the literal `data_ram_origin` right after the code) /
+    /// `STRB R0, [R1, #0]` (writes 0x42 to the first byte of CDF's
+    /// data_ram) / `BX LR` (ends the program via `StepOutcome::ProgramEnded`).
+    fn cdfj_rom_with_arm_program() -> alloc::vec::Vec<u8> {
+        let total =
+            BankCdf::DRIVER_SIZE + BankCdf::CUSTOM_SIZE + BankCdf::NUM_BANKS * BankCdf::BANK_SIZE;
+        let mut rom = alloc::vec![0u8; total];
+
+        let program_offset = BankCdf::DRIVER_SIZE + 8;
+        let instructions: [u16; 4] = [0x2042, 0x4901, 0x7008, 0x4770];
+        for (i, insn) in instructions.iter().enumerate() {
+            let bytes = insn.to_le_bytes();
+            rom[program_offset + i * 2] = bytes[0];
+            rom[program_offset + i * 2 + 1] = bytes[1];
+        }
+        // CDF's (non-CDFJ+) data_ram_origin = SRAM_BASE | 0x800, matching
+        // `CdfArmMemory::data_ram_origin`.
+        let data_ram_origin: u32 = BankCdf::SRAM_BASE | 0x0000_0800;
+        let literal_offset = program_offset + 8;
+        rom[literal_offset..literal_offset + 4].copy_from_slice(&data_ram_origin.to_le_bytes());
+
+        // A real "CDFJ" content signature so `detect()`/`fingerprint_cdf`
+        // resolve this image the same way a real ROM would.
+        rom[100..104].copy_from_slice(b"CDFJ");
+        rom
+    }
+
+    #[test]
+    fn cdf_detects_and_lands_besteffort() {
+        let rom = cdfj_rom_with_arm_program();
+        let cart = detect(&rom).expect("a CDFJ-signed image should detect");
+        assert!(matches!(cart, Cartridge::BankCdf(_)));
+        assert_eq!(cart.tier(), Tier::BestEffort);
+    }
+
+    #[test]
+    fn cdf_fingerprint_resolves_plus_before_cdfj() {
+        let mut rom = cdfj_rom_with_arm_program();
+        rom[200..208].copy_from_slice(b"PLUSCDFJ");
+        assert_eq!(fingerprint_cdf(&rom), Some(CdfKind::CdfjPlus));
+    }
+
+    #[test]
+    fn cdf_fingerprint_resolves_cdf0_and_cdf1_via_twice_repeated_signature() {
+        let mut rom = alloc::vec![0u8; 2048];
+        rom[10..14].copy_from_slice(b"CDF\x00");
+        rom[500..504].copy_from_slice(b"CDF\x00");
+        assert_eq!(fingerprint_cdf(&rom), Some(CdfKind::Cdf0));
+
+        let mut rom = alloc::vec![0u8; 2048];
+        rom[10..14].copy_from_slice(b"CDF\x01");
+        rom[500..504].copy_from_slice(b"CDF\x01");
+        assert_eq!(fingerprint_cdf(&rom), Some(CdfKind::Cdf1));
+    }
+
+    #[test]
+    fn cdf_fingerprint_requires_the_same_version_byte_twice() {
+        // A single occurrence, or two occurrences with DIFFERENT version
+        // bytes, must not detect as CDF0/CDF1.
+        let mut rom = alloc::vec![0u8; 2048];
+        rom[10..14].copy_from_slice(b"CDF\x00");
+        assert_eq!(fingerprint_cdf(&rom), None);
+
+        let mut rom = alloc::vec![0u8; 2048];
+        rom[10..14].copy_from_slice(b"CDF\x00");
+        rom[500..504].copy_from_slice(b"CDF\x01");
+        assert_eq!(fingerprint_cdf(&rom), None);
+    }
+
+    #[test]
+    fn cdf_bankswitch_hotspots_select_all_seven_banks_non_plus() {
+        let rom = cdfj_rom_with_arm_program();
+        let mut cart = BankCdf::new(&rom, CdfKind::Cdfj).unwrap();
+        // Tag each bank's first byte (window offset 0, distinct from the
+        // shared CUSTOM_SIZE prelude) with its own bank index.
+        for b in 0..BankCdf::NUM_BANKS {
+            let idx = BankCdf::CUSTOM_SIZE + b * BankCdf::BANK_SIZE;
+            cart.custom_rom[idx] = b as u8 + 1;
+        }
+        // Non-linear table: $0ff5->0, $0ff6->1, $0ff7->2, $0ff8->3,
+        // $0ff9->4, $0ffa->5, $0ff4->6 (and $0ffb also ->6, a duplicate).
+        let hotspot_to_bank = [
+            (0x1FF5u16, 0u8),
+            (0x1FF6, 1),
+            (0x1FF7, 2),
+            (0x1FF8, 3),
+            (0x1FF9, 4),
+            (0x1FFA, 5),
+            (0x1FF4, 6),
+        ];
+        for (hotspot, expected_bank) in hotspot_to_bank {
+            let _ = cart.cpu_read(hotspot);
+            assert_eq!(
+                cart.cpu_read(0x1000),
+                expected_bank + 1,
+                "hotspot {hotspot:#06x} should select bank {expected_bank}"
+            );
+        }
+    }
+
+    #[test]
+    fn cdf_bankswitch_hotspots_are_linear_for_cdfj_plus() {
+        let total = BankCdf::DRIVER_SIZE + BankCdf::NUM_BANKS * BankCdf::BANK_SIZE;
+        let mut rom = alloc::vec![0u8; total];
+        rom[100..108].copy_from_slice(b"PLUSCDFJ");
+        // Give CDFJ+'s entry-vector file offsets (0x17f4/0x17f8) SOME
+        // value so `CdfVersion::detect` doesn't read all-zero vectors —
+        // not exercised by this particular test, but keeps the fixture
+        // realistic.
+        rom[0x17f8..0x17fc].copy_from_slice(&(BankCdf::FLASH_BASE | 0x0000_0800).to_le_bytes());
+        let mut cart = BankCdf::new(&rom, CdfKind::CdfjPlus).unwrap();
+        for b in 0..BankCdf::NUM_BANKS {
+            let idx = b * BankCdf::BANK_SIZE;
+            cart.custom_rom[idx] = b as u8 + 1;
+        }
+        for (hotspot, expected_bank) in [
+            (0x1FF4u16, 0u8),
+            (0x1FF5, 1),
+            (0x1FF6, 2),
+            (0x1FF7, 3),
+            (0x1FF8, 4),
+            (0x1FF9, 5),
+            (0x1FFA, 6),
+        ] {
+            let _ = cart.cpu_read(hotspot);
+            assert_eq!(
+                cart.cpu_read(0x1000),
+                expected_bank + 1,
+                "hotspot {hotspot:#06x} should select bank {expected_bank}"
+            );
+        }
+    }
+
+    #[test]
+    fn cdf_bankswitch_gated_while_arm_active() {
+        let rom = cdfj_rom_with_arm_program();
+        let mut cart = BankCdf::new(&rom, CdfKind::Cdfj).unwrap();
+        cart.arm_active = true;
+        cart.cpu_write(0x1FF6, 0); // would select bank 1 if not gated
+        assert_eq!(
+            cart.bank, 0,
+            "bankswitch hotspots must be inert while the ARM is running"
+        );
+    }
+
+    #[test]
+    fn cdf_arm_callfn_executes_a_real_thumb_program() {
+        // The test that actually proves the ARM coprocessor is wired, not
+        // just that registers decode: a real hand-assembled Thumb-1
+        // program writes a known byte into data RAM via a genuine STRB,
+        // then BX LR ends the program.
+        let rom = cdfj_rom_with_arm_program();
+        let mut cart = BankCdf::new(&rom, CdfKind::Cdfj).unwrap();
+        assert_eq!(cart.data_ram[0], 0x00, "data RAM starts zeroed");
+        cart.cpu_write(0x1FF3, 254); // CALLFN -> run_arm()
+        assert_eq!(
+            cart.data_ram[0], 0x42,
+            "the synthetic Thumb program should have written 0x42 to data_ram[0] via a real STRB"
+        );
+        assert!(
+            !cart.arm_active,
+            "arm_active must be cleared once the program ends"
+        );
+    }
+
+    #[test]
+    fn cdf_dsptr_and_dswrite_round_trip_through_data_ram() {
+        let rom = cdfj_rom_with_arm_program();
+        let mut cart = BankCdf::new(&rom, CdfKind::Cdfj).unwrap();
+        // DSPTR is written one byte at a time; CDFJ's fetcher_shift=20, so
+        // a single low byte of 0x00 leaves the pointer at 0 (data_ram[0]).
+        cart.cpu_write(0x1FF1, 0x00);
+        cart.cpu_write(0x1FF0, 0x99); // DSWRITE: write 0x99 at the pointer, then advance
+        assert_eq!(cart.data_ram[0], 0x99);
+        // The pointer should have advanced by `1 << fetcher_shift`, so a
+        // second DSWRITE lands one data_ram byte further on.
+        cart.cpu_write(0x1FF0, 0xAA);
+        assert_eq!(cart.data_ram[1], 0xAA);
+    }
+
+    #[test]
+    fn cdf_fast_fetch_redirects_lda_immediate_to_a_datastream_read() {
+        let rom = cdfj_rom_with_arm_program();
+        let mut cart = BankCdf::new(&rom, CdfKind::Cdfj).unwrap();
+        cart.cpu_write(0x1FF2, 0x00); // SETMODE: FastFetch on, SampleMode on (irrelevant here)
+
+        // Seed datastream 0's pointer to point at data_ram[0] and prime
+        // data_ram[0] with a recognizable byte.
+        cart.update_datastream_pointer(0, 0);
+        cart.data_ram[0] = 0x77;
+
+        // Place `LDA #0` (datastream 0, since datastream_offset=0 for
+        // CDFJ) in the current bank at the window's first byte.
+        let window_offset = cart.bank_window_offset();
+        cart.custom_rom[window_offset] = 0xA9; // LDA #immediate
+        cart.custom_rom[window_offset + 1] = 0x00; // operand: datastream 0
+
+        let _ = cart.cpu_read(0x1000); // fetch 0xA9, arms fast_load
+        let redirected = cart.cpu_read(0x1001); // should redirect through datastream 0
+        assert_eq!(
+            redirected, 0x77,
+            "FastFetch should redirect LDA #0 through datastream 0 instead of returning the literal 0x00 operand"
+        );
+    }
+
+    #[test]
+    fn cdf_fast_jmp_redirects_through_a_data_fetcher_stream() {
+        // DPC+ never exercised this mechanism at all — CDF's FastJMP
+        // redirects a `JMP absolute $0000` instruction's OWN opcode fetch
+        // (not just its operand) through a data-fetcher stream keyed by
+        // DSJMP + the byte immediately preceding the JMP opcode.
+        let rom = cdfj_rom_with_arm_program();
+        let mut cart = BankCdf::new(&rom, CdfKind::Cdfj).unwrap();
+        cart.cpu_write(0x1FF2, 0x00); // FastFetch on
+
+        let window_offset = cart.bank_window_offset();
+        // Byte before the JMP: register selector 0 -> reg = 0 + DS_JMP(33).
+        cart.custom_rom[window_offset] = 0x00;
+        cart.custom_rom[window_offset + 1] = 0x4C; // JMP absolute
+        cart.custom_rom[window_offset + 2] = 0x00; // operand lo
+        cart.custom_rom[window_offset + 3] = 0x00; // operand hi
+
+        cart.update_datastream_pointer(33, 0);
+        cart.data_ram[0] = 0x55;
+
+        let _ = cart.cpu_read(0x1000); // fetch the byte before JMP (arms nothing by itself)
+        let _ = cart.cpu_read(0x1001); // fetch 0x4C (JMP absolute), arms fast_jmp=2 since operand is $0000
+        let byte1 = cart.cpu_read(0x1002); // fast_jmp==2: the phantom-read guard check
+        assert_eq!(
+            byte1, 0x55,
+            "the first FastJMP-redirected fetch should read through the DSJMP-selected stream"
+        );
+    }
+
+    #[test]
+    fn cdf_arm_interrupt_services_set_music_note_and_resumes() {
+        // The single most important new test: proves the ARMinterrupt
+        // dispatch loop actually intercepts a real fault, services it,
+        // and resumes execution — not just that a fault is caught and the
+        // program terminates.
+        //
+        // Critical, non-obvious detail this test exists to get right (and
+        // that an earlier version of this test got backwards): the
+        // dispatch key is `arm.instruction_pc()` — WHERE the faulting
+        // `BX` instruction ITSELF is physically located — not the address
+        // its operand register holds. Real CDFJ driver binaries have
+        // their actual "call the ARM-native function" `BX <reg>`
+        // instructions physically placed at the fixed offsets
+        // `0x752`/`0x756`/`0x75a`/`0x75e` WITHIN `driver_rom` (the first
+        // 2048 bytes, Flash-mapped at `0x0..=0x7ff`) — real ARM7TDMI
+        // Thumb-1 has no register-form `BLX` (that's ARMv5T+), so the
+        // convention is a plain `BX` to a non-Thumb address, with `LR`
+        // pre-loaded by software beforehand.
+        //
+        // Program layout — `custom_rom` (from `entry_pc`, byte offsets
+        // relative to it):
+        //   0: MOVS R2,#0        val1 = music fetcher index 0
+        //   2: MOVS R3,#99       val2 = the frequency to set
+        //   4: LDR R6,[PC,#8]    R6 = the ORIGINAL entry_lr — loading a
+        //                        register (not a raw constant) proves the
+        //                        resume path lands where a real
+        //                        `BX <this>` triggers ProgramEnded
+        //   6: LDR R5,[PC,#12]   R5 = the resume-stub's own address
+        //   8: MOV LR,R5         LR := resume-stub address
+        //  10: LDR R1,[PC,#12]   R1 = `0x753` (driver_rom offset 0x752,
+        //                        with bit 0 set — Thumb-mode continuation)
+        //  12: BX R1             a THUMB-MODE branch into driver_rom —
+        //                        execution continues there, it does NOT
+        //                        fault yet
+        //  14: <2 bytes padding, for 4-byte literal-pool alignment>
+        //  16: <literal: entry_lr>
+        //  20: <literal: resume-stub address>
+        //  24: <literal: 0x753>
+        //  28: BX R6             the resume stub: R6==entry_lr, so once
+        //                        control returns here this cleanly
+        //                        triggers StepOutcome::ProgramEnded
+        //
+        // `driver_rom` at byte offset `0x752` (a separate memory region
+        // from `custom_rom`, physically distinct — see `CdfArmMemory::map`):
+        //   BX R0                 R0 is still its reset value (0, an even/
+        //                         non-Thumb address) — this is the ACTUAL
+        //                         fault: a non-Thumb branch whose call
+        //                         site (`instruction_pc()`) is exactly
+        //                         `0x752`, CDFJ's "Set music note" address.
+        let rom = cdfj_rom_with_arm_program();
+        let mut cart = BankCdf::new(&rom, CdfKind::Cdfj).unwrap();
+        let entry_pc = cart.version.entry_pc;
+        // `cart.custom_rom` is ALREADY offset-sliced (`custom_rom =
+        // rom[DRIVER_SIZE..]`), so its own index 0 corresponds to ARM
+        // address `custom_rom_origin` (0x800) — entry_pc's index within
+        // it is just the `+8` header, NOT `DRIVER_SIZE+8` (that would be
+        // the index into the FULL FILE, which `cdfj_rom_with_arm_program`
+        // uses, a different addressing base entirely).
+        let base = 8usize;
+
+        let instructions: [u16; 7] = [
+            0x2200, // MOVS R2,#0
+            0x2363, // MOVS R3,#99
+            0x4E02, // LDR R6,[PC,#8]  (word8=2 -> +8)
+            0x4D03, // LDR R5,[PC,#12] (word8=3 -> +12)
+            0x46AE, // MOV LR,R5       (H1=1,H2=0, Rs=R5(101), Rd=LR(110))
+            0x4903, // LDR R1,[PC,#12] (word8=3 -> +12)
+            0x4708, // BX R1           (H2=0, Rs=R1(001))
+        ];
+        for (i, insn) in instructions.iter().enumerate() {
+            let bytes = insn.to_le_bytes();
+            cart.custom_rom[base + i * 2] = bytes[0];
+            cart.custom_rom[base + i * 2 + 1] = bytes[1];
+        }
+        // Literal pool at byte offset 16 (base+16), each entry an
+        // absolute ARM address.
+        let entry_lr = cart.version.entry_lr;
+        let resume_stub_addr = entry_pc + 28;
+        let driver_rom_target: u32 = (BankCdf::FLASH_BASE | 0x0000_0752) | 1; // Thumb-mode bit set
+        rom_write_u32(&mut cart.custom_rom, base + 16, entry_lr);
+        rom_write_u32(&mut cart.custom_rom, base + 20, resume_stub_addr);
+        rom_write_u32(&mut cart.custom_rom, base + 24, driver_rom_target);
+        // Resume stub at offset 28: BX R6 (H2=0, Rs=R6(110)).
+        let stub_insn: u16 = 0x4730;
+        let stub_bytes = stub_insn.to_le_bytes();
+        cart.custom_rom[base + 28] = stub_bytes[0];
+        cart.custom_rom[base + 29] = stub_bytes[1];
+
+        // The real call site: `BX R0` planted directly in `driver_rom` at
+        // byte offset 0x752 (a distinct memory region from `custom_rom`).
+        let call_site_insn: u16 = 0x4700; // BX R0 (H2=0, Rs=R0(000))
+        let call_site_bytes = call_site_insn.to_le_bytes();
+        cart.driver_rom[0x752] = call_site_bytes[0];
+        cart.driver_rom[0x753] = call_site_bytes[1];
+
+        assert_eq!(cart.music[0].freq, 0, "freq starts at zero");
+        cart.cpu_write(0x1FF3, 254); // CALLFN
+        assert_eq!(
+            cart.music[0].freq, 99,
+            "the ARMinterrupt dispatch should have serviced \"Set music note\" (call site 0x752) and set freq=99"
+        );
+        assert!(
+            !cart.arm_active,
+            "run_arm always clears arm_active on return, regardless of how the loop ended"
+        );
+    }
+
+    /// Test-only little-endian u32 write into a `Vec<u8>`, mirroring
+    /// `write_u32_le` but usable from the test module without needing
+    /// `&mut BankCdf`.
+    fn rom_write_u32(buf: &mut alloc::vec::Vec<u8>, idx: usize, val: u32) {
+        buf[idx..idx + 4].copy_from_slice(&val.to_le_bytes());
+    }
+
+    #[test]
+    fn cdf_sample_mode_reads_a_single_channel_pcm_byte() {
+        let rom = cdfj_rom_with_arm_program();
+        let mut cart = BankCdf::new(&rom, CdfKind::Cdfj).unwrap();
+        cart.cpu_write(0x1FF2, 0x00); // FastFetch on, SampleMode on (data&0xf0 != 0xf0)
+        assert!(cart.sample_mode);
+
+        // Seed music fetcher 0's base (in driver_ram) to point at data_ram[0].
+        write_u32_le(&mut cart.driver_ram, cart.version.music_base as usize, 0);
+        cart.data_ram[0] = 0xF0;
+
+        let window_offset = cart.bank_window_offset();
+        cart.custom_rom[window_offset] = 0xA9; // LDA #immediate
+        cart.custom_rom[window_offset + 1] = 35; // amplitude register for CDFJ = 35, datastream_offset = 0
+
+        let _ = cart.cpu_read(0x1000);
+        let sample = cart.cpu_read(0x1001);
+        // count=0, so `count & (1 << shift) == 0` is TRUE -> the
+        // volume-halving branch DOES apply: 0xF0 >> 4 = 0x0F.
+        assert_eq!(
+            sample, 0x0F,
+            "with count=0 the volume-halving branch applies, halving the raw 0xF0 sample to 0x0F"
+        );
+    }
+
+    #[test]
+    fn cdf_non_sample_mode_sums_three_music_channels() {
+        let rom = cdfj_rom_with_arm_program();
+        let mut cart = BankCdf::new(&rom, CdfKind::Cdfj).unwrap();
+        cart.cpu_write(0x1FF2, 0xF0); // FastFetch on (low nibble != 0xf), SampleMode OFF (high nibble == 0xf0)
+        assert!(!cart.sample_mode);
+
+        // All 3 channels point at data_ram[0] (waveform=0x1b default, but
+        // count=0 so `count >> waveform` = 0 regardless of waveform).
+        for i in 0..3 {
+            write_u32_le(
+                &mut cart.driver_ram,
+                (cart.version.music_base + i as u32 * 4) as usize,
+                0,
+            );
+        }
+        cart.data_ram[0] = 10;
+
+        let window_offset = cart.bank_window_offset();
+        cart.custom_rom[window_offset] = 0xA9;
+        cart.custom_rom[window_offset + 1] = 35; // amplitude register
+
+        let _ = cart.cpu_read(0x1000);
+        let sum = cart.cpu_read(0x1001);
+        assert_eq!(
+            sum, 30,
+            "non-SampleMode should sum all 3 channels' samples (10+10+10)"
+        );
     }
 }
