@@ -6,6 +6,82 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-07-02 - "Touchpoint"
+
+Fifth release of the RustyNES gap-closure arc, shipped through PR #18.
+The first wave of `wasm-winit` web parity: real interactivity on top of
+`v2.5.0`'s bare wasm render — on-screen touch controls, a wasm32-safety
+review of the Settings panel, and real `localStorage` config persistence.
+Reviewed by GitHub Copilot and Gemini Code Assist — 6 findings, 5 fixed,
+1 dismissed with documented evidence (a false-positive claim that this
+project's already-used `&& let` chains would fail to compile on stable
+Rust — they don't; edition 2024 stabilized them since Rust 1.88, and CI
+had already passed on all 3 platforms with the exact same syntax).
+
+### Added
+
+- **On-screen touch controls** (`v2.8.0` "Touchpoint", headline) — a
+  D-pad + fire button + console-switch row for `wasm-winit`
+  (`ShellState::render_touch_overlay`, wasm32-only), all plain egui
+  widgets feeding the exact same `InputState` the keyboard path
+  populates via new `input::TouchButton`/`TouchOverlayState` types —
+  pure, target-agnostic press/hold/release + latch-edge logic, unit-
+  tested under the ordinary native test run. Defaults visible (`View ->
+  Touch overlay` toggles it off). Known limitation, honestly documented:
+  egui-winit tracks one synthesized touch pointer, so true simultaneous
+  multi-finger combos aren't guaranteed to both register.
+- **`Config::save()`/`Config::load()` real `localStorage` persistence**
+  on wasm32 (`crates/rusty2600-frontend/src/config.rs`), replacing the
+  previous no-op stub. Shares TOML (de)serialization helpers with the
+  native `config.toml` path; falls back to defaults on any missing/
+  corrupt/foreign stored value, never blocking launch.
+
+### Verified (no code needed)
+
+- **Settings panel wasm32-safety** — reviewed tab-by-tab; the Video/
+  Audio/Input/System tabs are plain egui widgets with no native-only API
+  in the path, so the panel already worked correctly on wasm32
+  structurally. This release's real gap was persistence (above), not
+  the panel itself.
+- **Console-switch buttons** — confirmed already reachable "for free"
+  via the shared `Emulation -> Console switches` menu on both native and
+  wasm32. The new work is the touch-friendly on-screen row (part of the
+  touch overlay above), for users who can't easily reach a dropdown menu
+  with a finger.
+
+### Fixed
+
+- **Touch-overlay Areas were accidentally draggable** (Gemini Code
+  Assist) — `egui::Area` is movable by default; added `.movable(false)`
+  to all 3 overlay Areas (D-pad, fire, console switches).
+- **Wasted per-frame audio-sample allocation on wasm32** (Gemini Code
+  Assist) — the `Vec` collecting DC-blocked samples was allocated and
+  populated every frame even on wasm32, where nothing reads it
+  (`audio_tx` is native-only). Now gated to native only; the DC-blocker
+  filter state still advances every sample on both targets.
+- **Misleading doc comment on momentary touch buttons** (Copilot) —
+  corrected to say they emit an edge on press/release transitions, not
+  a continuous per-frame level.
+
+### Deferred
+
+- **Save-state SLOT persistence via `localStorage`** — needs per-slot
+  keys, an mtime substitute (`localStorage` has none), and real size
+  budgeting across 8 slots within the ~5-10MB origin quota, a distinctly
+  bigger lift than the single-key Settings value above. Documented in
+  `docs/frontend.md`; deferred to its own future release rather than
+  rushed alongside this release's headline items.
+
+### Test count
+
+342 tests passing on default features (346 with `--features test-roms`)
+— up from 333/337, the 9 new tests covering `TouchButton`/
+`TouchOverlayState` and the shared TOML (de)serialization helpers. Full
+CI green — Linux/macOS/Windows, the perf regression gate, and the
+`no_std` gate. Also independently verified: `cargo check`/`cargo clippy
+--target wasm32-unknown-unknown --features wasm-winit` and `cargo check
+--target wasm32-unknown-unknown --features wasm-canvas` both clean.
+
 ## [2.7.0] - 2026-07-02 - "True Colors"
 
 Fourth release of the RustyNES gap-closure arc, shipped through PR #17.

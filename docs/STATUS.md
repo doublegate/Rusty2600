@@ -5,37 +5,39 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v2.7.0 "True Colors" — the fourth release of the
+**Current release:** v2.8.0 "Touchpoint" — the fifth release of the
 RustyNES gap-closure arc (`v2.4.0 -> v3.0.0`, see `to-dos/ROADMAP.md`),
-shipped through PR #17. Headline item: the **TIA object-ID mask**
-(`rusty2600-tia`, `hd-pack` feature, off by default) — a parallel
-per-pixel output channel (`Tia::object_mask`) tagging which object won
-color-priority resolution at each dot plus, for player pixels, the exact
-live `GRPx`/`NUSIZx`, captured per-pixel so mid-scanline `GRPx` rewrites
-(sprite multiplexing) resolve correctly. Strictly additive/read-only —
-written after `current_color` is already resolved, confirmed by direct
-line-number inspection, so `video_buffer` stays byte-identical with the
-feature off. Wires into a **live HD-pack rendering splice**
-(`rusty2600-frontend::emu_thread::EmuCore::step_frame`) that substitutes
-a matching replacement bitmap for a player object's on-screen footprint,
-proven end-to-end by a hand-assembled synthetic-ROM integration test.
-PR #17's bot review found 3 real findings, all fixed: a footprint-
-tracking bug through transparent `GRPx` gaps plus missing alpha-channel
-support in the splice, a stale `sprite_pack` surviving a ROM reload, and
-a test-ROM that relied on the instruction-count safety timeout instead
-of a real `VSYNC` frame boundary. 333 tests passing on default features
-(337 with `--features test-roms`, unchanged from `[2.6.0]` since the new
-code is `hd-pack`-gated); 147 tests passing with `--features hd-pack`.
+shipped through PR #18. The first wave of `wasm-winit` web parity built
+on `[2.5.0]`'s bare wasm render: an **on-screen touch overlay** (D-pad +
+fire + console-switch row, `ShellState::render_touch_overlay`, wasm32-
+only) feeding the same `InputState` the keyboard path populates, via new
+`input::TouchButton`/`TouchOverlayState` types — pure, target-agnostic
+press/hold/release + latch-edge logic, unit-tested under the ordinary
+native test run. Also landed: real `Config::save()`/`load()`
+`localStorage` persistence on wasm32 (replacing a no-op stub), and
+confirmation that the Settings panel and console-switch menu already
+work correctly on wasm32 structurally (no code needed — just verified).
+PR #18's bot review found 6 findings, 5 fixed (draggable touch-overlay
+Areas, a wasted per-frame audio-sample allocation on wasm32, a
+misleading doc comment) and 1 dismissed with documented evidence (a
+false-positive claim that this project's already-used `&& let` chains
+would fail on stable Rust — edition 2024 stabilized them since Rust
+1.88, and CI had already passed on all 3 platforms with the exact same
+syntax). Save-state SLOT persistence is deliberately deferred (needs
+per-slot keys, an mtime substitute, and real size budgeting within
+`localStorage`'s quota — a distinctly bigger lift). 342 tests passing on
+default features (346 with `--features test-roms`, up from 333/337).
 
-**Previous release:** v2.6.0 "Rollback Bridge" — browser WebRTC netplay
-transport (`rusty2600-netplay::webrtc`, `wasm32`-only, closing the
-WebRTC gap `[2.3.0]` deliberately deferred) alongside a master
-dependency-upgrade sweep consolidating 12 Dependabot PRs. Shipped
-through PR #15 (netplay) and PR #16 (dependencies, merged first). See
-`[2.6.0]` in `CHANGELOG.md` for full detail.
+**Previous release:** v2.7.0 "True Colors" — the TIA object-ID mask
+(`rusty2600-tia`, `hd-pack` feature) plus a live HD-pack rendering
+splice substituting replacement bitmaps for player sprites, proven
+end-to-end by a hand-assembled synthetic-ROM test. Shipped through
+PR #17. See `[2.7.0]` in `CHANGELOG.md` for full detail.
 
-**Historical**: v2.5.0 "Web Awakens" (PR #14) shipped real
-`winit`+`wgpu`+`egui` rendering on `wasm32`, a debugger Lua console
+**Historical**: v2.6.0 "Rollback Bridge" (PR #15 + PR #16) shipped
+browser WebRTC netplay transport plus a master dependency-upgrade sweep
+consolidating 12 Dependabot PRs. v2.5.0 "Web Awakens" (PR #14) shipped
+real `winit`+`wgpu`+`egui` rendering on `wasm32`, a debugger Lua console
 panel, and a Keyboard Controller/Trak-Ball research decision. v2.4.0
 "Save Point" (PR #1) shipped manual save-state slots, a CI-gated
 performance-regression check, a paddle-timing Stella-oracle differential
@@ -55,6 +57,12 @@ independently-NATed peers, and this sandbox's WebRTC ICE gathering
 itself doesn't complete — see `docs/netplay.md`). The HD-pack live
 splice (`[2.7.0]`) is proven only against a proof-of-mechanism 1x1
 placeholder bitmap — no polished replacement-art library exists yet.
+The touch overlay and `localStorage` persistence (`[2.8.0]`) are verified
+via `cargo check`/`clippy --target wasm32-unknown-unknown` and native
+unit tests for their pure logic, but NOT live-browser-verified — this
+sandbox's headless Chromium has no working GPU adapter, so `wasm-winit`
+rendering itself remains unconfirmed since `[2.5.0]` (see
+`docs/frontend.md`).
 
 Earlier: `v2.1.0 "Follow-Through"` closed three gaps `[2.0.0]` carried
 forward — AR/Supercharger (`BankAr`, a full port of Stella's
