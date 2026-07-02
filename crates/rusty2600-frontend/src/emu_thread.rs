@@ -178,6 +178,12 @@ impl EmuCore {
         self.frame_count = 0;
         self.rom_loaded = true;
         self.rom_tag = Some(fnv1a64(rom));
+        // A previously installed HD-pack targets the prior cartridge's `(GRPx, NUSIZx)` sprite
+        // keys -- carrying it over would apply stale replacements to the new ROM's graphics.
+        #[cfg(all(not(target_arch = "wasm32"), feature = "hd-pack"))]
+        {
+            self.sprite_pack = None;
+        }
         Ok(())
     }
 
@@ -538,12 +544,29 @@ impl EmuCore {
                         rusty2600_core::tia::ObjectId::Player0
                             | rusty2600_core::tia::ObjectId::Player1
                     );
-                    let key = is_player.then_some((tag.object, tag.grp, tag.nusiz));
-                    if key != run_key {
+                    let candidate_key = is_player.then_some((tag.object, tag.grp, tag.nusiz));
+
+                    // A player's footprint can contain transparent gaps -- `GRPx` 0-bits, where
+                    // this dot's color-priority winner is whatever's underneath (playfield/
+                    // background), not the player, so `candidate_key` goes `None` mid-sprite.
+                    // Keep the active run (and its coordinate mapping) alive through such gaps,
+                    // rather than resetting on every 0-bit, as long as we're still inside the
+                    // run's own footprint width and any resumed player pixel matches its key.
+                    let run_continues = run_key.is_some_and(|active| {
+                        let scale = match active.2 & 0x07 {
+                            5 => 2,
+                            7 => 4,
+                            _ => 1,
+                        };
+                        let footprint_w = 8 * scale;
+                        x - run_start_x < footprint_w && candidate_key.is_none_or(|k| k == active)
+                    });
+                    if !run_continues {
                         run_start_x = x;
-                        run_key = key;
+                        run_key = candidate_key;
                     }
-                    if let Some((_, grp, nusiz)) = key
+
+                    if let Some((_, grp, nusiz)) = run_key
                         && let Some(bitmap) = pack.lookup(grp, nusiz)
                         && bitmap.width > 0
                         && bitmap.height > 0
@@ -564,12 +587,26 @@ impl EmuCore {
                             // scanline, not a tracked per-instance sprite row.
                             let bmp_y = y % bitmap.height as usize;
                             let idx = (bmp_y * bitmap.width as usize + bmp_x) * 4;
-                            if idx + 2 < bitmap.rgba.len() {
-                                let r = u32::from(bitmap.rgba[idx]);
-                                let g = u32::from(bitmap.rgba[idx + 1]);
-                                let b = u32::from(bitmap.rgba[idx + 2]);
-                                frame.put_dot(x, y, (r << 16) | (g << 8) | b);
-                                continue;
+                            if idx + 3 < bitmap.rgba.len() {
+                                let a = u32::from(bitmap.rgba[idx + 3]);
+                                // Alpha-test + integer alpha-blend: a fully transparent
+                                // replacement pixel lets the original TIA color show through
+                                // unmodified (falls through to `put_dot` below); a
+                                // semi-transparent one blends against it instead of always
+                                // drawing opaque, which would otherwise paint gaps in the
+                                // replacement art as solid black.
+                                if a > 0 {
+                                    let r = u32::from(bitmap.rgba[idx]);
+                                    let g = u32::from(bitmap.rgba[idx + 1]);
+                                    let b = u32::from(bitmap.rgba[idx + 2]);
+                                    let (bg_r, bg_g, bg_b) =
+                                        (rgb >> 16 & 0xFF, rgb >> 8 & 0xFF, rgb & 0xFF);
+                                    let out_r = (r * a + bg_r * (255 - a)) / 255;
+                                    let out_g = (g * a + bg_g * (255 - a)) / 255;
+                                    let out_b = (b * a + bg_b * (255 - a)) / 255;
+                                    frame.put_dot(x, y, (out_r << 16) | (out_g << 8) | out_b);
+                                    continue;
+                                }
                             }
                         }
                     }
