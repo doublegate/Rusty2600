@@ -298,6 +298,9 @@ impl MobileEmulator {
         let (inpt4, inpt5) = fire_inputs(&input);
         system.bus.tia.inpt[4] = inpt4;
         system.bus.tia.inpt[5] = inpt5;
+        for (i, position) in paddle_positions(&input).into_iter().enumerate() {
+            system.bus.tia.set_paddle_position(i, position);
+        }
 
         let mut old_vsync = system.bus.tia.objects.vsync;
         for _ in 0..200_000u32 {
@@ -437,6 +440,19 @@ const fn fire_inputs(input: &MobileInput) -> (u8, u8) {
         if pressed { 0x00 } else { 0x80 }
     }
     (level(input.joystick0.fire), level(input.joystick1.fire))
+}
+
+/// `paddle0..=paddle3`'s `position` bytes, in `INPT0..=INPT3` order — the
+/// TIA's real RC-circuit dump-capacitor simulation (`set_paddle_position`)
+/// turns these into an actual analog charge/discharge timeline; this
+/// function is just the per-frame snapshot handoff.
+const fn paddle_positions(input: &MobileInput) -> [u8; 4] {
+    [
+        input.paddle0.position,
+        input.paddle1.position,
+        input.paddle2.position,
+        input.paddle3.position,
+    ]
 }
 
 #[cfg(test)]

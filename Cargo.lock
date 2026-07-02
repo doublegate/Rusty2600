@@ -3723,6 +3723,7 @@ version = "2.0.0"
 dependencies = [
  "bitflags 2.13.0",
  "criterion",
+ "libm",
  "rusty2600-cart",
  "serde",
 ]
