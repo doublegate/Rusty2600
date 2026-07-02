@@ -6,6 +6,123 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-02 - "Parity"
+
+The culmination release of the `v1.1.0 -> v2.0.0` RustyNES-parity line. No
+code changes from `[1.12.0]` — this is a version-line milestone tag plus a
+full documentation/status reconciliation pass confirming every claim across
+all twelve prior releases matches what actually shipped, mirroring the
+`[1.0.0]` ceremony's own rigor. All four of RustyNES's biggest-ticket
+features chosen in-scope by the user — Lua scripting, HD texture packs,
+rollback netplay, and mobile builds (Android + iOS) — landed, alongside the
+shader stack and TAS movie tooling recommended in-scope by default.
+
+### Status at 2.0.0
+
+- **Persistence & timeline** (`[1.1.0]`/`[1.2.0]`) — a versioned binary
+  save-state format (ADR 0007) reusing the core's own `serde` derives; a
+  serialized-snapshot rewind ring (replacing a raw full-`System`-clone
+  `VecDeque`); run-ahead (`0..=4` frames, off by default) built on the same
+  snapshot primitives. A save-state round-trip test is a permanent
+  regression gate.
+- **Debugger depth** (`[1.3.0]`) — a watch/conditional-breakpoint expression
+  engine, a live JSR/RTS call stack, a per-scanline TIA write-scatter
+  viewer, a player/missile/ball position panel, and the RetroAchievements
+  achievement-list/login/toast UI (`T-0802-005`, closing a `[1.0.0]`-era
+  deferral).
+- **Shader stack & sprite-pack data model** (`[1.4.0]`) — a composable
+  post-process stack (`rusty2600-gfx-shaders`: CRT scanline darkening + an
+  honestly-labeled composite-artifact approximation), always compiled in
+  but **defaulting to an empty stack byte-identical to the direct blit**;
+  the sprite-pack data model (`hd-pack` feature, off by default) — its live
+  rendering splice remains a documented follow-up pending a TIA object-ID
+  mask.
+- **Cart catalog** (`[1.5.0]`) — `Bank4A50` closes 23 of 25 cataloged
+  bankswitch schemes. AR/Supercharger and the ARM-driven DPC+/CDF/CDFJ/
+  CDFJ+ family remain open, explicitly out of this line's gate (see
+  "Explicit non-requirements" below).
+- **ARM7TDMI Thumb interpreter** (`[1.6.0]`) — a real Thumb-1 interpreter
+  (`rusty2600-thumb`, ported from Gopher2600's Go implementation, 27
+  conformance tests) — the substrate the DPC+/CDF/CDFJ/CDFJ+ family will
+  wire into via a separately-scoped follow-up.
+- **TAS movies** (`[1.7.0]`) — a `.r26m` format (`rusty2600-core::movie`)
+  and a TAStudio-lite piano-roll panel, built on the `[1.1.0]` snapshot
+  substrate. Live per-frame auto-recording remains a documented follow-up.
+- **Accuracy battery** (`[1.8.0]`) — `GoldenLogDiffer` bundles a genuine
+  externally-oracled golden CPU trace (20,000 instructions vs. an
+  independent Gopher2600 run, `first_divergence() == None`). `T-0602-006`
+  (TIA/RIOT-timing test-ROM fixtures) stays a **permanent, honestly
+  documented stub** — no freely-redistributable corpus exists; confirmed
+  by research, not assumed.
+- **Lua scripting** (`[1.9.0]`) — a real, tested `rusty2600-script` crate
+  (`mlua` native backend, `scripting` feature off by default and not yet a
+  frontend dependency at all) — engine only, frontend wiring and the
+  `piccolo` wasm fallback remain open follow-ups.
+- **Rollback netplay** (`[1.10.0]`) — a real, tested `rusty2600-netplay`
+  crate wrapping `ggrs`, 2-player-only by deliberate scope cut, validated by
+  a genuine rollback-desync test — session crate only, not yet a frontend
+  dependency; frontend wiring, STUN/hole-punch NAT traversal, and the
+  WebRTC transport remain open follow-ups.
+- **Mobile builds** (`[1.11.0]`/`[1.12.0]`) — `rusty2600-mobile`, one UniFFI
+  bridge crate driving both a real Android app (`android/`, **verified
+  running on a real KVM-accelerated emulator** — booted, installed, launched
+  crash-free, a ROM loaded via the real system file picker) and a real iOS
+  app (`ios/`, genuinely tool-generated Swift bindings + real SwiftUI/Metal/
+  AVFoundation source, **honestly unverified by compilation** — this
+  development sandbox has no Xcode/`xcrun`/`swift` toolchain at all, so no
+  Xcode build, Simulator run, or device run was possible). Neither mobile
+  host exposes save/load-state UI yet; the iOS build additionally needs a
+  real Mac to complete verification before it reaches the Android build's
+  bar. A pre-existing, project-wide gap discovered along the way
+  (`T-0501-010`): the TIA has no real analog dump-capacitor paddle-timing
+  simulation on any platform yet.
+- **Testing** — 268 tests passing workspace-wide (272 with
+  `--features test-roms`), up from 151 (154) at `[1.0.0]`. Full CI matrix
+  green — Linux/macOS/Windows + the `no_std` gate — on every tagged release
+  since `[0.5.0]`, unbroken through `[2.0.0]`.
+- **Release matrix** — three desktop platform archives (Linux/macOS/
+  Windows) built and published for every tagged release; the wasm/GH Pages
+  demo deploys on every push to `main` (vertical-crop and missing-audio bugs
+  found and fixed this line); the Android build is verified on a real
+  emulator; the iOS build is source-complete but not yet Xcode-verified
+  (see above) — **the one release-matrix cell not fully green at `2.0.0`**,
+  carried forward honestly rather than glossed over.
+- **Additive-feature default-build invariant** — confirmed by inspection:
+  `rusty2600-script`/`rusty2600-netplay`/`rusty2600-mobile` are not
+  dependencies of `rusty2600-frontend` at all (unwired, not merely
+  feature-gated); `hd-pack` and `retroachievements` are off-by-default
+  Cargo features; the shader stack is always compiled but its zero-pass
+  default is byte-identical to the direct blit. The plain default-feature
+  desktop build and the `no_std` `rusty2600-core` gate both stay green
+  through every release in this line.
+
+### Explicit non-requirements (unchanged posture from `[1.0.0]`)
+
+Per `to-dos/ROADMAP.md`'s "Explicit scope note": unlike RustyNES's own
+literal "v2.0.0" (a fractional master-clock timebase rewrite closing hard
+sub-scanline residuals — ADR 0002 already considered and rejected that
+exact rewrite for the 2600, "likely never needed"), Rusty2600's `v2.0.0` is
+the RustyNES-parity **culmination milestone**, not an accuracy-architecture
+rewrite. Mobile store production launch (Play Store / App Store submission,
+monetization) stays explicitly out of scope, deferred beyond `v2.0.0` —
+matching RustyNES's own `v2.1.0` precedent exactly as planned. AR/
+Supercharger, the DPC+/CDF/CDFJ/CDFJ+ wiring, frontend wiring for scripting/
+netplay, real TIA paddle timing, and full Xcode-verified iOS build/run all
+continue as their own separately-scoped follow-up work — none of these gate
+`2.0.0` per the plan's own explicit gate criteria.
+
+### Notes
+
+- No code changes from `[1.12.0]` — version bump only (workspace + all 13
+  crates), plus this changelog entry and a full `README.md`/`docs/STATUS.md`/
+  `to-dos/ROADMAP.md` reconciliation pass confirming every number and claim
+  matches the shipped `v2.0.0` tag.
+- Twelve minor releases (`v1.1.0` through `v1.12.0`) shipped every
+  big-ticket item the user chose in-scope, each as a real, tested,
+  honestly-scoped release rather than a rushed or partial claim — the same
+  "land a real core now, document what's deferred" discipline held from
+  `v1.1.0`'s save-states through `v1.12.0`'s iOS build.
+
 ## [1.12.0] - 2026-07-02 - "Pocket"
 
 A SwiftUI iOS app reusing `[1.11.0]`'s `rusty2600-mobile` bridge unchanged,

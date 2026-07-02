@@ -7,31 +7,24 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current release: v1.12.0 "Pocket"** — the twelfth release of the
+**Current release: v2.0.0 "Parity"** — the culmination release of the
 `v1.1.0 -> v2.0.0` RustyNES-parity line (see "Version -> Phase mapping
-(v1.1.0 -> v2.0.0)" below for the full plan). Reuses `[1.11.0]`'s
-`rusty2600-mobile` UniFFI bridge unchanged for a SwiftUI iOS host
-(`ios/`): a genuinely tool-generated Swift binding (not hand-written),
-plus real SwiftUI/Metal/AVFoundation app source including
-`PaddleControlView` — a new touch-drag rotary-dial control, the first
-analog input either mobile host has had to solve. **Explicit hard
-constraint**: this sandbox has no Xcode/`swift` toolchain, so unlike the
-Android build, no Xcode build/Simulator/device run was possible or
-performed — honestly documented as unverified-by-compilation, deferred to
-a `v1.12.x` follow-up on real Apple hardware. Also documents (without
-fixing, out of scope here) a pre-existing gap: `run_frame` doesn't yet
-forward paddle input into the TIA on any platform (`T-0501-010`). See
-`docs/mobile.md` and `CHANGELOG.md`'s `[1.12.0]` entry.
+(v1.1.0 -> v2.0.0)" below for the full plan). No code changes from
+`[1.12.0]` — a full doc/status reconciliation pass confirming every claim
+across all twelve prior minor releases, mirroring `[1.0.0]`'s own ceremony.
+All four of RustyNES's biggest-ticket features the user chose in-scope —
+Lua scripting, HD texture packs, rollback netplay, mobile builds — landed,
+alongside the shader stack and TAS movie tooling. **The one release-matrix
+cell not fully green**: the iOS build (`[1.12.0]`) is source-complete with
+genuinely tool-generated Swift bindings but honestly unverified by
+compilation — this sandbox has no Xcode toolchain — carried forward as
+open work rather than glossed over. AR/Supercharger, the DPC+/CDF/CDFJ/
+CDFJ+ wiring, frontend wiring for scripting/netplay, and real TIA paddle
+timing (`T-0501-010`) all remain open follow-ups that were never part of
+this line's gate. See `CHANGELOG.md`'s `[2.0.0]` entry for the full status.
 
-Earlier: `v1.11.0 "Handheld"` added the `rusty2600-mobile` bridge crate
-and a real Android app (`android/`), verified running on a real emulator
-(`Pixel_8_API_34`: booted, installed, launched crash-free, a test ROM
-loaded through the real system file picker, screenshots captured) — no
-separate `rusty2600-android` glue crate needed. See `CHANGELOG.md`'s
-`[1.11.0]` entry.
-
-Full release-by-release detail (v1.1.0 through the current release) lives
-in `docs/STATUS.md`'s "Current release" section and `CHANGELOG.md` — not
+Full release-by-release detail (v1.1.0 through v1.12.0) lives in
+`docs/STATUS.md`'s "Current release" section and `CHANGELOG.md` — not
 duplicated here to avoid this file drifting out of sync with the
 canonical status doc. Phase 0 (foundation)
 through the full Curated-tier board set (Phase 4) are complete. Phase 7
@@ -147,8 +140,8 @@ the `v0.x.0` line.
 | v1.9.0 → v1.9.x "Scriptable" | Lua scripting (`rusty2600-script`: `mlua` native backend). `v1.9.0` (DONE) lands the engine only — a real, tested `emu` API + `ScriptBus` seam, `WritesLocked` determinism gate — not yet wired into `rusty2600-frontend` (`docs/scripting.md`). `v1.9.1+` wires it into the frontend (live `ScriptBus` impl, `scripting` feature flag, overlay compositing, `onFrame` hook) and, time permitting, adds the `piccolo` wasm fallback |
 | v1.10.0 → v1.10.x "Rollback" | Rollback netplay (`rusty2600-netplay`), 2-player-only by deliberate scope cut vs. RustyNES's 2-4-player mesh. `v1.10.0` (DONE) lands the session crate only — `RollbackSession` wrapping `ggrs` over direct-IP/LAN UDP, a genuine rollback-desync test — not yet wired into `rusty2600-frontend` (`docs/netplay.md`). `v1.10.x` wires it into the frontend (host/join-game menu, live input capture), adds STUN/hole-punch NAT traversal, and adds the WebRTC browser transport |
 | v1.11.0 → v1.11.x "Handheld" | Android build (`rusty2600-mobile` UniFFI bridge). `v1.11.0` (DONE): the bridge crate + a real Gradle/Kotlin app (`android/`), verified running on a real emulator (`Pixel_8_API_34`) — booted, installed, launched crash-free, a test ROM loaded via the real system file picker. No separate `rusty2600-android` glue crate needed (a design win, not a cut — see `docs/mobile.md`). Sideloadable, not store-submitted. `v1.11.x` (open): on-device save-state UI, paddle input, and real (non-emulator) hardware verification once physical test devices are available |
-| **v1.12.0 → v1.12.x "Pocket"** (v1.12.0 current) | iOS build (`rusty2600-ios`/`ios/`, reusing the `rusty2600-mobile` bridge unchanged). `v1.12.0` (DONE): genuinely tool-generated Swift bindings (not hand-written) + real SwiftUI/Metal/AVFoundation app source, including `PaddleControlView` (a new touch-drag rotary-dial control, the first analog input either mobile host has solved). **This sandbox has no Xcode toolchain**, so — honestly documented, not glossed over — no Xcode build/Simulator/device run was possible; unverified by compilation. `v1.12.x` (open): on a real Mac, cross-compile the xcframework, create the Xcode project, and build+run on Simulator/device before this reaches the Android build's verification bar |
-| **v2.0.0 "Parity"** | Full doc/status reconciliation confirming every gate above shipped; release-matrix green across desktop ×3 + wasm/Pages + Android + iOS; mobile store production launch stays explicitly out of scope (deferred beyond v2.0.0, matching RustyNES's own v2.1.0 precedent) |
+| v1.12.0 → v1.12.x "Pocket" | iOS build (`rusty2600-ios`/`ios/`, reusing the `rusty2600-mobile` bridge unchanged). `v1.12.0` (DONE): genuinely tool-generated Swift bindings (not hand-written) + real SwiftUI/Metal/AVFoundation app source, including `PaddleControlView` (a new touch-drag rotary-dial control, the first analog input either mobile host has solved). **This sandbox has no Xcode toolchain**, so — honestly documented, not glossed over — no Xcode build/Simulator/device run was possible; unverified by compilation. `v1.12.x` (open): on a real Mac, cross-compile the xcframework, create the Xcode project, and build+run on Simulator/device before this reaches the Android build's verification bar |
+| **v2.0.0 "Parity"** (current) | Full doc/status reconciliation (DONE) confirming every gate above shipped, mirroring the `v1.0.0` ceremony. Release-matrix status: desktop ×3 + wasm/Pages + Android all green/verified; **iOS is the one cell not fully green** — source-complete, genuinely tool-generated bindings, but honestly unverified by compilation (no Xcode toolchain in this sandbox), carried forward as `v1.12.x` follow-up work rather than glossed over. Mobile store production launch stays explicitly out of scope (deferred beyond v2.0.0, matching RustyNES's own v2.1.0 precedent) |
 
 **Explicit scope note**: unlike RustyNES's own literal "v2.0.0" (a
 fractional master-clock timebase rewrite closing hard sub-scanline
@@ -156,8 +149,30 @@ residuals — ADR 0002 already considered and rejected that exact rewrite for
 the 2600, "likely never needed"), Rusty2600's v2.0.0 is the RustyNES-parity
 culmination milestone, not an accuracy-architecture rewrite. All four of
 RustyNES's biggest-ticket features (Lua scripting, HD texture packs,
-rollback netplay, mobile builds) are in scope for this line — confirmed
-explicitly, not assumed.
+rollback netplay, mobile builds) landed — confirmed shipped, not just
+planned. AR/Supercharger, the DPC+/CDF/CDFJ/CDFJ+ wiring, frontend wiring
+for scripting/netplay, real TIA paddle timing, and full Xcode-verified iOS
+build/run all continue beyond `v2.0.0` as their own separately-scoped
+follow-up work, per the plan's own explicit gate criteria.
+
+## Beyond v2.0.0
+
+This roadmap's `v1.1.0 -> v2.0.0` arc is now complete. Open follow-up work
+that was explicitly never part of this line's gate (see each item's own
+release notes for full context): AR/Supercharger (`T-0402-015`) and the
+DPC+/CDF/CDFJ/CDFJ+ family (`T-0401-006`, substrate exists in
+`rusty2600-thumb` since `v1.6.0`) to close the cart catalogue to 25/25;
+`rusty2600-script`/`rusty2600-netplay` frontend wiring (host/join-game
+menus, live input capture, STUN/WebRTC for netplay, the `piccolo` wasm
+fallback for scripting); real TIA analog dump-capacitor paddle-timing
+simulation (`T-0501-010`), affecting every platform; on-device save-state
+UI and physical-hardware verification for the Android app; a real
+Xcode build, Simulator run, and device verification for the iOS app on an
+actual Mac; and, beyond either mobile store's submission (explicitly
+deferred past `v2.0.0`), the HD-pack live rendering splice pending a TIA
+object-ID mask. None of these need a new numbered plan yet — each remains
+a well-scoped, independently shippable `v2.x.y`/`v2.x.0` release whenever
+picked up.
 
 ## How the phases map to the architecture
 

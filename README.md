@@ -10,7 +10,7 @@
 <p align="center">
   <a href="https://github.com/doublegate/Rusty2600/actions"><img src="https://github.com/doublegate/Rusty2600/workflows/CI/badge.svg" alt="Build Status"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a>
-  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v1.4.0-blue.svg" alt="Version"></a>
+  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v2.0.0-blue.svg" alt="Version"></a>
   <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/rust-1.96-orange.svg" alt="Rust: 1.96"></a>
   <br>
   <a href="#compatibility-and-accuracy"><img src="https://img.shields.io/badge/accuracy%20battery-100%25%20(2%2F2)-brightgreen.svg" alt="Accuracy battery"></a>
@@ -103,17 +103,19 @@ look different, they visibly break.
 | **WebAssembly** | Runs in-browser via a canvas-2D bootstrap (real keyboard input + Web Audio API output). `wasm-winit`/`wasm-canvas` are currently identical placeholder feature names for this one build; a full winit+wgpu+egui browser build matching the native binary is future work, not yet attempted (`docs/frontend.md`) |
 | **Pure Rust** | `winit` + `wgpu` + `cpal` + `egui` frontend; a safe `no_std + alloc` chip stack behind a one-directional crate graph |
 
-Planned via the iterative `v1.x.0` line toward `v2.0.0` — see
-[`to-dos/ROADMAP.md`](to-dos/ROADMAP.md) for the full plan, and
-[`CHANGELOG.md`](CHANGELOG.md) for exactly what's shipped in each release:
-closing the remaining 2 bankswitch schemes (AR/Supercharger, the ARM-driven
-DPC+/CDF/CDFJ/CDFJ+ family), wiring Lua scripting and rollback netplay
-into the frontend, and real Xcode-verified iOS build/run. The sprite-pack data model
-(`sprite_pack`, `hd-pack` feature) shipped in v1.4.0; its live rendering
-splice awaits a TIA
-object-ID mask. The `.r26m` movie format and
-TAStudio-lite panel shipped in v1.7.0; live per-frame auto-recording into
-the emu-thread's hot path is honestly deferred (`docs/movie.md`).
+The `v1.1.0 -> v2.0.0` RustyNES-parity line is now complete — see
+[`to-dos/ROADMAP.md`](to-dos/ROADMAP.md) for the full arc and
+[`CHANGELOG.md`](CHANGELOG.md) for exactly what shipped in each release.
+Beyond `v2.0.0`, open follow-up work (each its own well-scoped future
+release, not gating `v2.0.0`): closing the remaining 2 bankswitch schemes
+(AR/Supercharger, the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family), wiring Lua
+scripting and rollback netplay into the frontend, real Xcode-verified iOS
+build/run (this sandbox has no Xcode toolchain), and real TIA analog
+paddle-timing simulation. The sprite-pack data model (`sprite_pack`,
+`hd-pack` feature) shipped in v1.4.0; its live rendering splice awaits a
+TIA object-ID mask. The `.r26m` movie format and TAStudio-lite panel
+shipped in v1.7.0; live per-frame auto-recording into the emu-thread's hot
+path is honestly deferred (`docs/movie.md`).
 
 ---
 
