@@ -151,3 +151,27 @@ panicking.
 session now locks script writes too, for the same reason RA hardcore mode
 does: an unreplicated local write would silently desync the two peers'
 otherwise bit-identical timelines.
+
+## Debugger Lua console panel (`[2.5.0]`)
+
+Lua's default `print` writes to the real process stdout — invisible in a
+GUI app, and previously the only way a script author could see their own
+`print` debugging or a runtime error. `ScriptEngine::new` now overrides
+the `print` global with a function that stringifies each argument via
+Lua's own `tostring` (so a table with a `__tostring` metamethod still
+formats correctly) and joins them with tabs, matching real Lua `print`
+semantics exactly, then pushes the result into a capped `ScriptLog` ring
+buffer (`rusty2600_script::log`, 500 lines, oldest dropped first — a
+persistent history, unlike `Overlay`'s per-frame drain-and-clear).
+`ScriptEngine::tick_frame` also pushes any `onFrame` runtime error into
+the same log (as a distinctly-marked `LogLine::Error`) before returning
+it, so the error reaches the console even if the host only logs the
+returned `Err` elsewhere.
+
+`crate::debugger::lua_console_panel` (frontend, `scripting` feature)
+renders the captured log — a new `Debug -> Lua Console` panel, oldest-
+first, errors in red, with a Clear button. Output-only: this is NOT an
+interactive Lua REPL. Executing arbitrary ad-hoc Lua from the debugger
+would need its own `WritesLocked` determinism-gate integration (matching
+what the normal `onFrame` tick already enforces) — real additional
+design work, deliberately out of scope for this panel.

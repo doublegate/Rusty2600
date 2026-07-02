@@ -6,6 +6,20 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Debugger Lua console panel** (`v2.5.0` "Web Awakens", `scripting`
+  feature) — `crates/rusty2600-script`'s Lua VM now overrides the default
+  `print` global (which previously went nowhere useful — real stdout,
+  invisible in a GUI app) to route into a new capped `ScriptLog` ring
+  buffer (500 lines, oldest dropped first), matching real Lua `print`
+  semantics (arguments tab-joined via `tostring`). `onFrame` runtime
+  errors are captured into the same log automatically. A new debugger
+  panel (`Debug -> Lua Console`, alongside CPU/TIA/RIOT/Memory/Cheevos)
+  renders the captured history live, oldest-first, with errors in red and
+  a Clear button. Output-only — not an interactive Lua REPL (see the
+  panel's module doc for why).
+
 ## [2.4.0] - 2026-07-02 - "Save Point"
 
 The first release of the RustyNES gap-closure arc (`v2.4.0 -> v3.0.0`) and

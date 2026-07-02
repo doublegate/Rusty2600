@@ -691,6 +691,8 @@ impl App {
         let config = &mut active.config;
         #[cfg(feature = "retroachievements")]
         let cheevos = &mut active.cheevos;
+        #[cfg(feature = "scripting")]
+        let active_script = &active.script;
         let full_output = ctx.run_ui(raw_input, |ui| {
             actions = shell.render(
                 ui,
@@ -698,6 +700,8 @@ impl App {
                 config,
                 #[cfg(feature = "retroachievements")]
                 cheevos,
+                #[cfg(feature = "scripting")]
+                active_script.as_ref(),
             );
             // The script overlay is a distinct concern from the menu/status-bar
             // chrome `ShellState::render` owns, so it's composited here rather
