@@ -18,5 +18,12 @@ rusty2600-tia = { path = "../rusty2600-tia", version = "2.3.0", default-features
 rusty2600-riot = { path = "../rusty2600-riot", version = "2.3.0", default-features = false }
 rusty2600-cart = { path = "../rusty2600-cart", version = "2.3.0", default-features = false }
 
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "frame_bench"
+harness = false
+
 [lints]
 workspace = true

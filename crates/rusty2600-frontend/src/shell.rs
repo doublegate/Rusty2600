@@ -21,6 +21,16 @@ pub enum MenuAction {
     OpenRom,
     /// File -> Close ROM (present a clean blank frame).
     CloseRom,
+    /// File -> Save State -> Slot `N` (`0..=7`): capture the running system
+    /// into that slot, keyed by the loaded ROM's identity tag. Native-only —
+    /// wasm-side persistence is a later release's scope (see `docs/frontend.md`).
+    #[cfg(not(target_arch = "wasm32"))]
+    SaveStateSlot(u8),
+    /// File -> Load State -> Slot `N` (`0..=7`): restore the system from
+    /// that slot, if it exists and matches the loaded ROM's identity tag.
+    /// Native-only, matching [`MenuAction::SaveStateSlot`].
+    #[cfg(not(target_arch = "wasm32"))]
+    LoadStateSlot(u8),
     /// Emulation -> Pause / Resume toggle.
     TogglePause,
     /// Emulation -> Reset (the console Reset switch / soft reset).
@@ -111,6 +121,83 @@ pub enum ConsoleSwitchAction {
     ToggleRightDifficulty,
 }
 
+/// One manual save-state slot's on-disk status.
+///
+/// Probed fresh each frame from the filesystem (cheap `stat` calls, no emu
+/// lock needed — see [`ShellInfo::save_slots`]'s doc comment) so the File
+/// menu can show real per-slot info without ever touching the emulator.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone, Copy)]
+pub struct SaveSlotInfo {
+    /// The slot index (`0..SAVE_SLOT_COUNT`).
+    pub slot: u8,
+    /// Whether a save file exists in this slot for the currently-loaded ROM.
+    pub exists: bool,
+    /// The slot file's last-modified time, if it exists.
+    pub modified: Option<std::time::SystemTime>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl SaveSlotInfo {
+    /// Probes the filesystem for `slot`'s current status under `rom_tag`.
+    #[must_use]
+    pub fn probe(rom_tag: u64, slot: u8) -> Self {
+        let metadata = crate::config::save_slot_path(rom_tag, slot).and_then(|p| p.metadata().ok());
+        Self {
+            slot,
+            exists: metadata.is_some(),
+            modified: metadata.and_then(|m| m.modified().ok()),
+        }
+    }
+
+    /// A human-readable menu label, e.g. `"Slot 3 (empty)"` or a slot with a
+    /// real save shown as `"Slot 3 -- 2026-07-02 14:03:07 UTC"`. Formats the
+    /// timestamp by hand (no `chrono`/`time` dependency in this crate today)
+    /// via `SystemTime`'s Unix-epoch offset, good enough for a menu label.
+    #[must_use]
+    pub fn label(&self) -> String {
+        self.modified.map_or_else(
+            || format!("Slot {} (empty)", self.slot),
+            |t| {
+                let secs = t
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                format!("Slot {} -- {}", self.slot, format_unix_timestamp(secs))
+            },
+        )
+    }
+}
+
+/// Formats a Unix timestamp as `YYYY-MM-DD HH:MM:SS UTC` using only
+/// `core`/`std` civil-calendar arithmetic (Howard Hinnant's `civil_from_days`
+/// algorithm, public domain) — avoids pulling `chrono`/`time` into this
+/// crate purely for a save-slot menu label.
+#[cfg(not(target_arch = "wasm32"))]
+#[must_use]
+fn format_unix_timestamp(secs: u64) -> String {
+    let days = (secs / 86_400).cast_signed();
+    let time_of_day = secs % 86_400;
+    let (hour, minute, second) = (
+        time_of_day / 3600,
+        (time_of_day % 3600) / 60,
+        time_of_day % 60,
+    );
+
+    // civil_from_days (Hinnant): days since 1970-01-01 -> (year, month, day).
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097).cast_unsigned(); // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe.cast_signed() + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!("{y:04}-{m:02}-{d:02} {hour:02}:{minute:02}:{second:02} UTC")
+}
+
 /// Which debugger panel is selected in the overlay (2600 chip set).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum DebugPanel {
@@ -174,6 +261,28 @@ pub struct ShellState {
     /// The remote peer address (`ip:port`) text field in the Netplay dialog.
     #[cfg(feature = "netplay")]
     pub netplay_remote_addr: String,
+    /// The cached save-slot statuses shown in the File -> Save State / Load
+    /// State submenus, and the `rom_tag` they were probed against.
+    ///
+    /// Probing is 8 filesystem `stat` calls (see [`SaveSlotInfo::probe`]) —
+    /// re-running that every single frame at 60+ FPS would be needless
+    /// blocking I/O on the render path. Instead this cache is only
+    /// refreshed when the loaded ROM changes (`rom_tag` differs from the
+    /// cached one) or [`Self::save_slots_dirty`] is set (after a
+    /// save/load-slot action actually changes what's on disk) — see
+    /// `app.rs`'s frame-info population and its `SaveStateSlot`/
+    /// `LoadStateSlot` dispatch arms.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub save_slots_cache: Vec<SaveSlotInfo>,
+    /// See [`Self::save_slots_cache`].
+    #[cfg(not(target_arch = "wasm32"))]
+    pub save_slots_cache_rom_tag: Option<u64>,
+    /// Forces a re-probe of [`Self::save_slots_cache`] on the next frame
+    /// regardless of `rom_tag`, set after a save/load-slot action so the
+    /// menu reflects the change immediately rather than on the next ROM
+    /// load. See [`Self::save_slots_cache`].
+    #[cfg(not(target_arch = "wasm32"))]
+    pub save_slots_dirty: bool,
 }
 
 impl ShellState {
@@ -224,6 +333,17 @@ pub struct ShellInfo {
     /// Whether a rollback netplay session is currently active.
     #[cfg(feature = "netplay")]
     pub netplay_active: bool,
+    /// This frame's save-state slot status for the loaded ROM (empty if no
+    /// ROM is loaded), used by the File -> Save State / Load State
+    /// submenus. Probed fresh each frame by `app.rs` via
+    /// [`SaveSlotInfo::probe`] AFTER the brief emu lock is dropped — the
+    /// probe is pure filesystem `stat` calls (keyed by the `rom_tag` copied
+    /// out under the lock), never touching the emulator itself, matching
+    /// this struct's own "read-only facts copied under the emu lock" rule
+    /// for its emu-derived fields while staying lock-free for this one.
+    /// Native-only.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub save_slots: Vec<SaveSlotInfo>,
 }
 
 /// Which debugger panels are currently shown.
@@ -273,6 +393,31 @@ impl ShellState {
                     {
                         actions.push(MenuAction::CloseRom);
                         ui.close();
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        ui.separator();
+                        ui.add_enabled_ui(info.rom_loaded, |ui| {
+                            ui.menu_button("Save State", |ui| {
+                                for slot in &info.save_slots {
+                                    if ui.button(slot.label()).clicked() {
+                                        actions.push(MenuAction::SaveStateSlot(slot.slot));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            ui.menu_button("Load State", |ui| {
+                                for slot in &info.save_slots {
+                                    if ui
+                                        .add_enabled(slot.exists, egui::Button::new(slot.label()))
+                                        .clicked()
+                                    {
+                                        actions.push(MenuAction::LoadStateSlot(slot.slot));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                        });
                     }
                     ui.separator();
                     if ui.button("Settings...").clicked() {

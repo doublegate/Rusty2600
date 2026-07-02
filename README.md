@@ -214,7 +214,8 @@ cd Rusty2600
 # Build the workspace (release)
 cargo build --release --workspace
 
-# Run a ROM you legally own (or launch bare and use File -> Open ROM)
+# Run a ROM you legally own (or launch bare and use File -> Open ROM).
+# .a26/.bin/.rom, or a .zip containing one, both work.
 cargo run --release -p rusty2600-frontend -- path/to/rom.a26
 
 # Optional: build with RetroAchievements (needs a C compiler for vendored rcheevos)

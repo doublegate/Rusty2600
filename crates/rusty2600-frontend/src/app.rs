@@ -210,12 +210,32 @@ impl ApplicationHandler for App {
         let mut cheevos = crate::cheevos::CheevosState::default();
         if let Some(path) = self.pending_rom.take() {
             match std::fs::read(&path) {
-                Ok(bytes) => {
-                    if let Err(e) = emu.load_rom(&bytes) {
-                        eprintln!("rusty2600: failed to load {}: {e}", path.display());
+                Ok(raw_bytes) => {
+                    let filename = path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |n| n.to_string_lossy().into_owned(),
+                    );
+                    let extracted = if crate::rom_archive::looks_like_zip(&filename) {
+                        crate::rom_archive::extract_first_rom(&raw_bytes)
+                    } else {
+                        Ok((raw_bytes, filename))
+                    };
+                    match extracted {
+                        Ok((bytes, _entry_name)) => {
+                            if let Err(e) = emu.load_rom(&bytes) {
+                                eprintln!("rusty2600: failed to load {}: {e}", path.display());
+                            } else {
+                                #[cfg(feature = "retroachievements")]
+                                cheevos.load_rom(&bytes);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "rusty2600: failed to extract a ROM from {}: {e}",
+                                path.display()
+                            );
+                        }
                     }
-                    #[cfg(feature = "retroachievements")]
-                    cheevos.load_rom(&bytes);
                 }
                 Err(e) => eprintln!("rusty2600: cannot read {}: {e}", path.display()),
             }
@@ -591,7 +611,9 @@ impl App {
             } else {
                 rusty2600_script::Overlay::default()
             };
-            let info = ShellInfo {
+            #[cfg(not(target_arch = "wasm32"))]
+            let rom_tag = emu.rom_tag();
+            let mut info = ShellInfo {
                 board_tier: emu.board_tier().map(str::to_string),
                 region: emu.region,
                 fps: active.fps_smoothed,
@@ -608,8 +630,30 @@ impl App {
                 overlay: script_overlay,
                 #[cfg(feature = "netplay")]
                 netplay_active: active.netplay.is_some(),
+                #[cfg(not(target_arch = "wasm32"))]
+                save_slots: Vec::new(),
             };
             drop(emu); // release the brief lock BEFORE the wgpu upload + egui pass
+            // Probing save-slot status is 8 filesystem `stat` calls — too
+            // expensive to redo every frame at 60+ FPS, so `active.shell`
+            // caches the result and this only re-probes when the loaded ROM
+            // changed or a save/load-slot action marked the cache dirty (see
+            // `ShellState::save_slots_cache`'s doc comment). Deliberately
+            // done AFTER dropping the emu lock either way.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if rom_tag != active.shell.save_slots_cache_rom_tag || active.shell.save_slots_dirty
+                {
+                    active.shell.save_slots_cache = rom_tag.map_or_else(Vec::new, |tag| {
+                        (0..crate::config::SAVE_SLOT_COUNT)
+                            .map(|slot| crate::shell::SaveSlotInfo::probe(tag, slot))
+                            .collect()
+                    });
+                    active.shell.save_slots_cache_rom_tag = rom_tag;
+                    active.shell.save_slots_dirty = false;
+                }
+                info.save_slots.clone_from(&active.shell.save_slots_cache);
+            }
             (fb, dims, info)
         };
         active.gfx.upload(&fb, fb_dims.0, fb_dims.1);
@@ -732,26 +776,57 @@ impl App {
             match action {
                 MenuAction::OpenRom => {
                     if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Atari 2600 ROM", &["a26", "bin", "rom"])
+                        .add_filter("Atari 2600 ROM", &["a26", "bin", "rom", "zip"])
                         .pick_file()
                     {
                         match std::fs::read(&path) {
-                            Ok(bytes) => {
-                                let mut emu =
-                                    active.core.lock().unwrap_or_else(PoisonError::into_inner);
-                                if let Err(e) = emu.load_rom(&bytes) {
-                                    active.shell.status = format!("load failed: {e}");
+                            Ok(raw_bytes) => {
+                                let filename = path.file_name().map_or_else(
+                                    || path.display().to_string(),
+                                    |n| n.to_string_lossy().into_owned(),
+                                );
+                                let extracted = if crate::rom_archive::looks_like_zip(&filename) {
+                                    crate::rom_archive::extract_first_rom(&raw_bytes)
+                                        .map(|(bytes, entry_name)| (bytes, Some(entry_name)))
                                 } else {
-                                    active.shell.status = format!("Loaded {}", path.display());
-                                    let rom_label = path.file_name().map_or_else(
-                                        || path.display().to_string(),
-                                        |n| n.to_string_lossy().into_owned(),
-                                    );
-                                    active.window.set_title(&format!("Rusty2600 - {rom_label}"));
+                                    Ok((raw_bytes, None))
+                                };
+                                match extracted {
+                                    Ok((bytes, entry_name)) => {
+                                        let mut emu = active
+                                            .core
+                                            .lock()
+                                            .unwrap_or_else(PoisonError::into_inner);
+                                        let load_result = emu.load_rom(&bytes);
+                                        if let Err(e) = &load_result {
+                                            active.shell.status = format!("load failed: {e}");
+                                        } else {
+                                            let rom_label = entry_name
+                                                .as_ref()
+                                                .map_or_else(|| filename.clone(), Clone::clone);
+                                            active.shell.status = entry_name.as_ref().map_or_else(
+                                                || format!("Loaded {rom_label}"),
+                                                |entry| format!("Loaded {entry} (from {filename})"),
+                                            );
+                                            active
+                                                .window
+                                                .set_title(&format!("Rusty2600 - {rom_label}"));
+                                        }
+                                        drop(emu);
+                                        // Only spend the (potentially slow —
+                                        // MD5 + RetroAchievements lookup)
+                                        // cheevos load on a ROM that actually
+                                        // loaded; an invalid/unsupported
+                                        // image has nothing to identify.
+                                        if load_result.is_ok() {
+                                            #[cfg(feature = "retroachievements")]
+                                            active.cheevos.load_rom(&bytes);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        active.shell.status = format!("zip extraction failed: {e}");
+                                    }
                                 }
-                                drop(emu);
-                                #[cfg(feature = "retroachievements")]
-                                active.cheevos.load_rom(&bytes);
                             }
                             Err(e) => active.shell.status = format!("read failed: {e}"),
                         }
@@ -773,6 +848,69 @@ impl App {
                     #[cfg(feature = "retroachievements")]
                     active.cheevos.close_rom();
                     active.shell.status = "ROM closed".into();
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                MenuAction::SaveStateSlot(slot) => {
+                    let emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                    let Some(rom_tag) = emu.rom_tag() else {
+                        drop(emu);
+                        active.shell.status = "no ROM loaded".into();
+                        continue;
+                    };
+                    let bytes = rusty2600_core::SaveState::capture(&emu.system, rom_tag).encode();
+                    drop(emu);
+                    let Some(path) = crate::config::save_slot_path(rom_tag, slot) else {
+                        active.shell.status = "no writable save directory".into();
+                        continue;
+                    };
+                    let result = path
+                        .parent()
+                        .map_or(Ok(()), std::fs::create_dir_all)
+                        .and_then(|()| std::fs::write(&path, &bytes));
+                    active.shell.status = match result {
+                        Ok(()) => format!("Saved to slot {slot}"),
+                        Err(e) => format!("save failed: {e}"),
+                    };
+                    // The slot's on-disk status (existence/timestamp) may
+                    // have just changed — force the next frame's menu probe
+                    // rather than waiting for the loaded ROM to change too.
+                    active.shell.save_slots_dirty = true;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                MenuAction::LoadStateSlot(slot) => {
+                    let rom_tag = active
+                        .core
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .rom_tag();
+                    let Some(rom_tag) = rom_tag else {
+                        active.shell.status = "no ROM loaded".into();
+                        continue;
+                    };
+                    let Some(path) = crate::config::save_slot_path(rom_tag, slot) else {
+                        active.shell.status = "no writable save directory".into();
+                        continue;
+                    };
+                    active.shell.status = match std::fs::read(&path) {
+                        Ok(bytes) => match rusty2600_core::SaveState::restore(&bytes, rom_tag) {
+                            Ok(system) => {
+                                let mut emu =
+                                    active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                                emu.system = system;
+                                // The rewind ring holds snapshots from
+                                // BEFORE this load — without clearing it,
+                                // pressing Rewind right after a slot load
+                                // would jump back to the pre-load timeline,
+                                // which is a discontinuous, confusing jump
+                                // relative to what the player just did.
+                                emu.snapshots.clear();
+                                drop(emu);
+                                format!("Loaded slot {slot}")
+                            }
+                            Err(e) => format!("slot {slot} load failed: {e}"),
+                        },
+                        Err(e) => format!("slot {slot} read failed: {e}"),
+                    };
                 }
                 #[cfg(feature = "retroachievements")]
                 MenuAction::ToggleHardcore => {

@@ -6,6 +6,58 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Manual save-state slots** (`v2.4.0` "Save Point") — `File -> Save State`
+  / `Load State` menus with 8 numbered slots per ROM, built on the already-
+  real `SaveState` format (`rusty2600-core`, ADR 0007). Each ROM gets its
+  own slot directory keyed by an FNV-1a hash of its raw bytes
+  (`crate::config::save_slot_path`, under the platform data dir), so a
+  loaded ROM's slots can never be silently loaded against a different
+  cartridge (`SaveState::restore`'s existing `rom_tag` check enforces this).
+  Native-only for now; wasm-side persistence (`localStorage`/IndexedDB) is
+  a later release's scope. The File menu shows each slot's status (empty,
+  or its last-saved timestamp) probed fresh each frame via cheap filesystem
+  `stat` calls, never touching the emu lock.
+- **CI-gated performance-regression check** — a new `rusty2600-core::
+  system_full_ntsc_frame` Criterion bench drives one full NTSC frame (262
+  lines x 228 color clocks) through the whole `System` (real CPU decode,
+  TIA register writes, RIOT, and cart — not a per-chip proxy), measuring
+  ~1.25 ms/frame, comfortably under the documented <=2 ms/frame target.
+  `scripts/bench_regression_check.sh` runs it and fails on a measured mean
+  above a fixed absolute ceiling (3.75 ms, ~3x the measured baseline —
+  deliberately not relative/percentage-based, since CI-runner timing noise
+  would make a relative comparison unreliable), wired as the new `perf` job
+  in `.github/workflows/ci.yml`. See `docs/performance.md`.
+- **Paddle-timing Stella-oracle differential test** (`T-0501-010`
+  follow-up) — `crates/rusty2600-tia/src/paddle.rs` gains a `stella_oracle`
+  test module: an independently re-derived copy of Stella's
+  `AnalogReadout` RC-circuit formula, cross-checked against the port
+  across a position sweep, multi-step charging, VBLANK-dump discharge, and
+  the redundant-`set_position` edge case. Confirms every RC constant and
+  formula in `paddle.rs` matches Stella's `AnalogReadout.{cxx,hxx}`
+  exactly; confirms the port's two-variant `Connection` enum (`Vcc`/
+  `Disconnected`) is a deliberate, correct scope match to Stella's own
+  `Paddles.cxx` (which never uses `AnalogReadout`'s third `ground`
+  connection type — that's exclusive to non-paddle controllers this crate
+  doesn't model). A real commercial paddle-game differential cross-check
+  (Breakout/Warlords/Kaboom!) remains blocked — no such ROM is legally
+  obtainable/stageable in this development environment; see
+  `docs/compatibility.md`.
+- **ROM loading from `.zip` archives** — both the native `File > Open ROM`
+  dialog and the wasm GH-Pages demo's file loader could previously only
+  load a bare `.a26`/`.bin`/`.rom` file, not one packaged inside a `.zip`
+  (the common ROM-redistribution format). New shared
+  `rusty2600-frontend::rom_archive` module extracts the first
+  `.a26`/`.bin`/`.rom` entry (by archive order) from an in-memory zip via
+  the `zip` crate (`default-features = false`, `deflate` only — pure-Rust
+  `flate2`/`miniz_oxide` backend, no C toolchain, no unneeded
+  bzip2/lzma/zstd/xz/aes-crypto codec support), reads bounded to a 1 MiB
+  ceiling regardless of what the zip's central directory claims (a
+  decompression-bomb guard, not just a declared-size check), and never
+  panics on malformed/corrupt input. Both the native dialog's filter list
+  and the wasm demo's `<input accept>` now include `.zip`.
+
 ## [2.3.0] - 2026-07-02 - "Full Catalogue"
 
 Closes the cart bankswitch catalogue to 26/26 (CDF/CDFJ/CDFJ+, the last

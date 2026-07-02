@@ -1,0 +1,12 @@
+---
+blank_issues_enabled: false
+contact_links:
+  - name: Question or Discussion
+    url: https://github.com/doublegate/Rusty2600/discussions
+    about: Ask questions, share ideas, or discuss the project
+  - name: Documentation
+    url: https://github.com/doublegate/Rusty2600/tree/main/docs
+    about: Browse architecture docs, ADRs, and the cart bankswitch catalogue
+  - name: AtariAge / Stella Wiki
+    url: https://forums.atariage.com/forum/47-atari-2600/
+    about: General Atari 2600 hardware and emulation questions
