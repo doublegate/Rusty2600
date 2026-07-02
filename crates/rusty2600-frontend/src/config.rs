@@ -88,7 +88,9 @@ impl Default for AudioConfig {
 pub const SAVE_SLOT_COUNT: u8 = 8;
 
 /// The save-state slot file extension, matching this project's existing
-/// `.r26m` TAS-movie convention.
+/// `.r26m` TAS-movie convention. Native-only, matching every other save-slot
+/// path helper below.
+#[cfg(not(target_arch = "wasm32"))]
 const SAVE_SLOT_EXTENSION: &str = "r26s";
 
 /// The full frontend config (serialized to `config.toml`).
@@ -166,12 +168,16 @@ pub fn saves_base_dir() -> Option<std::path::PathBuf> {
 /// The pure path-construction rule, parameterized over an explicit `base`
 /// directory so it's testable without touching the real platform data dir
 /// (see the `tests` module below) — `save_slot_dir`/`save_slot_path` are
-/// thin wrappers supplying the real [`saves_base_dir`].
+/// thin wrappers supplying the real [`saves_base_dir`]. Native-only, matching
+/// every other save-slot path helper (only ever called from native-gated
+/// code, so this would otherwise be reported as dead code on wasm builds).
+#[cfg(not(target_arch = "wasm32"))]
 fn save_slot_dir_under(base: &std::path::Path, rom_tag: u64) -> std::path::PathBuf {
     base.join(format!("{rom_tag:016x}"))
 }
 
-/// See [`save_slot_dir_under`].
+/// See [`save_slot_dir_under`]. Native-only, for the same reason.
+#[cfg(not(target_arch = "wasm32"))]
 fn save_slot_path_under(base: &std::path::Path, rom_tag: u64, slot: u8) -> std::path::PathBuf {
     save_slot_dir_under(base, rom_tag).join(format!("slot_{slot}.{SAVE_SLOT_EXTENSION}"))
 }
