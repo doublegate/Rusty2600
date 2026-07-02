@@ -7,39 +7,41 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current release: v2.2.0 "Coprocessor Online"** — closes the final open
-item from `[2.1.0]`'s follow-up work: `BankDpcPlus` (`T-0401-006`) wires
-DPC+, the first Harmony/Melody ARM-coprocessor family, into `detect()`
-using the `rusty2600-thumb` interpreter that had existed unconsumed since
-`[1.6.0]`. A full port of Gopher2600's Go `dpcplus` package, including a
-real `ThumbMemory` impl and a synchronous ARM-execution entry point,
-verified with a real hand-assembled Thumb-1 program that executes and
-writes to data RAM via a genuine `STRB`. DPC+ music-mode audio is
-honestly deferred; CDF/CDFJ/CDFJ+ remain their own future follow-up. Also
-fixes a stale scheme-catalogue tally in `docs/cart.md` (the table has
-always had 26 entries, not 25). See `CHANGELOG.md`'s `[2.2.0]` entry for
-full detail.
+**Current release: v2.3.0 "Full Catalogue"** — closes the cart bankswitch
+catalogue to **26 of 26 schemes**. `BankCdf` (`T-0401-006`) wires
+CDF/CDFJ/CDFJ+ — the last unimplemented scheme — into `detect()`, one
+struct covering all four sub-versions via a `CdfVersion` const table,
+ported from Gopher2600's Go `cdf` package. Reuses DPC+'s synchronous ARM
+entry shape plus genuinely new mechanics (a FastJMP data-fetcher redirect,
+a real `ARMinterrupt` fault-servicing dispatch — CDF's driver ROM makes
+genuine host-serviced calls, unlike DPC+'s no-op stub). Verified with a
+real hand-assembled Thumb-1 program proving the fault-catch-service-resume
+loop actually works, with zero changes needed to `rusty2600-thumb` itself.
+Also lands DPC+ music-mode audio (a small, self-contained `rusty2600-cart`
+fix), script overlay compositing (`scripting` feature), and a real,
+live-tested netplay STUN client (`netplay` feature; WebRTC stays
+deferred). **Documentation correction, no code change**: E7 was already
+implemented (since before `v1.1.0` even began) — `docs/cart.md` carried a
+stale "not yet implemented" claim this entire session, silently copied
+into `[2.1.0]`'s/`[2.2.0]`'s own release docs; corrected here. See
+`CHANGELOG.md`'s `[2.3.0]` entry for full detail.
 
-Earlier: `v2.1.0 "Follow-Through"` closed three other `[2.0.0]`-carried-
-forward gaps — AR/Supercharger, real TIA paddle timing (wired end-to-end
-through native/Android/iOS), and frontend wiring for both Lua scripting
-and rollback netplay (both off by default, native-only). Landed via three
-independent, parallel implementation efforts. See `CHANGELOG.md`'s
-`[2.1.0]` entry.
+Earlier: `v2.1.0 "Follow-Through"` closed three `[2.0.0]`-carried-forward
+gaps (AR/Supercharger, real TIA paddle timing, Lua/netplay frontend
+wiring); `v2.2.0 "Coprocessor Online"` added DPC+, the first Harmony/
+Melody ARM-coprocessor family. See `CHANGELOG.md`'s `[2.1.0]`/`[2.2.0]`
+entries.
 
-Full release-by-release detail (v1.1.0 through v2.1.0) lives in
+Full release-by-release detail (v1.1.0 through v2.2.0) lives in
 `docs/STATUS.md`'s "Current release" section and `CHANGELOG.md` — not
 duplicated here to avoid this file drifting out of sync with the
 canonical status doc. Phase 0 (foundation)
-through the full Curated-tier board set (Phase 4) are complete. Phase 7
-(BestEffort breadth) has landed 15 of the 16-scheme BestEffort long tail
-cataloged in `docs/cart.md` (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA,
-0840, FE, SB, X07, 4A50, AR/Supercharger, DPC+ — 24 of 26 total schemes in
-the LOCAL catalogue), leaving only E7 (`T-0401-002`, Curated tier, a
-pre-existing unrelated gap) and the CDF/CDFJ/CDFJ+ family (`T-0401-006`) —
-their interpreter substrate (`rusty2600-thumb`) exists and DPC+ proved the
-wiring pattern, but CDF/CDFJ/CDFJ+ remain their own separately-scoped
-follow-up, one family at a time.
+through the full Curated-tier board set (Phase 4) are complete. **Phase 7
+(BestEffort breadth) is fully complete** — all 16 BestEffort schemes in
+`docs/cart.md`'s catalogue (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC, BF/BFSC, UA,
+0840, FE, SB, X07, 4A50, AR/Supercharger, DPC+, CDF/CDFJ/CDFJ+) are
+implemented and wired into `detect()` — all 26 schemes across all 3 tiers
+(2 Core, 8 Curated including E7, 16 BestEffort) are done.
 `Board::snoop_write`/`snoop_read` (added v0.4.0/v0.4.1) underpin all of
 UA/0840/FE/SB/X07/4A50/AR. **Phase 5 (frontend) is fully complete** — the real
 `debug-hooks` debugger (6507/TIA/RIOT/memory panels, breakpoints/step/
@@ -162,27 +164,29 @@ follow-up work, per the plan's own explicit gate criteria.
 
 ## Beyond v2.0.0
 
-This roadmap's `v1.1.0 -> v2.0.0` arc is complete; `v2.1.0` "Follow-Through"
-and `v2.2.0` "Coprocessor Online" closed five of the carried-forward gaps
-(AR/Supercharger, real TIA paddle timing, frontend wiring for both
-`rusty2600-script`/`rusty2600-netplay`, and DPC+ ARM-coprocessor wiring —
-see `CHANGELOG.md`'s `[2.1.0]`/`[2.2.0]` entries). Open follow-up work
-remaining (see each item's own release notes for full context): the CDF/
-CDFJ/CDFJ+ family (`T-0401-006`, DPC+ proved the wiring pattern in
-`[2.2.0]`) plus E7 (`T-0401-002`, a pre-existing unrelated gap) to close
-the cart catalogue to 26/26; DPC+'s music-mode continuous-time audio
-(register plumbing works, waveform sampling isn't clock-driven yet, a
-`rusty2600-tia` follow-up); netplay's STUN/hole-punch NAT traversal and
-WebRTC transport, plus per-player console switches/paddles; scripting's
-overlay-compositing render step and the `piccolo` wasm fallback;
+This roadmap's `v1.1.0 -> v2.0.0` arc is complete. `v2.1.0` "Follow-
+Through", `v2.2.0` "Coprocessor Online", and `v2.3.0` "Full Catalogue"
+closed all of the `[2.0.0]`-carried-forward gaps except mobile-store
+submission and full Xcode-verified iOS build/run (both explicitly
+deferred, not gaps in this line's own gate) — see `CHANGELOG.md`'s
+`[2.1.0]`/`[2.2.0]`/`[2.3.0]` entries for full detail. **The cart
+bankswitch catalogue is closed at 26/26** as of `[2.3.0]` (E7 turned out
+to already be done; CDF/CDFJ/CDFJ+ was the real remaining gap). Open
+follow-up work remaining (see each item's own docs for full context):
+netplay's WebRTC transport (browser and native — explicitly deferred
+per `[2.3.0]`'s own scope choice, since it needs an async runtime this
+codebase doesn't otherwise have) and real cross-NAT verification (a
+single-host sandbox can't provide two independently-NATed peers), plus
+per-player console switches/paddles; scripting's `piccolo` wasm fallback;
 on-device save-state UI and physical-hardware verification for the
 Android app; a real Xcode build, Simulator run, and device verification
 for the iOS app on an actual Mac; a paddle test ROM to cross-check the
-new RC-circuit simulation against real game behavior; and, beyond either
-mobile store's submission (explicitly deferred past `v2.0.0`), the
-HD-pack live rendering splice pending a TIA object-ID mask. None of these
-need a new numbered plan yet — each remains a well-scoped,
-independently shippable `v2.x.y`/`v2.x.0` release whenever picked up.
+RC-circuit paddle-timing simulation against real game behavior; and,
+beyond either mobile store's submission (explicitly deferred past
+`v2.0.0`), the HD-pack live rendering splice pending a TIA object-ID
+mask. None of these need a new numbered plan yet — each remains a
+well-scoped, independently shippable `v2.x.y`/`v2.x.0` release whenever
+picked up.
 
 ## How the phases map to the architecture
 

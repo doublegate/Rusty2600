@@ -6,6 +6,97 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-07-02 - "Full Catalogue"
+
+Closes the cart bankswitch catalogue to 26/26 (CDF/CDFJ/CDFJ+, the last
+unimplemented scheme) and lands three more follow-up items requested via
+`/goal`: DPC+ music-mode audio, script overlay compositing, and a netplay
+STUN client. Landed via three independent, parallel implementation
+efforts, each independently gate-verified before merging.
+
+### Added
+
+- **CDF/CDFJ/CDFJ+** (`T-0401-006`, BestEffort tier) — `rusty2600-cart`'s
+  `BankCdf`: one struct covering all four sub-versions
+  (`CDF0`/`CDF1`/`CDFJ`/`CDFJ+`) via a `CdfVersion` const table, ported
+  from Gopher2600's Go `cdf` package. Reuses `BankDpcPlus`'s synchronous
+  CALLFN-to-`ProgramEnded` ARM entry shape, plus genuinely new mechanics
+  DPC+ never needed:
+  - **FastJMP** — redirects a `JMP absolute` instruction's own opcode
+    fetch (not just an operand) through a data-fetcher stream, guarded by
+    a countdown state machine ported to close a real, documented
+    false-positive hazard in the reference.
+  - **A real `ARMinterrupt` fault-servicing dispatch** — unlike DPC+'s
+    no-op-stub equivalent, CDF's driver ROM makes genuine host-serviced
+    calls via a `BX` to a fixed non-Thumb address. Caught via
+    `rusty2600-thumb`'s existing `Fault::UnimplementedPeripheral` path —
+    **no changes to that crate were needed**: `Arm7Tdmi::instruction_pc()`
+    already reports the correct call-site address, and `set_register`'s
+    existing PC-storage convention already produces the correct resume
+    target. Verified with a real hand-assembled Thumb-1 program that
+    plants an actual `BX` instruction at the documented call-site offset
+    and asserts the targeted music fetcher's frequency field was set by
+    the dispatch loop — not just that a fault was caught.
+  - CDFJ+'s `fast_ldx`/`fast_ldy`/`datastream_offset` constants are
+    derived via a runtime byte-pattern scan of the driver ROM (not a
+    fixed table, per the reference). The reference's `NumBanks()` is
+    hardcoded to `7` even for CDFJ+ (whose bankswitch table addresses 8
+    slots) — ported exactly rather than "fixed" on a guess, since no real
+    CDFJ+ ROM was available to verify against.
+- **DPC+ music-mode audio** — `BankDpcPlus` gains a `Board::tick()`
+  override advancing its 3 music fetchers' phase accumulators (`count +=
+  freq` every 59th call, dividing the ~1.19 MHz CPU-cycle tick rate down
+  to DPC+'s 20 kHz music-sample rate). Turned out to be a fully
+  self-contained `rusty2600-cart` fix — the `Board::tick()` hook already
+  existed and was already called at the right rate — contrary to
+  `[2.2.0]`'s own speculation that this would be a `rusty2600-tia`
+  follow-up. No cross-crate audio mixing needed: the DPC+ driver ROM's
+  own 6507 code already reads the now-correctly-time-varying `$05`
+  register and writes the result into real `AUDV0`/`AUDV1`.
+- **Script overlay compositing** (`scripting` feature) — `app.rs` now
+  calls `ScriptState::take_overlay()` each frame and draws the result via
+  a new `draw_script_overlay()` function, piggybacked on the frontend's
+  existing always-on egui pass (an unclipped foreground layer painter,
+  not a new `wgpu::RenderPipeline`) — reusing egui's own font
+  rasterization for `drawText` rather than building a glyph atlas from
+  scratch. Closes the `[1.9.0]` overlay-compositing gap.
+- **Netplay STUN client** (`netplay` feature) — a real RFC 5389 STUN
+  client (`rusty2600-netplay::stun`, via `stun_codec`, sans-IO, fitting
+  this codebase's 100%-synchronous convention) discovers this machine's
+  public NAT-mapped address, plus a best-effort UDP hole-punch and a
+  second "Connect via STUN" dialog button. **Live-verified**: a genuine
+  round trip against a real public STUN server (`stun.l.google.com:19302`)
+  — confirmed passing, independently re-run during release verification.
+  WebRTC (browser or native) remains explicitly deferred — it needs
+  either browser-only `web-sys` bindings or a native Rust WebRTC stack
+  that would pull an async runtime into an otherwise 100% synchronous
+  codebase.
+
+### Notes
+
+- **E7 documentation correction, no code change**: `docs/cart.md` carried
+  a stale "Curated (not yet implemented — `T-0401-002`)" claim for E7 this
+  entire session — `BankE7` has actually been implemented and wired into
+  `detect()` since commit `94ca3a4` (2026-07-01), before the `v1.1.0`
+  release line even began. This bug was silently copied forward into
+  `[2.1.0]`'s and `[2.2.0]`'s own CHANGELOG/STATUS entries (both claimed
+  E7 as a remaining unimplemented gap) without independently verifying it
+  against the code. Both prior entries are left as published (this
+  project never rewrites CHANGELOG history) — this note is the
+  correction. **The cart catalogue is now 26 of 26 schemes implemented**
+  (E7 was already done; CDF/CDFJ/CDFJ+ closes the actual last gap).
+- **Honest verification boundary for netplay STUN**: the STUN client
+  itself is genuinely live-tested. Real NAT traversal between two
+  independently-NATed peers on different networks is NOT verified — a
+  single-host sandbox cannot provide that (loopback never crosses a NAT
+  boundary).
+- Test count: 313 passing on default features (317 with
+  `--features test-roms`), up from 295 at `[2.2.0]`. `scripting` and
+  `netplay` features both verified individually and together.
+- Additive-feature default-build invariant reconfirmed: `scripting`/
+  `netplay` stay off by default and native-only; the `no_std`
+  `rusty2600-core` gate is unaffected by any change in this release.
+
 ## [2.2.0] - 2026-07-02 - "Coprocessor Online"
 
 Closes the final open item from `[2.1.0]`'s follow-up work: wires DPC+ —
