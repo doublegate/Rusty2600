@@ -1,0 +1,42 @@
+# Code ownership for Rusty2600
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything
+* @doublegate
+
+# Core emulation components (require careful review — cycle-accurate,
+# accuracy-critical: CPU/TIA/RIOT carry the SingleStepTests/Klaus2m5/golden-
+# trace guarantees)
+/crates/rusty2600-cpu/ @doublegate
+/crates/rusty2600-tia/ @doublegate
+/crates/rusty2600-riot/ @doublegate
+/crates/rusty2600-core/ @doublegate
+
+# Cart bankswitch catalogue + the Thumb (ARM7TDMI) coprocessor interpreter
+/crates/rusty2600-cart/ @doublegate
+/crates/rusty2600-thumb/ @doublegate
+
+# Frontend/GUI (can be delegated to UI specialists)
+/crates/rusty2600-frontend/ @doublegate
+
+# Advanced features (can be delegated to feature specialists)
+/crates/rusty2600-script/ @doublegate
+/crates/rusty2600-netplay/ @doublegate
+/crates/rusty2600-cheevos/ @doublegate
+/crates/rusty2600-mobile/ @doublegate
+/crates/rusty2600-gfx-shaders/ @doublegate
+
+# Accuracy oracle
+/crates/rusty2600-test-harness/ @doublegate
+
+# Documentation
+/docs/ @doublegate
+*.md @doublegate
+
+# Build and CI configuration
+/.github/ @doublegate
+/Cargo.toml @doublegate
+/Cargo.lock @doublegate
+
+# Test ROMs (community contributions welcome)
+/tests/ @doublegate
