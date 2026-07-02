@@ -1043,7 +1043,19 @@ impl App {
     // `significant_drop_tightening`: the `DebugStep`/`DebugContinue` arms genuinely need the emu
     // lock held for their entire body (read-then-step-then-update-callstack, or the whole
     // stepping loop) — there's no meaningful narrower scope to tighten to.
-    #[allow(clippy::too_many_lines, clippy::significant_drop_tightening)]
+    // `large_stack_frames`: only fires with `--features netplay` (not this project's own
+    // `ci-gate.sh`/CI default-feature clippy job, which is why this was never caught before) --
+    // the lint sums every match arm's largest local across this whole dispatch function, and one
+    // netplay arm's `Result<(NetplaySession, SocketAddr), NetplayError>` is genuinely large
+    // (confirmed pre-existing on `main` before any dependency version changes, not something a
+    // bump introduced). Splitting this already-`too_many_lines`-sized dispatch function into
+    // smaller pieces to chase this is real, separate scope-creep work, not part of a dependency
+    // bump.
+    #[allow(
+        clippy::too_many_lines,
+        clippy::significant_drop_tightening,
+        clippy::large_stack_frames
+    )]
     fn dispatch_actions(
         active: &mut Active,
         event_loop: &ActiveEventLoop,

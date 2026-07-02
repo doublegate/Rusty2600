@@ -22,4 +22,4 @@ publish = false
 workspace = true
 
 [dependencies]
-mlua = { version = "0.10", features = ["lua54", "vendored"] }
+mlua = { version = "0.11", features = ["lua54", "vendored"] }

@@ -20,6 +20,21 @@ updates:
       - "doublegate"
     assignees:
       - "doublegate"
+    ignore:
+      # bincode is unmaintained (RUSTSEC-2025-0141 -- the maintainer stopped
+      # work after a harassment incident) and its 3.0.0 release is a
+      # deliberately broken placeholder (a stub with a compile error), not a
+      # real release. The bincode team's own stated position: 1.3.3 is "a
+      # complete version... not in need of any updates." rusty2600-netplay
+      # needs BYTE-IDENTICAL wire compatibility with GGRS's own internal
+      # bincode 1.3.3 usage (ggrs::Message's fields are private, so this
+      # crate can only reach them through whatever bincode encoding GGRS
+      # itself already uses) -- staying pinned to 1.3.3 is the correct,
+      # deliberate choice here, not neglect. Revisit only if a genuine
+      # security issue in 1.3.3 surfaces, or a maintained, wire-compatible
+      # successor (e.g. bincode-next) is deliberately adopted with its own
+      # migration.
+      - dependency-name: "bincode"
     # Group minor and patch updates together
     groups:
       development-dependencies:
@@ -51,3 +66,13 @@ updates:
       - "doublegate"
     assignees:
       - "doublegate"
+    ignore:
+      # `dtolnay/rust-toolchain`'s version tags (e.g. `@1.96`) map directly
+      # to real Rust toolchain release numbers, not independent Action
+      # versions -- Dependabot can't tell the difference and will propose
+      # tags for Rust versions that don't exist yet (confirmed: `@1.100`
+      # was proposed while the real latest stable was 1.96.1, and
+      # `rustup toolchain install 1.100` 404s against the real release
+      # server). Bump this by hand in lockstep with `rust-toolchain.toml`
+      # whenever a real new Rust stable actually ships.
+      - dependency-name: "dtolnay/rust-toolchain"
