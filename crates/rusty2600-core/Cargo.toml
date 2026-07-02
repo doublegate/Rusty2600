@@ -9,6 +9,10 @@ authors.workspace = true
 [features]
 default = ["std"]
 std = []
+# Forwards to `rusty2600-tia/hd-pack` -- Cargo features don't propagate through a dependency
+# chain automatically, so each crate between `rusty2600-tia` and `rusty2600-frontend` must
+# re-declare and forward this explicitly.
+hd-pack = ["rusty2600-tia/hd-pack"]
 
 [dependencies]
 serde.workspace = true
