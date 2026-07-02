@@ -135,7 +135,9 @@ impl Bus {
         let val = if addr & 0x1000 != 0 {
             // A12 = 1 -> Cartridge
             if let Some(board) = &mut self.board {
-                board.cpu_read(addr)
+                let val = board.cpu_read(addr);
+                self.apply_oob_pokes();
+                val
             } else {
                 self.open_bus
             }
@@ -179,6 +181,7 @@ impl Bus {
             // A12 = 1 -> Cartridge
             if let Some(board) = &mut self.board {
                 board.cpu_write(addr, val);
+                self.apply_oob_pokes();
             }
         } else {
             // A12 = 0 -> Console. Real cart edge connectors are wired to every
@@ -198,6 +201,19 @@ impl Bus {
             } else {
                 // A7 = 1, A9 = 1 -> RIOT I/O and Timers
                 self.riot.cpu_write(addr, val);
+            }
+        }
+    }
+
+    /// Apply any out-of-band RIOT-RAM pokes the board staged this access
+    /// (see `rusty2600_cart::Board::take_oob_pokes`'s doc comment — used by
+    /// `BankAr`'s dummy-BIOS load handoff). Bypasses `Riot::cpu_write`
+    /// deliberately: these are direct RAM patches with no console-visible
+    /// bus cycle of their own, mirroring Stella's `System::pokeOob`.
+    fn apply_oob_pokes(&mut self) {
+        if let Some(board) = &mut self.board {
+            for (addr, val) in board.take_oob_pokes() {
+                self.riot.ram[(addr & 0x7F) as usize] = val;
             }
         }
     }
