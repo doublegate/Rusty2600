@@ -93,12 +93,41 @@ exposure, `onFrame` firing across multiple ticks and being a no-op when
 unregistered, `pause`, save/load-state round-trip and bad-blob error
 surfacing, and draw-primitive accumulation + clear-on-take.
 
-## What's next
+## Frontend wiring (`scripting` feature, `rusty2600-frontend/src/scripting.rs`)
 
-Per `to-dos/ROADMAP.md`: a `v1.9.x` follow-up wires `ScriptEngine` into
-`rusty2600-frontend` — a real `ScriptBus` implementation over the live
-`Bus`/`Cpu`, a `scripting` feature flag (off by default, matching every
-other additive feature), an actual overlay-compositing step in the render
-pipeline, and a live `onFrame` hook tied to `EmuCore::run_frame`. Only
-once that lands does Lua scripting become something a user can actually
-attach to a running game.
+A real `ScriptBus` implementation, a `scripting` feature flag (off by
+default, pulling in `rusty2600-script` + a direct `mlua` dependency for
+`mlua::Error`), a live `onFrame` hook, and a `Tools -> Load Script...`
+menu entry now exist. Load a `.lua` file via the file picker; `onFrame`
+fires once per real emulated frame thereafter.
+
+**Design: a per-frame-synced `System` clone, not a live pointer.**
+`ScriptEngine<B>` owns its bound bus behind an `Rc<RefCell<B>>` with
+`B: 'static`, fixed at construction — but the real `EmuCore` lives behind
+`Arc<Mutex<EmuCore>>`, reachable only as a short-lived `MutexGuard`
+re-acquired every render pass, with no `'static` reference to hand the
+engine without `unsafe` raw pointers or a much larger architectural
+change. Since `System` is cheaply `Clone` and this crate's own doc already
+notes "the 2600's entire mutable game-state is 128 B of RIOT RAM plus a
+handful of registers," `FrontendScriptBus` instead owns a **private
+`System` clone**, synced from the real `EmuCore.system` at the start of
+each tick and copied back after: `peek`/`poke`/`cpu()` and
+`saveState`/`loadState` are exact, real operations against that copy (a
+script's captured blob is a genuine live encode, not an approximation);
+`setJoystick`/`setConsoleSwitch` can't apply directly this way (the next
+`run_frame` call unconditionally overwrites RIOT/TIA ports from real host
+input), so they're recorded into override fields the frontend ORs into the
+next frame's real `InputState` instead. An honest, deliberate indirection
+layer — not a corner cut — documented in `scripting.rs`'s module doc.
+
+**Overlay compositing is STILL deferred.** `ScriptState::take_overlay`
+exists and works, but no `rusty2600-frontend` render-path code consumes
+it yet — the wgpu blend-over-the-emulated-frame step remains its own
+follow-up (touching `gfx.rs`/`shader_pass.rs`), the same honest-
+partial-landing call this project made for `[1.4.0]`'s sprite-pack splice.
+
+**`WritesLocked` gained a real second field this same pass**:
+`netplay_active` (see `docs/netplay.md`) — a connected rollback netplay
+session now locks script writes too, for the same reason RA hardcore mode
+does: an unreplicated local write would silently desync the two peers'
+otherwise bit-identical timelines.

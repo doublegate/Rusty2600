@@ -414,7 +414,10 @@ mod tests {
     #[test]
     fn poke_is_rejected_when_writes_locked() {
         let engine = ScriptEngine::new(MockBus::default()).unwrap();
-        engine.set_locked(WritesLocked { ra_hardcore: true });
+        engine.set_locked(WritesLocked {
+            ra_hardcore: true,
+            ..Default::default()
+        });
         let err = engine.load("emu.poke(0, 1)").unwrap_err();
         assert!(err.to_string().contains("locked"));
         // The write must not have gone through.
@@ -424,7 +427,10 @@ mod tests {
     #[test]
     fn set_joystick_is_rejected_when_writes_locked() {
         let engine = ScriptEngine::new(MockBus::default()).unwrap();
-        engine.set_locked(WritesLocked { ra_hardcore: true });
+        engine.set_locked(WritesLocked {
+            ra_hardcore: true,
+            ..Default::default()
+        });
         let err = engine
             .load(r#"emu.setJoystick(0, "up", true)"#)
             .unwrap_err();

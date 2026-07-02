@@ -104,6 +104,18 @@ struct Active {
     /// `Send` for the default-on `emu-thread` feature.
     #[cfg(feature = "retroachievements")]
     cheevos: crate::cheevos::CheevosState,
+
+    /// The currently-loaded Lua script, if any (`File -> Load Script...`).
+    /// Lives here (main thread) for the same reason `cheevos` does: `mlua`'s
+    /// `Lua` VM is `!Send`, and `EmuCore` must stay `Send` for `emu-thread`.
+    #[cfg(feature = "scripting")]
+    script: Option<crate::scripting::ScriptState>,
+
+    /// The active rollback netplay session, if any (`Tools -> Netplay...`).
+    /// See `netplay_session.rs`'s module doc for why this bypasses the
+    /// `emu-thread` background loop while active.
+    #[cfg(feature = "netplay")]
+    netplay: Option<crate::netplay_session::NetplaySession>,
 }
 
 /// The app: holds the config + the deferred ROM path until `resumed()` builds `Active`.
@@ -293,6 +305,10 @@ impl ApplicationHandler for App {
             fps_smoothed: 0.0,
             #[cfg(feature = "retroachievements")]
             cheevos,
+            #[cfg(feature = "scripting")]
+            script: None,
+            #[cfg(feature = "netplay")]
+            netplay: None,
         });
     }
 
@@ -464,8 +480,39 @@ impl App {
         let (fb, fb_dims, info) = {
             let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
 
+            // Rollback netplay bypasses BOTH the emu-thread background loop
+            // (suppressed via `emu.paused`, set when the session started —
+            // see `MenuAction::NetplayConnect`'s dispatch handler) and the
+            // synchronous non-`emu-thread` stepping branch below (a no-op
+            // anyway while paused): `RollbackSession` owns and steps its own
+            // internal `System`, so this branch drives it directly and
+            // copies the result into `emu.system` for the existing
+            // video/audio post-processing (`extract_frame`) to consume. See
+            // `netplay_session.rs`'s module doc for the full rationale.
+            #[cfg(feature = "netplay")]
+            let netplay_active = if let Some(session) = active.netplay.as_mut() {
+                session.poll();
+                match session.advance_frame(&active.host_input) {
+                    Ok(true) => {
+                        emu.system = session.system().clone();
+                        emu.extract_frame();
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        active.shell.status = format!("Netplay error: {e}");
+                        active.netplay = None;
+                        emu.paused = false;
+                    }
+                }
+                true
+            } else {
+                false
+            };
+            #[cfg(not(feature = "netplay"))]
+            let netplay_active = false;
+
             #[cfg(not(feature = "emu-thread"))]
-            {
+            if !netplay_active {
                 let now = std::time::Instant::now();
                 if now >= active.next_step_at {
                     emu.run_frame(Some(active.host_input));
@@ -485,16 +532,24 @@ impl App {
                 // emulator racing ahead of NTSC real time.
             }
 
-            #[cfg(feature = "emu-thread")]
-            let fb = match active.frame_rx.take() {
-                Some(f) => {
-                    active.last_frame = f.pixels;
-                    active.last_frame.clone()
+            let fb = if netplay_active {
+                emu.framebuffer().to_vec()
+            } else {
+                #[cfg(feature = "emu-thread")]
+                {
+                    match active.frame_rx.take() {
+                        Some(f) => {
+                            active.last_frame = f.pixels;
+                            active.last_frame.clone()
+                        }
+                        None => active.last_frame.clone(),
+                    }
                 }
-                None => active.last_frame.clone(),
+                #[cfg(not(feature = "emu-thread"))]
+                {
+                    emu.framebuffer().to_vec()
+                }
             };
-            #[cfg(not(feature = "emu-thread"))]
-            let fb = emu.framebuffer().to_vec();
 
             let dims = emu.fb_dims();
             #[cfg(feature = "debug-hooks")]
@@ -517,6 +572,22 @@ impl App {
                     active.shell.status = msg;
                 }
             }
+            #[cfg(feature = "scripting")]
+            if emu.rom_loaded
+                && let Some(script) = active.script.as_mut()
+            {
+                let locked = rusty2600_script::WritesLocked {
+                    #[cfg(feature = "retroachievements")]
+                    ra_hardcore: active.cheevos.hardcore_enabled(),
+                    #[cfg(not(feature = "retroachievements"))]
+                    ra_hardcore: false,
+                    #[cfg(feature = "netplay")]
+                    netplay_active: active.netplay.is_some(),
+                    #[cfg(not(feature = "netplay"))]
+                    netplay_active: false,
+                };
+                script.tick(&mut emu, locked, &mut active.host_input);
+            }
             let info = ShellInfo {
                 board_tier: emu.board_tier().map(str::to_string),
                 region: emu.region,
@@ -528,6 +599,10 @@ impl App {
                 cheevos_hardcore: active.cheevos.hardcore_enabled(),
                 #[cfg(feature = "retroachievements")]
                 cheevos_game_loaded: active.cheevos.game_loaded(),
+                #[cfg(feature = "scripting")]
+                script_loaded: active.script.is_some(),
+                #[cfg(feature = "netplay")]
+                netplay_active: active.netplay.is_some(),
             };
             drop(emu); // release the brief lock BEFORE the wgpu upload + egui pass
             (fb, dims, info)
@@ -827,6 +902,67 @@ impl App {
                     let _ = active.config.save();
                 }
                 MenuAction::Quit => event_loop.exit(),
+                #[cfg(feature = "scripting")]
+                MenuAction::LoadScript => {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Lua script", &["lua"])
+                        .pick_file()
+                    {
+                        match crate::scripting::ScriptState::load(&path, 0) {
+                            Ok(state) => {
+                                active.script = Some(state);
+                                active.shell.status = format!("Loaded script {}", path.display());
+                            }
+                            Err(e) => active.shell.status = format!("script load failed: {e}"),
+                        }
+                    }
+                }
+                #[cfg(feature = "scripting")]
+                MenuAction::UnloadScript => {
+                    active.script = None;
+                    active.shell.status = "Script unloaded".into();
+                }
+                #[cfg(feature = "netplay")]
+                MenuAction::NetplayConnect {
+                    local_port,
+                    remote_addr,
+                } => {
+                    let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                    if emu.rom_loaded {
+                        match crate::netplay_session::NetplaySession::connect(
+                            local_port,
+                            remote_addr,
+                            emu.system.clone(),
+                            0,
+                        ) {
+                            Ok(session) => {
+                                // The background emu-thread (if compiled in) must
+                                // never concurrently step `emu.system` while the
+                                // synchronous netplay branch in `render()` owns
+                                // it — see `netplay_session.rs`'s module doc.
+                                emu.paused = true;
+                                active.netplay = Some(session);
+                                active.shell.status =
+                                    format!("Netplay: connecting to {remote_addr}...");
+                            }
+                            Err(e) => {
+                                active.shell.status = format!("Netplay connect failed: {e}");
+                            }
+                        }
+                    } else {
+                        active.shell.status = "Netplay: load a ROM first".into();
+                    }
+                }
+                #[cfg(feature = "netplay")]
+                MenuAction::NetplayDisconnect => {
+                    active.netplay = None;
+                    active
+                        .core
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .paused = false;
+                    active.shell.status = "Netplay disconnected".into();
+                }
                 // TODO(impl-phase): Reset / PowerCycle / OpenDocs wire to the core / Docs pane.
                 MenuAction::Reset | MenuAction::PowerCycle | MenuAction::OpenDocs => {
                     active.shell.status = format!("{action:?}: TODO");

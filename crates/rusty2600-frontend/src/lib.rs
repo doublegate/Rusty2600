@@ -120,6 +120,21 @@ pub mod runahead;
 #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
 pub mod cheevos;
 
+/// Lua scripting frontend wiring (`rusty2600-script`, `[1.9.0]`).
+///
+/// A real [`rusty2600_script::ScriptBus`] implementation over
+/// [`emu_thread::EmuCore`] plus a live `onFrame` hook, native-only, behind
+/// the off-by-default `scripting` feature. See `docs/scripting.md`.
+#[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))]
+pub mod scripting;
+
+/// Rollback netplay frontend wiring (`rusty2600-netplay`, `[1.10.0]`).
+///
+/// A real host/join-game session driving [`emu_thread::EmuCore`], native-only,
+/// behind the off-by-default `netplay` feature. See `docs/netplay.md`.
+#[cfg(all(not(target_arch = "wasm32"), feature = "netplay"))]
+pub mod netplay_session;
+
 // Native CLI (clap 4) + the structured help-topic registry + the ratatui help TUI. Native-only: a
 // browser tab has no terminal.
 #[cfg(not(target_arch = "wasm32"))]
