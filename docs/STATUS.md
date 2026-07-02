@@ -5,59 +5,56 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v2.6.0 "Rollback Bridge" — the third release of the
+**Current release:** v2.7.0 "True Colors" — the fourth release of the
 RustyNES gap-closure arc (`v2.4.0 -> v3.0.0`, see `to-dos/ROADMAP.md`),
-shipped through PR #15 (browser WebRTC netplay) alongside PR #16 (a
-master dependency-upgrade sweep consolidating 12 Dependabot PRs). Headline
-item: **`rusty2600-netplay::webrtc`** (`wasm32`-only) closes the WebRTC
-gap `[2.3.0]` deliberately deferred — `docs/adr/0008` (written first)
-establishes that the async connection-setup surface (offer/answer/ICE)
-stays fully contained via the same `wasm_bindgen_futures::spawn_local`
-pattern `[2.5.0]`'s `Gfx::new_async` proved, never touching
-`RollbackSession`'s per-frame hot path or the native/`no_std` build.
-`WebRtcSocket` implements `ggrs::NonBlockingSocket<SocketAddr>` over an
-already-open `RtcDataChannel` (mirroring `PunchedUdpSocket`, reusing its
-exact wire format) via a fixed sentinel address (this project is
-deliberately 2-player-only). **Honest verification**: the entire
-connection-establishment code path was driven end-to-end in real
-Chromium across two independent `RTCPeerConnection`s — real SDP
-offer/answer generated and accepted — but the data channel itself never
-reached `"open"` in this sandbox, diagnosed to zero ICE candidates being
-gathered (a sandbox-specific restriction, not a code bug; see
-`docs/netplay.md`). PR #15's bot review found 12 real findings, all
-fixed — mostly unclosed JS closures that would trap/panic in wasm if a
-message arrived or a connection completed after the owning Rust value
-was dropped. The dependency sweep (PR #16) applied 8 of 12 proposed
-bumps and deliberately declined 4 with documented reasons (`bincode`
-3.0.0 is a broken placeholder from an unmaintained crate; `dtolnay/
-rust-toolchain@1.100` references a Rust version that doesn't exist;
-`wgpu`/`naga` 30 blocked by `egui-wgpu` still requiring `wgpu` 29.x).
-333 tests passing on default features (337 with `--features test-roms`,
-unchanged from `[2.5.0]` since the new WebRTC code is `wasm32`-only).
+shipped through PR #17. Headline item: the **TIA object-ID mask**
+(`rusty2600-tia`, `hd-pack` feature, off by default) — a parallel
+per-pixel output channel (`Tia::object_mask`) tagging which object won
+color-priority resolution at each dot plus, for player pixels, the exact
+live `GRPx`/`NUSIZx`, captured per-pixel so mid-scanline `GRPx` rewrites
+(sprite multiplexing) resolve correctly. Strictly additive/read-only —
+written after `current_color` is already resolved, confirmed by direct
+line-number inspection, so `video_buffer` stays byte-identical with the
+feature off. Wires into a **live HD-pack rendering splice**
+(`rusty2600-frontend::emu_thread::EmuCore::step_frame`) that substitutes
+a matching replacement bitmap for a player object's on-screen footprint,
+proven end-to-end by a hand-assembled synthetic-ROM integration test.
+PR #17's bot review found 3 real findings, all fixed: a footprint-
+tracking bug through transparent `GRPx` gaps plus missing alpha-channel
+support in the splice, a stale `sprite_pack` surviving a ROM reload, and
+a test-ROM that relied on the instruction-count safety timeout instead
+of a real `VSYNC` frame boundary. 333 tests passing on default features
+(337 with `--features test-roms`, unchanged from `[2.6.0]` since the new
+code is `hd-pack`-gated); 147 tests passing with `--features hd-pack`.
 
-**Previous release:** v2.5.0 "Web Awakens" — real `winit`+`wgpu`+`egui`
-rendering on `wasm32` (`wasm-winit` feature; compiles and loads in a real
-browser, but GPU rendering itself remains unverified in this sandbox —
-`wasm-canvas` stays the deployed GH-Pages build), a debugger Lua console
-panel, and a Keyboard Controller/Trak-Ball research decision. Shipped
-through PR #14. See `[2.5.0]` in `CHANGELOG.md` for full detail.
+**Previous release:** v2.6.0 "Rollback Bridge" — browser WebRTC netplay
+transport (`rusty2600-netplay::webrtc`, `wasm32`-only, closing the
+WebRTC gap `[2.3.0]` deliberately deferred) alongside a master
+dependency-upgrade sweep consolidating 12 Dependabot PRs. Shipped
+through PR #15 (netplay) and PR #16 (dependencies, merged first). See
+`[2.6.0]` in `CHANGELOG.md` for full detail.
 
-**Historical**: v2.4.0 "Save Point" (PR #1) shipped manual save-state
-slots, a CI-gated performance-regression check, a paddle-timing
-Stella-oracle differential test, `.zip` ROM-archive loading, and a
-GitHub repo hygiene pass. v2.3.0 "Full Catalogue" closed the cart
-bankswitch catalogue to **26 of 26 schemes** (CDF/CDFJ/CDFJ+, the last
-scheme) and landed DPC+ music-mode audio, script overlay compositing,
-and a live-tested netplay STUN client. Full detail for every release
-lives in `CHANGELOG.md`, which this file never duplicates beyond a
-one-paragraph summary of the two most recent releases.
+**Historical**: v2.5.0 "Web Awakens" (PR #14) shipped real
+`winit`+`wgpu`+`egui` rendering on `wasm32`, a debugger Lua console
+panel, and a Keyboard Controller/Trak-Ball research decision. v2.4.0
+"Save Point" (PR #1) shipped manual save-state slots, a CI-gated
+performance-regression check, a paddle-timing Stella-oracle differential
+test, `.zip` ROM-archive loading, and a GitHub repo hygiene pass. v2.3.0
+"Full Catalogue" closed the cart bankswitch catalogue to **26 of 26
+schemes** (CDF/CDFJ/CDFJ+, the last scheme) and landed DPC+ music-mode
+audio, script overlay compositing, and a live-tested netplay STUN
+client. Full detail for every release lives in `CHANGELOG.md`, which
+this file never duplicates beyond a one-paragraph summary of the two
+most recent releases.
 
 **Honest verification boundary**: netplay's STUN client (`[2.3.0]`) and
 WebRTC transport (`[2.6.0]`) are each genuinely tested against a real
 protocol implementation, but real cross-NAT / cross-network traversal is
 NOT verified for either (a single-host sandbox can't provide two
 independently-NATed peers, and this sandbox's WebRTC ICE gathering
-itself doesn't complete — see above).
+itself doesn't complete — see `docs/netplay.md`). The HD-pack live
+splice (`[2.7.0]`) is proven only against a proof-of-mechanism 1x1
+placeholder bitmap — no polished replacement-art library exists yet.
 
 Earlier: `v2.1.0 "Follow-Through"` closed three gaps `[2.0.0]` carried
 forward — AR/Supercharger (`BankAr`, a full port of Stella's

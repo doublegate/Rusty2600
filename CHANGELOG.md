@@ -6,6 +6,76 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-07-02 - "True Colors"
+
+Fourth release of the RustyNES gap-closure arc, shipped through PR #17.
+Builds the TIA object-ID mask `rusty2600-frontend::sprite_pack`'s own doc
+comment flagged as the missing prerequisite since `v1.4.0`, then wires the
+live HD-pack rendering splice that mask enables. Reviewed by GitHub
+Copilot and Gemini Code Assist — 3 findings, all genuine and fixed (a
+footprint-tracking bug and missing alpha-channel support in the splice, a
+stale-sprite-pack-on-ROM-load bug, and a test-ROM timing fragility).
+
+### Added
+
+- **TIA object-ID mask** (`v2.7.0` "True Colors", `rusty2600-tia`,
+  `hd-pack` feature, off by default) — a new, parallel per-pixel output
+  channel, `Tia::object_mask: Vec<ObjectTag>`, indexed identically to
+  `video_buffer` (`scanline * 160 + x`). `ObjectTag { object: ObjectId,
+  grp: u8, nusiz: u8 }` names which object (`Background`/`Playfield`/
+  `Ball`/`Missile0`/`Missile1`/`Player0`/`Player1`) won color-priority
+  resolution at each dot, plus — for player pixels — the exact live
+  `GRPx` (VDELP-resolved)/`NUSIZx` at that moment. Captured per-pixel
+  (not per-frame/per-scanline), so mid-scanline `GRPx` rewrites (sprite
+  multiplexing) resolve correctly. Strictly read-only and additive:
+  written *after* `current_color` is already resolved (confirmed by
+  direct line-number inspection), so `video_buffer`'s existing byte-for-
+  byte output is untouched with the feature off. See `docs/tia.md`.
+- **Live HD-pack rendering splice** (`rusty2600-frontend::emu_thread::
+  EmuCore::step_frame`) — when a `SpritePack` is installed
+  (`EmuCore::set_sprite_pack`), a player pixel whose captured
+  `(GRPx, NUSIZx)` matches a loaded replacement bitmap is substituted for
+  that bitmap's pixel, nearest-neighbor scaled onto the object's on-
+  screen footprint (honoring `NUSIZx` size bits), alpha-tested/blended
+  against the underlying TIA color. Missile/ball/playfield/background
+  pixels are untouched — `sprite_pack`'s data model stays player-only by
+  design.
+- **Proof-of-mechanism replacement-art pack** (`tests/fixtures/
+  hd_pack_demo/`) plus an end-to-end integration test
+  (`hd_pack_splice.rs`) — a hand-assembled synthetic ROM with known,
+  static player-0 graphics, driven through a real `VSYNC`/`VBLANK`/
+  active-picture kernel, proving the splice actually replaces pixels
+  (with a control run confirming it doesn't without a pack loaded).
+
+### Fixed
+
+- **Sprite footprint tracking through transparent gaps + missing alpha
+  channel** (Gemini Code Assist) — the splice's contiguous-run tracking
+  reset on every `GRPx` 0-bit (a transparent gap inside real sprite art),
+  distorting the coordinate mapping; the replacement bitmap's alpha
+  channel was ignored entirely, painting transparent pixels as opaque
+  black. Both fixed: the run now survives gaps within its own footprint
+  width, and the alpha channel is alpha-tested/blended against the
+  original TIA color.
+- **Stale `sprite_pack` surviving a ROM reload** (Copilot) —
+  `EmuCore::load_rom` now clears `sprite_pack`, so a previously loaded
+  HD-pack can't apply a prior cartridge's replacements to a newly loaded
+  one.
+- **`hd_pack_splice.rs`'s synthetic ROM relied on the instruction-count
+  safety timeout** (Copilot) rather than a real frame boundary — rewrote
+  it to run a genuine `VSYNC`(3 lines)/`VBLANK`(37 lines)/active-picture
+  (192 lines) kernel paced by `WSYNC`, ending on an actual `VSYNC` 1->0
+  transition.
+
+### Test count
+
+333 tests passing on default features (337 with `--features test-roms`)
+— unchanged from `[2.6.0]`, since the object-ID mask and HD-pack splice
+are both gated behind the off-by-default `hd-pack` feature. 147 tests
+passing across `rusty2600-{tia,core,frontend}` with `--features hd-pack`
+enabled. Full CI green — Linux/macOS/Windows, the perf regression gate,
+and the `no_std` gate.
+
 ## [2.6.0] - 2026-07-02 - "Rollback Bridge"
 
 Third release of the RustyNES gap-closure arc, shipped through PR #15
