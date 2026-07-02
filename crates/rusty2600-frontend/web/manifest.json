@@ -1,0 +1,26 @@
+{
+  "name": "Rusty2600 — cycle-accurate Atari 2600 emulator",
+  "short_name": "Rusty2600",
+  "description": "A cycle-accurate Atari 2600 / VCS emulator written in pure Rust, running in your browser via WebAssembly.",
+  "id": "/Rusty2600/",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#181410",
+  "theme_color": "#e8871e",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -37,9 +37,14 @@ path = "src/main.rs"
 # currently `wasm-canvas`, the actual deployed GH-Pages build, since
 # `wasm-winit`'s rendering isn't yet confirmed working in a real browser;
 # see `docs/frontend.md`'s wasm status section for exactly why and how to
-# flip it once confirmed). `emu-thread`/`debug-hooks` below are NOT
-# wasm-safe for either wasm feature — see their own doc comments. Neither
-# `wasm-winit` nor `wasm-canvas` does anything on native.
+# flip it once confirmed). `emu-thread` stays NOT wasm-safe (see its own doc
+# comment). `debug-hooks` IS wasm-safe for `wasm-winit` as of `[v2.9.0]` (the
+# core CPU/TIA/RIOT/Memory panels + everything else except one native-only
+# TAStudio action — see `debug-hooks`'s own doc comment below); it is simply
+# not part of the two verification commands `docs/frontend.md` documents
+# (those deliberately isolate `wasm-winit` alone), so build it explicitly
+# (`--features wasm-winit,debug-hooks`) to exercise the wasm debugger overlay.
+# Neither `wasm-winit` nor `wasm-canvas` does anything on native.
 # `help-tui` adds the ratatui terminal help browser (native-only).
 #
 # `emu-thread` runs `EmuCore` on a dedicated thread (paced by the audio ring
@@ -57,15 +62,22 @@ path = "src/main.rs"
 # off explicitly (`--no-default-features --features wasm-winit,help-tui,
 # emu-thread`) for a debugger-free build.
 #
+# `[v2.9.0]`: confirmed wasm32-safe for `wasm-winit` (`cargo check`/`clippy --target
+# wasm32-unknown-unknown --no-default-features --features wasm-winit,debug-hooks`), exposing the
+# core CPU/TIA/RIOT/Memory panels plus Watch/Callstack/Events/P-M-B/Access/Compare in-browser —
+# EXCEPT `MenuAction::TastudioSaveBranch`, whose dispatch (`app.rs`) needs `rfd`'s native-only
+# save-file dialog. That one variant/arm/button is `not(target_arch = "wasm32")`-gated
+# specifically (see `shell.rs`'s `MenuAction::TastudioSaveBranch` doc comment and
+# `debugger::tastudio_panel::render_tastudio_panel`'s wasm32 branch); TAStudio's jump-to-frame
+# stays fully functional on both targets.
+#
 # Native `default` is UNCHANGED by the v2.5.0 wasm-winit work below — still
-# `emu-thread`+`debug-hooks`+`help-tui` on. The wasm-winit build must NOT use
-# these native defaults (see `web/index.html`): `emu-thread` spawns a real
-# `std::thread`, which `wasm32-unknown-unknown` doesn't support without
-# SharedArrayBuffer+COOP/COEP+atomics (out of scope); `debug-hooks` pulls in
-# `TastudioSaveBranch`'s `rfd::FileDialog` call, and `rfd` is a
-# native-only dependency (not available to the wasm32 target at all, see the
-# `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` block below) —
-# both are explicitly later-release scope (`v2.9.0`'s wasm debugger overlay).
+# `emu-thread`+`debug-hooks`+`help-tui` on. The wasm-winit build must NOT enable `emu-thread`
+# (see `web/index.html`): it spawns a real `std::thread`, which `wasm32-unknown-unknown` doesn't
+# support without SharedArrayBuffer+COOP/COEP+atomics (out of scope). `debug-hooks` IS safe to
+# enable for `wasm-winit` as of `[v2.9.0]` (see its own doc comment above) — it is simply not
+# part of the native `default` feature set's wasm32 story on its own, since `wasm-winit`/
+# `wasm-canvas` builds always pass `--no-default-features` and select features explicitly.
 default = ["wasm-winit", "help-tui", "emu-thread", "debug-hooks"]
 wasm-winit = []
 wasm-canvas = []
@@ -193,6 +205,9 @@ web-sys = { version = "0.3.77", features = [
     "CanvasRenderingContext2d", "ImageData", "Storage",
     "AudioContext", "AudioDestinationNode", "AudioNode", "AudioBuffer",
     "AudioBufferSourceNode", "AudioScheduledSourceNode",
+    # `[v2.9.0]`: `crate::share_link`'s `from_location`/`share_url` read/build the
+    # `?settings=` share-link URL via `Window::location()`.
+    "Location",
 ] }
 
 [dev-dependencies]

@@ -1311,7 +1311,11 @@ impl App {
                         emu.frame_count = emu.frame_count.saturating_sub(1);
                     }
                 }
-                #[cfg(feature = "debug-hooks")]
+                // Native-only as of `[v2.9.0]` — see `MenuAction::TastudioSaveBranch`'s doc
+                // comment (`shell.rs`): `rfd::FileDialog` isn't available on wasm32 at all, so
+                // this arm (and the variant itself) is excluded there rather than left to fail
+                // to compile once `debug-hooks` is enabled for the wasm32 debugger overlay.
+                #[cfg(all(feature = "debug-hooks", not(target_arch = "wasm32")))]
                 MenuAction::TastudioSaveBranch => {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Rusty2600 TAS movie", &["r26m"])
@@ -1361,6 +1365,15 @@ impl App {
                 #[cfg(target_arch = "wasm32")]
                 MenuAction::TouchInput(input_action, pressed) => {
                     active.host_input.apply_action(input_action, pressed);
+                }
+                // `[v2.9.0]` share-link: build the `?settings=` URL for the CURRENT config and
+                // stash it for the Settings window to display (`shell.rs`'s System-tab button).
+                // The `window.location` read lives here, not in the shared `shell.rs`, matching
+                // this file's existing convention (e.g. `TouchInput` above) of keeping direct
+                // browser-API calls in `app.rs`'s dispatch, never in the shared shell module.
+                #[cfg(target_arch = "wasm32")]
+                MenuAction::GenerateShareLink => {
+                    active.shell.share_link = crate::share_link::share_url(&active.config);
                 }
                 #[cfg(feature = "scripting")]
                 MenuAction::LoadScript => {

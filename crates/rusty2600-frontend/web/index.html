@@ -30,6 +30,26 @@
           data-cargo-no-default-features
           data-cargo-features="wasm-canvas" />
 
+    <!--
+        `[v2.9.0]` "Full Circle" — PWA: manifest + service worker + icons, copied into `dist/` by
+        the trunk asset pipeline (`data-trunk rel="copy-file"`). Together these make the demo
+        installable ("Add to Home Screen" / desktop install prompt) and usable offline after a
+        first visit (`sw.js` runtime-caches the app shell — see its own comment for exactly what
+        and why). This applies to whichever build is actually deployed here (`wasm-canvas` today,
+        per the comment above) — the manifest/service-worker infrastructure itself doesn't care
+        which wasm feature produced the `.wasm`/`.js` it caches. Icons are a placeholder
+        (`web/icon.svg`, rasterized via `rsvg-convert`) — this project has no dedicated logo/brand
+        asset yet.
+    -->
+    <link data-trunk rel="copy-file" href="manifest.json" />
+    <link data-trunk rel="copy-file" href="sw.js" />
+    <link data-trunk rel="copy-file" href="icon-192.png" />
+    <link data-trunk rel="copy-file" href="icon-512.png" />
+    <link rel="manifest" href="manifest.json" />
+    <link rel="icon" type="image/png" href="icon-192.png" />
+    <link rel="apple-touch-icon" href="icon-192.png" />
+    <meta name="theme-color" content="#e8871e" />
+
     <style>
         :root {
             color-scheme: dark;
@@ -168,6 +188,15 @@
             "use strict";
 
             function bindings() { return window.wasmBindings || null; }
+
+            // --- PWA: register the service worker (offline app shell, `[v2.9.0]`). ---
+            if ("serviceWorker" in navigator) {
+                window.addEventListener("load", function () {
+                    navigator.serviceWorker.register("sw.js").catch(function (e) {
+                        console.warn("Rusty2600: service worker registration failed", e);
+                    });
+                });
+            }
 
             function wireMomentary(id, name) {
                 var el = document.getElementById(id);

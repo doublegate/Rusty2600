@@ -45,6 +45,14 @@ per frame **only while the overlay is open and a ROM is loaded**, under the
 same brief lock the present path already takes; the panel-render functions
 in `debugger/mod.rs` are pure functions over that snapshot.
 
+**Wasm32 (`[v2.9.0]`)**: `debug-hooks` is wasm32-safe for the `wasm-winit`
+build (`--no-default-features --features wasm-winit,debug-hooks`) — every
+panel below works identically in-browser, toggled by the same
+`Debug -> Debugger overlay` checkbox, EXCEPT TAStudio's "Save branch"
+button (needs `rfd`'s native-only save-file dialog; hidden on wasm32 in
+favor of a "native-only" label). See the wasm section below for the full
+wasm32 story.
+
 - **6507 panel** — A/X/Y/S/PC/P register grid, Step (`step_instruction()`
   once) and Continue (run to a breakpoint or a 1,000,000-instruction safety
   cap) buttons, a breakpoint add/remove list, and a scrolling disassembly
@@ -250,6 +258,57 @@ see its module doc and `Cargo.toml`'s `[features]` doc comment):
     save slots) is deliberately deferred — see the save-states section
     above for why.
 
+  **`v2.9.0` "Full Circle" additions** (web parity wave 2 — again all shared code with the
+  native build, verified via `cargo check`/`cargo clippy --target wasm32-unknown-unknown` +
+  native unit tests; NOT live-browser-verified for the same reason rendering itself isn't, see
+  the honest-status note below):
+  - **`?settings=` share-link** (`crate::share_link`) — encodes the CURRENT `Config` (region,
+    video, audio, both players' key bindings) to a compact URL-safe base64 blob and reads it back
+    from `window.location().search()` at boot, overriding the `localStorage`-persisted config so
+    opening a shared link always reflects the sender's settings. Unlike RustyNES's own
+    `ShareSettings` (a curated subset — that project's config also carries machine-local paths
+    and a login token), Rusty2600's `Config` has no such fields, so the WHOLE config round-trips
+    through the exact same `Config::to_toml_string`/`from_toml_str` helpers `[v2.8.0]`'s
+    `localStorage` persistence already uses (now `pub(crate)`), rather than a parallel DTO.
+    Scope is settings ONLY — there is no canonical URL for a loaded ROM on this build (both the
+    native `rfd` dialog and the wasm `<input type=file>` picker read a user-local file with no
+    URL), so a share link never references "this exact ROM". The base64url codec itself is
+    hand-rolled pure Rust (no `web_sys`/`atob`/`btoa`, no new dependency), which is what makes the
+    encode/decode round-trip real, native-tested coverage rather than only a wasm32-only claim.
+    Settings -> System gained a "Generate share link" button (wasm32-only) that displays the
+    current URL in a selectable text field to copy.
+  - **Wasm debugger overlay** — `debug-hooks` is now confirmed wasm32-safe for `wasm-winit`
+    (`cargo check`/`clippy --target wasm32-unknown-unknown --no-default-features --features
+    wasm-winit,debug-hooks`, zero warnings), exposing the CPU/TIA/RIOT/Memory panels (plus
+    Watch/Callstack/Events/P-M-B/Access-counter/Compare) in-browser, toggled the same
+    `Debug -> Debugger overlay` checkbox the native build uses (shared `shell.rs` code, no
+    separate wasm path needed). The one exception: `TastudioSaveBranch` (TAStudio's "Save branch"
+    button) needs `rfd`'s native-only save-file dialog, so that ONE action/variant/button is
+    `not(target_arch = "wasm32")`-gated specifically (`MenuAction::TastudioSaveBranch`,
+    `debugger::tastudio_panel::render_tastudio_panel`'s wasm32 branch shows a "native-only" label
+    instead of a dead button) — every other debugger panel, including TAStudio's own
+    jump-to-frame, is fully functional on both targets. This was the sole actual wasm32-safety gap
+    in `debug-hooks`; nothing else in `crates/rusty2600-frontend/src/debugger/` touches a
+    native-only API.
+  - **PWA install** (`web/manifest.json` + `web/sw.js` + placeholder icons) — makes whichever
+    build is actually deployed here installable ("Add to Home Screen" / a desktop browser's
+    install prompt) and usable offline after a first visit. `sw.js` runtime-caches same-origin
+    GETs (cache-first, background-revalidate) rather than a fixed precache list, since Trunk
+    hashes the `.wasm`/`.js` glue filenames per build; navigation requests are cache-keyed by
+    pathname only (query stripped) so a `?settings=` share link still hits the cached shell
+    instead of missing it and failing offline. Measured bundle sizes (this sandbox, `trunk build
+    --release`): the ACTUALLY DEPLOYED `wasm-canvas` build is tiny (~324 KiB total: ~249 KiB wasm
+    + ~24 KiB JS glue + HTML/manifest/icons/SW) — comfortably under any reasonable budget. The
+    NOT-yet-deployed `wasm-winit` build is meaningfully larger — ~7.1 MiB wasm (no `wasm-opt`
+    pass configured in `web/Trunk.toml` yet) + ~137 KiB JS glue — because `winit`+`wgpu`+`egui`
+    dominate wasm bundle size regardless of how simple the 2600 core itself is; a follow-up
+    release that actually deploys `wasm-winit` should add a `wasm-opt` pass (`[tools] wasm_opt =
+    "…"` in `Trunk.toml`) to shrink this before making it the live build. RustyNES's own cited
+    "~5 MiB budget" precedent does not directly transfer for the same reason: frontend-stack
+    weight, not console complexity, dominates. Icons are a placeholder (`web/icon.svg`, a simple
+    joystick glyph in the page's own dark/amber palette, rasterized via `rsvg-convert` to 192px/
+    512px PNGs) — this project has no dedicated logo/brand asset yet.
+
   **Honest status (v2.5.0 landing)**: compiles cleanly (`cargo check
   --target wasm32-unknown-unknown --no-default-features --features
   wasm-winit`, zero warnings) and a real `trunk build` produces a working
@@ -293,7 +352,11 @@ push to `main`. `web/Trunk.toml` pins `public_url = "/Rusty2600/"` to match
 where Pages actually serves this repo, and pins the `wasm_bindgen` CLI
 version to match Cargo.lock's resolved library version (a mismatch fails the
 build). The core's `no_std` + `alloc` chip stack cross-compiles independent
-of any of this.
+of any of this. `web/manifest.json` + `web/sw.js` + `web/icon-192.png`/
+`icon-512.png` (`[v2.9.0]`, see above) are copied into `dist/` by
+`data-trunk rel="copy-file"` entries in `index.html` regardless of which
+wasm feature is selected — the PWA install/offline layer applies to
+whichever build is actually deployed.
 
 
 ---
