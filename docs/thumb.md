@@ -132,14 +132,33 @@ cartridge board correctly.
 
 ## What's next
 
-DPC+ landed first (`BankDpcPlus`, see `docs/cart.md`): a real `ThumbMemory`
-implementation over the board's own driver/custom/data/freq ROM+RAM
-segments (mapped at Gopher2600's own Harmony-architecture Flash/SRAM
-addresses), driven synchronously from the `$5A` "CALLFUNCTION" register
-write rather than a per-color-clock scheduler hook — DPC+'s ARM entry point
-turned out to be a synchronous call-and-run-to-completion from within
-`Board::cpu_write`, not something needing `Board::tick_coprocessor()` or
-any `Bus`/scheduler change at all. CDF, then CDFJ/CDFJ+, remain their own
-separately-scoped follow-ups, each supplying its own `ThumbMemory`
-implementation for that family's own register map/memory layout — closing
-the bankswitch catalogue to 25 of 25 schemes once all three land.
+Both Harmony/Melody coprocessor families now consume this interpreter,
+closing the bankswitch catalogue to 26 of 26 schemes:
+
+- **DPC+ landed first** (`BankDpcPlus`, `[2.2.0]`, see `docs/cart.md`): a
+  real `ThumbMemory` implementation over the board's own driver/custom/
+  data/freq ROM+RAM segments (mapped at Gopher2600's own Harmony-
+  architecture Flash/SRAM addresses), driven synchronously from the `$5A`
+  "CALLFUNCTION" register write rather than a per-color-clock scheduler
+  hook — DPC+'s ARM entry point turned out to be a synchronous call-and-
+  run-to-completion from within `Board::cpu_write`, not something needing
+  `Board::tick_coprocessor()` or any `Bus`/scheduler change at all.
+- **CDF/CDFJ/CDFJ+ landed second** (`BankCdf`, `[2.3.0]`, one struct
+  covering all four sub-versions via a `CdfVersion` const table — see
+  `docs/cart.md`): reuses the exact same synchronous CALLFN-to-
+  `ProgramEnded` shape, plus a genuinely new consumer of this crate's
+  `Fault::UnimplementedPeripheral` path — CDF's driver ROM makes real
+  host-serviced calls via a `BX` to a fixed non-Thumb address (DPC+'s
+  equivalent hook is a no-op stub its driver never triggers). No changes
+  to this crate were needed to support it: `Arm7Tdmi::instruction_pc()`
+  already reports the exact call-site address the dispatch needs, and
+  `set_register`'s existing `+2` PC-storage convention already produces
+  the correct resume target with no extra adjustment from the caller.
+  This is the first real-world validation that the fault-reporting API
+  this crate exposes is sufficient for a genuine ARM-interrupt-driven
+  cartridge, not just a hypothetical future need.
+
+`Board::tick_coprocessor()` remains unused by both families — the
+synchronous call-and-block model needs no per-color-clock scheduler tick,
+only `Board::tick()`'s existing once-per-CPU-cycle hook (for each family's
+own music-fetcher phase-accumulator divider).

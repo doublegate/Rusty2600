@@ -263,12 +263,22 @@ One new, genuinely reusable `Board` hook: none needed here (unlike AR's
 `cpu_write`, not a per-color-clock scheduler tick, so no `Bus`/scheduler
 changes were needed at all.
 
-**Honestly deferred, not silently dropped**: DPC+'s music-mode continuous-
-time audio (the reference's `Step(clock)`-driven phase accumulator) is NOT
-implemented — the register plumbing (`$05`, `$5D..=$5F`, `$75..=$77`)
-round-trips correctly, but the waveform-index math always samples index 0,
-so DPC+ music-mode audio is silent/incorrect on that one channel. This is a
-`rusty2600-tia` audio-timing follow-up, not a cart-catalogue-breadth one.
+**DPC+'s music-mode continuous-time audio is implemented (`[2.3.0]`)**:
+`BankDpcPlus::tick()` (a `Board::tick()` override) advances each of the 3
+music fetchers' `count` phase accumulators by `freq` every 59th call —
+dividing the ~1.19 MHz CPU-cycle rate `Board::tick()` was already called
+at (from `rusty2600-core`'s scheduler, unchanged) down to DPC+'s 20 kHz
+music-sample rate, matching Gopher2600's own `Step()`/"same 20kHz as the
+DPC format" commentary. This turned out to be a fully self-contained
+`rusty2600-cart` fix — the hook it needed already existed and was already
+called at the right rate, so no `rusty2600-tia`/scheduler change was
+needed at all, contrary to this doc's own earlier speculation that it
+would be a `rusty2600-tia` audio-timing follow-up. No cross-crate mixing
+is needed for correctness either: the DPC+ driver ROM's own 6507 code
+already reads register `$05` (now correctly time-varying) and writes the
+result into real `AUDV0`/`AUDV1` TIA registers each frame, which the
+existing TIA audio pipeline already mixes unmodified.
+
 Function-call service `2` ("copy value to fetcher pointer, N times") is
 ported with Gopher2600's own address formula verbatim, including what looks
 like a copy-paste artifact (`Hi` is ALSO advanced by the loop index, not
@@ -277,14 +287,77 @@ cross-check this specific service since it runs the real ARM driver code
 rather than short-circuiting it in C++, so it's ported exactly rather than
 silently "corrected" on a guess (see `BankDpcPlus`'s own doc comment and
 its matching test for the worked addresses). CDF/CDFJ/CDFJ+ (the other
-three Harmony/Melody families) remain their own future, separately-scoped
-follow-up — closing the catalogue to 25/25 needs those too, and rushing
-them alongside DPC+ risked landing something half-correct.
+three Harmony/Melody families) close the catalogue's remaining gap — see
+below for their own status.
 
 BestEffort tier for `BankDpcPlus`. `tests/mapper_tier_honesty.rs`'s oracle
 set is correctly NOT extended — that gate is `Core`/`Curated`-only (exists
 precisely to keep `BestEffort` boards OUT of the accuracy-oracle corpus),
 confirmed by both this board and `BankAr` before it.
+
+### CDF / CDFJ / CDFJ+ (`T-0401-006`, `[2.3.0]`, closes the catalogue to 26/26)
+
+`BankCdf`, ported from Gopher2600's `cdf` package (not Stella's C++,
+matching this project's ARM-adjacent precedent) — one struct covering all
+four sub-versions (`CdfKind::{Cdf0, Cdf1, Cdfj, CdfjPlus}`) via a
+`CdfVersion` const table (register-address bases, shift amounts, the
+FastJMP operand mask, and — CDFJ+ only — `fast_ldx`/`fast_ldy`/
+`datastream_offset`, which the reference derives from a runtime byte-scan
+of the driver ROM's first 2048 bytes rather than fixed constants, ported
+as a real runtime scan here too). Mirrors `docs/cart.md`'s own single
+catalogue row for this family: one mechanism, parameterized, not three
+separate boards.
+
+Beyond DPC+'s register-window/FastFetch/CALLFUNCTION shape (reused
+directly — same synchronous `Arm7Tdmi::step()`-to-`ProgramEnded` loop,
+same `Board::tick()`-driven 59-count music-fetcher divider), CDF adds real
+complexity DPC+ never had:
+
+- **FastJMP**: intercepts `JMP absolute` (not just `LDA #immediate`),
+  redirecting the 6507's OWN opcode fetch through a data-fetcher stream (a
+  "streaming code execution" trick some CDF-family games use) — guarded by
+  a countdown state machine cross-checking the byte before the JMP opcode,
+  ported to close a real, documented false-positive hazard in the
+  reference (a phantom read from a branch instruction that happens to look
+  like a JMP-to-zero but isn't).
+- **A real `ARMinterrupt` dispatch** — DPC+'s equivalent hook is a no-op
+  stub in the reference (DPC+'s driver never triggers it); CDF's driver
+  ROM genuinely calls out to 4 host-serviced functions ("Set music
+  note"/"Reset wave"/"Get wave pointer"/"Set wave size") via a `BX` to a
+  fixed, non-Thumb call-site address inside `driver_rom` (`0x752`/`0x756`/
+  `0x75a`/`0x75e` for CDF1/CDFJ/CDFJ+; `0x6e2`/`0x6e6`/`0x6ea`/`0x6ee` for
+  CDF0). `rusty2600-thumb`'s existing `Fault::UnimplementedPeripheral`
+  path catches this — no changes to that crate were needed — but the
+  dispatch key is `Arm7Tdmi::instruction_pc()` (where the faulting `BX`
+  physically sits), NOT the fault's own payload (the branch-target
+  register's value); the loop then services the call, writes a result
+  register when the call has one (`set_register(2, ...)`), and resumes at
+  `LR` (already `+2`-adjusted by `set_register`'s own convention — adding
+  a second `+2` resumes one instruction too far). Verified with a real
+  hand-assembled Thumb-1 program that plants an actual `BX R0` at
+  `driver_rom[0x752]`, triggers the CALLFN entry point, and asserts the
+  targeted music fetcher's `freq` field was set by the dispatch loop — not
+  just that a fault was caught.
+- **SampleMode vs. non-SampleMode amplitude reads**: two structurally
+  different code paths (a single-channel 8-bit-PCM read with a
+  volume-halving branch, vs. a 3-channel sum each using its own
+  `Waveform` field as its own shift amount) rather than one shared
+  formula, ported as such.
+- **CDFJ+'s bank-select hotspots are linear** (`bank = addr - $1FF4`,
+  0..=7); **CDF0/CDF1/CDFJ use a non-linear table** ported literally from
+  the reference's if/else chain, not "cleaned up" into arithmetic.
+
+**Honest scope note, ported exactly rather than guessed**: the reference's
+`NumBanks()` is hardcoded to `7` for every CDF version, even CDFJ+ (whose
+bankswitch table addresses 8 slots, `$1FF4..=$1FFB`). This could be an
+upstream quirk or an intentional "CDFJ+ never actually ships an 8th bank"
+convention — no real CDFJ+ ROM was available to verify against, so it's
+ported exactly rather than "fixed" on a guess; a bank-7 selection on
+CDFJ+ falls through to a checked-index empty/open-bus read rather than
+panicking.
+
+BestEffort tier, same as DPC+; `tests/mapper_tier_honesty.rs` correctly
+not extended for the same `Core`/`Curated`-only reason.
 
 ### `Board::snoop_write`/`snoop_read` — bankswitching outside the cart window
 
