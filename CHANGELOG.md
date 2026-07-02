@@ -6,6 +6,37 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Browser WebRTC netplay transport** (`v2.6.0` "Rollback Bridge",
+  `rusty2600-netplay::webrtc`, `wasm32`-only) — closes the WebRTC gap
+  `[2.3.0]` deliberately deferred. `docs/adr/0008-netplay-webrtc-async-
+  boundary.md` (written first, per this release's own plan) establishes
+  that the async surface stays fully contained to one-time connection
+  setup, using the exact `wasm_bindgen_futures::spawn_local` pattern
+  `[2.5.0]`'s `Gfx::new_async` already proved in this codebase — it never
+  touches `RollbackSession`'s per-frame hot path and never becomes a
+  dependency of the `no_std` core or the native default build (confirmed:
+  `cargo tree` shows zero `web-sys`/`wasm-bindgen` in the native
+  dependency graph). `WebRtcSocket` implements `ggrs::
+  NonBlockingSocket<SocketAddr>` over an already-open `RtcDataChannel`
+  (mirroring `PunchedUdpSocket`'s shape, reusing its exact wire format);
+  `RollbackSession::with_webrtc_socket` is the one new public entry
+  point. A standalone `rusty2600-netplay/web/` Trunk-built test page (not
+  wired into the main frontend) drives a minimal manual/copy-paste SDP
+  offer-answer exchange (no signaling server, per the ADR). **Verified
+  for real via a scripted two-independent-`RTCPeerConnection` Chromium
+  session**: offer/answer generation and `set_remote_description` all
+  succeed with real SDP data — but the data channel itself never reached
+  `"open"` in this sandbox, diagnosed to zero ICE candidates being
+  gathered (a sandbox-specific Chromium/network restriction, confirmed
+  not caused by mDNS candidate obfuscation, independent of real usable
+  network interfaces being present at the OS level) — honestly documented
+  as an open verification item for a future session with real browser/
+  network access, not a claimed-working capability. See
+  `docs/netplay.md`'s new "Browser WebRTC transport" section for the full
+  investigation.
+
 ### Changed
 
 - **Dependency upgrade sweep** — consolidated all 12 open Dependabot PRs

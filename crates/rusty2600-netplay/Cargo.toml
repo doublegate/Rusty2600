@@ -15,6 +15,16 @@ publish = false
 [lints]
 workspace = true
 
+# `cdylib` is needed ONLY for the wasm32 `webrtc-harness` build (a standalone
+# trunk-built test page proving `WebRtcSocket`/the connection-establishment
+# glue for real, in a real browser — see `web/`'s module doc and
+# `docs/netplay.md`). `rlib` keeps every other consumer (native, the
+# `rusty2600-frontend` path dependency) unaffected — Cargo only builds the
+# cdylib artifact when a build target actually asks for it.
+[lib]
+name = "rusty2600_netplay"
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 rusty2600-core = { path = "../rusty2600-core", version = "2.3.0" }
 ggrs = "0.13"
@@ -33,6 +43,31 @@ bytecodec = "0.5"
 # transitively, pinned here to match rather than risk a resolver-driven
 # version drift between the two.
 bincode = "1.3"
+
+# wasm32-only, per ADR 0008: WebRTC's browser transport (`crate::webrtc`,
+# `[2.6.0]`). Never native, never a dependency of `rusty2600-core`/
+# `rusty2600-cart` — this crate is already native-only-by-convention for its
+# UDP path, this block is purely additive for the wasm32 target. Version
+# pins match `rusty2600-frontend/Cargo.toml`'s existing wasm32 pins exactly
+# (avoids a resolver-driven version drift between the two crates' wasm
+# builds).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.126"
+wasm-bindgen-futures = "0.4.50"
+js-sys = "0.3.77"
+# `ggrs` -> `rand` -> `getrandom` 0.2 needs its `js` feature explicitly
+# enabled to build for wasm32 at all (a transitive dependency, not
+# something this crate calls directly — `getrandom` refuses to compile for
+# `wasm32-unknown-unknown` without it, a well-known requirement for any
+# crate pulling `rand`/`getrandom` 0.2.x onto this target).
+getrandom = { version = "0.2", features = ["js"] }
+web-sys = { version = "0.3.77", features = [
+    "RtcPeerConnection", "RtcConfiguration", "RtcIceServer",
+    "RtcSessionDescriptionInit", "RtcSdpType", "RtcSessionDescription",
+    "RtcDataChannel", "RtcDataChannelInit", "RtcDataChannelType",
+    "RtcDataChannelState", "RtcDataChannelEvent", "RtcPeerConnectionIceEvent",
+    "RtcIceGatheringState", "RtcIceConnectionState", "MessageEvent", "Event",
+] }
 
 [dev-dependencies]
 rusty2600-cart = { path = "../rusty2600-cart", version = "2.3.0" }

@@ -12,19 +12,25 @@
 //! networking.
 //!
 //! See `session.rs`'s module docs for the exact scope of what's real in
-//! this release (2-player-only UDP transport, direct-IP/LAN or
-//! `[2.3.0]`'s STUN-assisted path) versus what's deliberately deferred
-//! (WebRTC — see `stun.rs`'s module doc for why). `config.rs`'s module
-//! docs explain [`PortInput`] — the per-player wire type this crate
-//! actually uses, and why `rusty2600_core::MovieFrame` (which packs BOTH
-//! joystick ports together) doesn't fit `ggrs::Config`'s inherently
-//! per-player `Input` type directly.
+//! this release (2-player-only UDP transport, direct-IP/LAN, `[2.3.0]`'s
+//! STUN-assisted path, and `[2.6.0]`'s browser WebRTC path — see
+//! `webrtc.rs`'s module doc + `docs/adr/0008-netplay-webrtc-async-boundary.md`
+//! for why that one is `wasm32`-only and how its async surface stays
+//! contained). `config.rs`'s module docs explain [`PortInput`] — the
+//! per-player wire type this crate actually uses, and why
+//! `rusty2600_core::MovieFrame` (which packs BOTH joystick ports together)
+//! doesn't fit `ggrs::Config`'s inherently per-player `Input` type directly.
 
 mod checksum;
 mod config;
 mod frame_advance;
 mod session;
 mod stun;
+/// Browser WebRTC transport (`[2.6.0]`, ADR 0008) — `wasm32`-only. See its
+/// own module doc for the full design; `crate::session`'s module doc for
+/// how it fits alongside the native UDP/STUN transports.
+#[cfg(target_arch = "wasm32")]
+mod webrtc;
 
 pub use checksum::checksum128;
 pub use config::{PortInput, RustyConfig};
@@ -34,6 +40,10 @@ pub use session::{
     REMOTE_PLAYER_HANDLE, RollbackSession,
 };
 pub use stun::{DEFAULT_STUN_SERVER, StunError, discover_public_address, hole_punch};
+#[cfg(target_arch = "wasm32")]
+pub use webrtc::{
+    CreateAnswerResult, CreateOfferResult, SENTINEL_PEER_ADDR, WebRtcPeer, WebRtcSocket,
+};
 
 #[cfg(test)]
 mod desync_tests {

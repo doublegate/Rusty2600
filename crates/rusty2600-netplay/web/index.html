@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>Rusty2600 netplay: WebRTC test harness</title>
+    <!--
+        LOCAL-ONLY verification tooling for `v2.6.0` "Rollback Bridge"
+        (ADR 0008) — NOT part of any deployed site, NOT wired into
+        `rusty2600-frontend`'s own wasm build (`wasm-winit`/`wasm-canvas`).
+
+        Drives `WebRtcPeer`/`WebRtcSocket` (`crate::webrtc`) directly to
+        prove a real WebRTC data channel opens between two independent
+        `RTCPeerConnection`s and real bytes flow both directions, using a
+        manual copy-paste SDP offer/answer exchange (per ADR 0008 — no
+        signaling server). Open TWO copies of this page (two tabs, or two
+        windows) to drive one `RTCPeerConnection` each — "Tab A" creates the
+        offer, "Tab B" creates the answer, then each pastes the other's blob
+        back in.
+    -->
+    <link data-trunk rel="rust" href="../Cargo.toml" />
+    <style>
+        body { font-family: monospace; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+        textarea { width: 100%; height: 6rem; }
+        button { margin: 0.25rem 0; padding: 0.4rem 0.8rem; }
+        #log { white-space: pre-wrap; background: #111; color: #0f0; padding: 0.5rem; height: 12rem; overflow-y: auto; }
+        .row { margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    <h1>Rusty2600 netplay: WebRTC test harness</h1>
+    <p>Open this page in two tabs. In Tab A click "Create offer (host)"; paste the
+       resulting blob into Tab B's "Remote offer" box and click "Create answer
+       (joiner)"; paste Tab B's answer blob back into Tab A's "Remote answer" box
+       and click "Accept answer". Once both sides show "channel OPEN", use the
+       send box to prove bytes flow both directions.</p>
+
+    <div class="row">
+        <h2>Host (Tab A)</h2>
+        <button id="create-offer">Create offer (host)</button>
+        <div>Local offer (copy this to Tab B):</div>
+        <textarea id="local-offer" readonly></textarea>
+        <div>Remote answer (paste Tab B's answer here):</div>
+        <textarea id="remote-answer"></textarea>
+        <button id="accept-answer">Accept answer</button>
+    </div>
+
+    <div class="row">
+        <h2>Joiner (Tab B)</h2>
+        <div>Remote offer (paste Tab A's offer here):</div>
+        <textarea id="remote-offer"></textarea>
+        <button id="create-answer">Create answer (joiner)</button>
+        <div>Local answer (copy this to Tab A):</div>
+        <textarea id="local-answer" readonly></textarea>
+    </div>
+
+    <div class="row">
+        <h2>Once connected</h2>
+        <button id="check-status">Check channel status</button>
+        <input id="send-text" type="text" value="hello from this tab" />
+        <button id="send-btn">Send</button>
+    </div>
+
+    <h2>Log</h2>
+    <div id="log"></div>
+
+    <script type="module">
+        function log(msg) {
+            const el = document.getElementById("log");
+            el.textContent += `[${new Date().toISOString().slice(11, 19)}] ${msg}\n`;
+            el.scrollTop = el.scrollHeight;
+        }
+
+        // Trunk's own auto-injected `<link data-trunk rel="rust">` init
+        // script (see this file's build output) initializes the wasm
+        // module and exposes its exports as `window.wasmBindings`, then
+        // fires `TrunkApplicationStarted` once ready — wait for that
+        // rather than importing the (content-hashed, unpredictable-
+        // filename) generated JS glue file directly.
+        const { WebRtcPeer } = await new Promise((resolve) => {
+            if (window.wasmBindings) {
+                resolve(window.wasmBindings);
+                return;
+            }
+            addEventListener("TrunkApplicationStarted", () => resolve(window.wasmBindings), { once: true });
+        });
+        log("wasm module initialized");
+
+        // Either `WebRtcPeer` (host, offer accepted) or the raw `RtcDataChannel`
+        // once available (joiner side, via `CreateAnswerResult`).
+        let hostPeer = null;
+        let joinerAnswerResult = null;
+        let joinerPeer = null;
+        // The real, raw `web_sys::RtcDataChannel` for each side, once open —
+        // `WebRtcPeer::into_channel()` hands back the SAME channel type
+        // `WebRtcSocket::new` wraps for real netplay use, so sending/
+        // receiving through it directly here (via plain JS `send`/
+        // `onmessage`) is a genuine proof that the same channel
+        // `WebRtcSocket` would drive actually carries bytes both ways.
+        let hostChannel = null;
+        let joinerChannel = null;
+
+        function wireChannel(channel, label) {
+            // `binaryType = "arraybuffer"` matches `WebRtcSocket::new`'s own
+            // `set_binary_type(RtcDataChannelType::Arraybuffer)` exactly —
+            // without this, `evt.data` would be a `Blob` (the browser
+            // default) or a plain string, neither of which is the binary
+            // path production code actually depends on.
+            channel.binaryType = "arraybuffer";
+            channel.onmessage = (evt) => {
+                const bytes = new Uint8Array(evt.data);
+                const text = new TextDecoder().decode(bytes);
+                log(`${label}: RECEIVED ${bytes.length} bytes -- "${text}"`);
+            };
+            channel.onopen = () => log(`${label}: channel opened`);
+            return channel;
+        }
+
+        document.getElementById("create-offer").addEventListener("click", async () => {
+            try {
+                const result = await WebRtcPeer.createOffer();
+                document.getElementById("local-offer").value = result.offer;
+                hostPeer = result.into_peer();
+                log("host: offer created, paste it into Tab B");
+            } catch (e) {
+                log(`host: create_offer failed: ${e}`);
+            }
+        });
+
+        document.getElementById("accept-answer").addEventListener("click", async () => {
+            if (!hostPeer) { log("host: no offer created yet"); return; }
+            const answer = document.getElementById("remote-answer").value.trim();
+            if (!answer) { log("host: paste the joiner's answer first"); return; }
+            try {
+                await hostPeer.acceptAnswer(answer);
+                log("host: answer accepted, waiting for channel to open...");
+            } catch (e) {
+                log(`host: accept_answer failed: ${e}`);
+            }
+        });
+
+        document.getElementById("create-answer").addEventListener("click", async () => {
+            const offer = document.getElementById("remote-offer").value.trim();
+            if (!offer) { log("joiner: paste the host's offer first"); return; }
+            try {
+                joinerAnswerResult = await WebRtcPeer.createAnswer(offer);
+                document.getElementById("local-answer").value = joinerAnswerResult.answer;
+                log("joiner: answer created, paste it back into Tab A");
+            } catch (e) {
+                log(`joiner: create_answer failed: ${e}`);
+            }
+        });
+
+        document.getElementById("check-status").addEventListener("click", () => {
+            if (hostPeer) {
+                const open = hostPeer.isChannelOpen();
+                log(`host: channel ${open ? "OPEN" : "not open yet"}`);
+                if (open && !hostChannel) {
+                    hostChannel = wireChannel(hostPeer.into_channel(), "host");
+                    // `into_channel()` consumes `hostPeer` in Rust — after
+                    // this, only `hostChannel` (the raw JS RTCDataChannel)
+                    // is used for send/receive.
+                    hostPeer = null;
+                }
+            }
+            if (joinerAnswerResult && !joinerPeer && joinerAnswerResult.channelReady()) {
+                joinerPeer = joinerAnswerResult.tryIntoPeer();
+                if (joinerPeer) log("joiner: data channel arrived");
+            }
+            if (joinerPeer) {
+                const open = joinerPeer.isChannelOpen();
+                log(`joiner: channel ${open ? "OPEN" : "not open yet"}`);
+                if (open && !joinerChannel) {
+                    joinerChannel = wireChannel(joinerPeer.into_channel(), "joiner");
+                    joinerPeer = null;
+                }
+            } else if (joinerAnswerResult) {
+                log("joiner: data channel not arrived yet (click again in a moment)");
+            }
+        });
+
+        document.getElementById("send-btn").addEventListener("click", () => {
+            const text = document.getElementById("send-text").value;
+            // The REAL proof: send BYTES (a `Uint8Array`, matching
+            // `RtcDataChannel::send_with_u8_array` — the exact call
+            // `WebRtcSocket::send_to` makes, not a string) through whichever
+            // side's raw `RtcDataChannel` is open, and watch the OTHER
+            // tab's `wireChannel`-installed `onmessage` handler decode the
+            // received bytes — a genuine, observable, two-independent-
+            // `RTCPeerConnection` BINARY data-channel round trip, exercising
+            // the same path production code depends on, not a string
+            // message that happens to look similar.
+            const bytes = new TextEncoder().encode(text);
+            if (hostChannel && hostChannel.readyState === "open") {
+                hostChannel.send(bytes);
+                log(`host: SENT ${bytes.length} bytes -- "${text}"`);
+            } else if (joinerChannel && joinerChannel.readyState === "open") {
+                joinerChannel.send(bytes);
+                log(`joiner: SENT ${bytes.length} bytes -- "${text}"`);
+            } else {
+                log("no open channel yet on this tab — click 'Check channel status' first once both sides show OPEN");
+            }
+        });
+    </script>
+</body>
+</html>

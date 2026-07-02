@@ -15,8 +15,11 @@
 //! [`RollbackSession::with_socket`] plus `PunchedUdpSocket` (a small,
 //! real `ggrs::NonBlockingSocket` impl over a pre-bound `std::net::UdpSocket`)
 //! for the STUN-assisted path — see `crate::stun` for the STUN client and
-//! hole-punch helper. **WebRTC (browser or native) remains explicitly out
-//! of scope** — see `crate::stun`'s module doc for why.
+//! hole-punch helper. `[2.6.0]` adds [`RollbackSession::with_webrtc_socket`]
+//! (`wasm32`-only) for the browser path — see `crate::webrtc` and
+//! `docs/adr/0008-netplay-webrtc-async-boundary.md`. A **native** (non-browser)
+//! WebRTC path remains explicitly out of scope — browser-to-browser is the
+//! more testable and more valuable target (see the ADR's "Consequences").
 //!
 //! **Frontend wiring (an actual host/join-game menu, live per-frame input
 //! capture) landed in `[2.1.0]`** (`rusty2600-frontend::netplay_session`).
@@ -181,6 +184,50 @@ impl RollbackSession {
             .with_max_prediction_window(max_prediction_window)
             .add_player(PlayerType::Local, LOCAL_PLAYER_HANDLE)?
             .add_player(PlayerType::Remote(remote_addr), REMOTE_PLAYER_HANDLE)?
+            .start_p2p_session(socket)?;
+
+        Ok(Self {
+            session,
+            system,
+            rom_tag,
+        })
+    }
+
+    /// Like [`Self::new`], but over an already-open
+    /// [`web_sys::RtcDataChannel`] instead of native UDP — the browser
+    /// (`wasm32`) path, `[2.6.0]`, ADR 0008.
+    ///
+    /// `channel` must already be open (its `readyState == "open"`); the
+    /// connection-establishment dance (SDP offer/answer, ICE gathering)
+    /// that produces such a channel is `crate::webrtc::WebRtcPeer`'s job,
+    /// not this constructor's — mirroring how [`Self::with_socket`] takes
+    /// an already-bound `UdpSocket` rather than owning its own bind/STUN
+    /// dance. Since this crate is 2-player-only, there is exactly one
+    /// remote peer and no real `SocketAddr` to supply — GGRS's
+    /// address-keyed API is satisfied internally with
+    /// [`crate::webrtc::SENTINEL_PEER_ADDR`], never a real IP.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NetplayError::Ggrs`] if GGRS rejects the configuration.
+    #[cfg(target_arch = "wasm32")]
+    pub fn with_webrtc_socket(
+        channel: web_sys::RtcDataChannel,
+        system: System,
+        rom_tag: u64,
+        input_delay: usize,
+        max_prediction_window: usize,
+    ) -> Result<Self, NetplayError> {
+        let socket = crate::webrtc::WebRtcSocket::new(channel);
+        let session = SessionBuilder::<RustyConfig>::new()
+            .with_num_players(2)?
+            .with_input_delay(input_delay)
+            .with_max_prediction_window(max_prediction_window)
+            .add_player(PlayerType::Local, LOCAL_PLAYER_HANDLE)?
+            .add_player(
+                PlayerType::Remote(crate::webrtc::SENTINEL_PEER_ADDR),
+                REMOTE_PLAYER_HANDLE,
+            )?
             .start_p2p_session(socket)?;
 
         Ok(Self {

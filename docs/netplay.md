@@ -193,14 +193,66 @@ out of scope here). Mirrors this project's own `docs/mobile.md` "iOS
 Verification" precedent for infrastructure that can be built and
 partially verified, but not fully proven, in this environment.
 
-**Still deferred**: the WebRTC browser transport (both native and
-browser/`web-sys` paths) — a much larger architectural commitment than
-STUN alone, since a native Rust WebRTC stack would pull an async runtime
-into a codebase that is otherwise 100% synchronous `std`, and the
-leading ready-made integration (`matchbox_socket`) pins an incompatible
-`ggrs` version (0.11 vs. this project's 0.13). Deferred to its own
-future, separately-scoped release once that tradeoff is deliberately
-decided, not bundled into this pass. Console switches and paddles remain
-un-modeled per-player (same "no natural which-peer-owns-this mapping"
-reasoning as before). Genuine LAN/cross-machine (not just localhost)
-verification also remains open.
+Console switches and paddles remain un-modeled per-player (same "no
+natural which-peer-owns-this mapping" reasoning as before). Genuine
+LAN/cross-machine (not just localhost) verification also remains open.
+
+## Browser WebRTC transport (`[2.6.0]`, ADR 0008)
+
+Closes the WebRTC gap `[2.3.0]` deliberately deferred. See
+`docs/adr/0008-netplay-webrtc-async-boundary.md` for the binding
+architectural decisions (why the async surface stays contained to
+one-time connection setup, why a sentinel `SocketAddr` stands in for the
+one WebRTC peer). `rusty2600-netplay::webrtc` (`wasm32`-only) adds:
+
+- **`WebRtcSocket`** — a `ggrs::NonBlockingSocket<SocketAddr>` over an
+  already-open `web_sys::RtcDataChannel`, the WebRTC analogue of
+  `PunchedUdpSocket`. Fully synchronous hot path (no `await`), reusing
+  the exact `bincode`-over-bytes wire format `PunchedUdpSocket` already
+  established.
+- **`WebRtcPeer`** — the one-time async connection-establishment dance
+  (create the peer connection + data channel, generate/apply an SDP
+  offer or answer, wait for ICE gathering to complete). `#[wasm_bindgen]`-
+  exported so a real netplay UI (a later release's scope) and this
+  crate's own standalone `web/` test harness can both drive it.
+- **`RollbackSession::with_webrtc_socket`** — the only new public entry
+  point, mirroring `with_socket`.
+- A minimal manual/copy-paste SDP exchange (no signaling server, per ADR
+  0008) — `rusty2600-netplay/web/` is a standalone Trunk-built test page
+  (NOT wired into `rusty2600-frontend`'s own wasm build) with two text
+  boxes per side for the offer/answer blobs.
+
+**What's real and verified**: the entire connection-establishment CODE
+PATH — `WebRtcPeer::createOffer`/`createAnswer`/`acceptAnswer` — was
+driven end-to-end via a real Chromium instance (CDP-scripted, two
+independent tabs each holding its own `RTCPeerConnection`), and every
+step succeeded with real data: a real 458-byte SDP offer generated, a
+real 457-byte SDP answer generated in response, `set_remote_description`
+accepting the answer without error. This proves the Rust/wasm-bindgen
+API surface, the SDP offer/answer dance, and ICE-gathering-completion
+detection (`wait_for_ice_gathering_complete`) all work correctly against
+the real browser WebRTC API — not a mock, not a stub.
+
+**What remains unverified, stated plainly**: the actual data channel
+never reached `"open"` in this project's sandbox. Diagnosis (not
+guesswork — checked directly): both peers' gathered SDP contained **zero
+`a=candidate` lines** — `icegatheringstate` reached `"complete"`, but ICE
+candidate gathering itself produced nothing, despite this sandbox having
+real, non-loopback network interfaces available at the OS level
+(confirmed via `ip addr`). Tried and ruled out: Chromium's mDNS
+local-candidate obfuscation (`--disable-features=
+WebRtcHideLocalIpsWithMdns`) made no difference; running under a virtual
+display (`Xvfb`) instead of `--headless=new` could not even be launched
+in this sandbox. This points to a deeper, environment-specific
+restriction on Chromium's WebRTC media/ICE stack in this particular
+sandboxed environment, not a bug in `WebRtcSocket`/`WebRtcPeer`'s own
+logic — every step UP TO ICE candidate gathering is proven correct, and
+the same offer/answer/ICE-wait code is a direct, faithful translation of
+the standard browser WebRTC connection-establishment sequence. A future
+session with a real desktop browser (or a sandbox without this
+restriction) is the natural next verification step — `rusty2600-netplay/
+web/cdp_verify.py` (kept, documented) is ready to re-run as-is once that
+access exists.
+
+A **native** (non-browser) WebRTC path stays explicitly deferred per ADR
+0008 — browser-to-browser was always the primary, more valuable target.
