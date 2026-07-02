@@ -7,23 +7,20 @@ e.g. `T-0001-003` = phase 0, sprint 1, ticket 3. Reference them in commit
 messages. References: `ref-docs/research-report.md`; `docs/architecture.md`;
 `docs/STATUS.md` (current-state source of truth).
 
-**Current release: v1.10.0 "Rollback"** — the tenth release of the
+**Current release: v1.11.0 "Handheld"** — the eleventh release of the
 `v1.1.0 -> v2.0.0` RustyNES-parity line (see "Version -> Phase mapping
 (v1.1.0 -> v2.0.0)" below for the full plan). Adds a new
-`rusty2600-netplay` crate: 2-player rollback netplay wrapping the mature
-`ggrs` (GGPO-style) engine rather than reimplementing rollback networking
-from scratch, over GGRS's own UDP transport (direct-IP/LAN only this
-release). `resync()` reuses `[1.1.0]`'s `SaveState` substrate directly —
-no new determinism infrastructure needed. A genuine rollback-desync test
-(`ggrs::SyncTestSession` + a synthetic input-reactive ROM, validated by
-deliberately reintroducing a bug and confirming it's caught) proves the
-save/restore/resimulate path is correct. **This release lands the
-session crate only** — not yet wired into `rusty2600-frontend` (no
-host/join-game menu, no live input capture); a `v1.10.x` follow-up does
-that wiring plus STUN/hole-punch NAT traversal and the WebRTC transport,
-the same pattern `rusty2600-thumb` (`[1.6.0]`) and `rusty2600-script`
-(`[1.9.0]`) already established. See `docs/netplay.md` and
-`CHANGELOG.md`'s `[1.10.0]` entry.
+`rusty2600-mobile` crate: a `std`, host-testable, platform-agnostic UniFFI
+bridge over `System`, reusable from Kotlin (Android, this release) and
+Swift (`v1.12.0`, iOS). A real design improvement over the original plan:
+`run_frame` returns plain framebuffer/audio data rather than a native
+surface handle, so the host's stock APIs consume it directly via UniFFI's
+generated bindings with zero hand-written JNI/`unsafe` — no separate
+`rusty2600-android` glue crate was needed. The Android app (`android/`, a
+real Gradle/Kotlin project) was built and **verified running on a real
+emulator** (`Pixel_8_API_34`: booted, installed, launched crash-free, a
+test ROM loaded through the real system file picker, screenshots
+captured). See `docs/mobile.md` and `CHANGELOG.md`'s `[1.11.0]` entry.
 
 Full release-by-release detail (v1.1.0 through the current release) lives
 in `docs/STATUS.md`'s "Current release" section and `CHANGELOG.md` — not
@@ -140,8 +137,8 @@ the `v0.x.0` line.
 | v1.7.0 "Chronicle" | `.r26m` TAS movie format (`rusty2600-core::movie`, DONE): a start point (fresh seeded power-on or an embedded save-state blob — a branch point is exactly this) + a per-frame `MovieFrame` input log, built on v1.1.0's snapshot substrate. TAStudio-lite piano-roll panel (jump-to-frame via the existing rewind ring, branch points as separate `.r26m` files) + two riders (`access_counter`, `memory_compare_panel`). Live per-frame auto-recording into `EmuCore::run_frame` honestly deferred (`docs/movie.md`) |
 | v1.8.0 "Oracle" | Accuracy battery depth, grown honestly rather than claiming an inflated pass rate. `T-0602-007` (DONE): a genuine externally-oracled golden CPU trace bundled for `GoldenLogDiffer` (20,000 instructions vs. an independent Gopher2600 CPU-package run, `first_divergence() == None`). `T-0602-006` (researched, stays a permanent stub): no freely-redistributable TIA/RIOT test-ROM corpus exists — confirmed again this release; TIA/RIOT accuracy work continues via the differential-oracle method against specific known-hard titles, not a canned corpus |
 | v1.9.0 → v1.9.x "Scriptable" | Lua scripting (`rusty2600-script`: `mlua` native backend). `v1.9.0` (DONE) lands the engine only — a real, tested `emu` API + `ScriptBus` seam, `WritesLocked` determinism gate — not yet wired into `rusty2600-frontend` (`docs/scripting.md`). `v1.9.1+` wires it into the frontend (live `ScriptBus` impl, `scripting` feature flag, overlay compositing, `onFrame` hook) and, time permitting, adds the `piccolo` wasm fallback |
-| **v1.10.0 → v1.10.x "Rollback"** (v1.10.0 current) | Rollback netplay (`rusty2600-netplay`), 2-player-only by deliberate scope cut vs. RustyNES's 2-4-player mesh. `v1.10.0` (DONE) lands the session crate only — `RollbackSession` wrapping `ggrs` over direct-IP/LAN UDP, a genuine rollback-desync test — not yet wired into `rusty2600-frontend` (`docs/netplay.md`). `v1.10.x` wires it into the frontend (host/join-game menu, live input capture), adds STUN/hole-punch NAT traversal, and adds the WebRTC browser transport |
-| v1.11.0 → v1.11.x "Handheld" (train) | Android build (`rusty2600-mobile` UniFFI bridge + `rusty2600-android`) — sideloadable, not store-submitted |
+| v1.10.0 → v1.10.x "Rollback" | Rollback netplay (`rusty2600-netplay`), 2-player-only by deliberate scope cut vs. RustyNES's 2-4-player mesh. `v1.10.0` (DONE) lands the session crate only — `RollbackSession` wrapping `ggrs` over direct-IP/LAN UDP, a genuine rollback-desync test — not yet wired into `rusty2600-frontend` (`docs/netplay.md`). `v1.10.x` wires it into the frontend (host/join-game menu, live input capture), adds STUN/hole-punch NAT traversal, and adds the WebRTC browser transport |
+| **v1.11.0 → v1.11.x "Handheld"** (v1.11.0 current) | Android build (`rusty2600-mobile` UniFFI bridge). `v1.11.0` (DONE): the bridge crate + a real Gradle/Kotlin app (`android/`), verified running on a real emulator (`Pixel_8_API_34`) — booted, installed, launched crash-free, a test ROM loaded via the real system file picker. No separate `rusty2600-android` glue crate needed (a design win, not a cut — see `docs/mobile.md`). Sideloadable, not store-submitted. `v1.11.x` (open): on-device save-state UI, paddle input, and real (non-emulator) hardware verification once physical test devices are available |
 | v1.12.0 → v1.12.x "Pocket" (train) | iOS build (`rusty2600-ios`, reusing the `rusty2600-mobile` bridge), including a genuinely new virtual-analog-paddle UX design — TestFlight-equivalent, not App-Store-submitted |
 | **v2.0.0 "Parity"** | Full doc/status reconciliation confirming every gate above shipped; release-matrix green across desktop ×3 + wasm/Pages + Android + iOS; mobile store production launch stays explicitly out of scope (deferred beyond v2.0.0, matching RustyNES's own v2.1.0 precedent) |
 

@@ -6,6 +6,79 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-07-02 - "Handheld"
+
+A new `rusty2600-mobile` crate and a real Android app, verified running on
+a real emulator — a design improvement over the original plan eliminated
+the need for a dedicated native-glue crate entirely.
+
+### Added
+
+- **`rusty2600-mobile`** (new crate): a `std`, host-testable,
+  platform-agnostic [UniFFI](https://mozilla.github.io/uniffi-rs/) bridge
+  over `rusty2600_core::System`, reusable from both Kotlin (Android, this
+  release) and Swift (`v1.12.0` "Pocket", iOS) — one Rust implementation,
+  two mobile hosts.
+  - `MobileEmulator` — `new()`, `load_rom(bytes, rom_tag)`,
+    `is_rom_loaded()`, `run_frame(input)`, `save_state()`,
+    `load_state(bytes)`.
+  - `MobileInput` — two joysticks, four paddles, console switches (named
+    fields, since UniFFI's `Record` derive doesn't support fixed-size
+    arrays).
+  - `FrameOutput` — `rgba: Vec<u8>` (160x192 RGBA8, the same crop the
+    native/wasm frontends already apply) + `audio_samples: Vec<f32>`
+    (DC-blocked, normalized, at the TIA's native rate).
+  - 6 tests: garbage-ROM rejection, run-frame-without-ROM error path,
+    correct framebuffer/audio sizing, save/load-state round-trip.
+- **A real Android app** (`android/`): AGP 8.6 / Kotlin 1.9 /
+  `compileSdk 34` / `minSdk 26`. `EmulatorView` (a custom `View` blitting
+  the RGBA8 framebuffer via `Bitmap.copyPixelsFromBuffer`) and
+  `MainActivity` (loads a ROM via the system file picker, drives
+  `run_frame` at ~60 Hz on a background thread, plays audio through an
+  `AudioTrack` in `ENCODING_PCM_FLOAT` mode, and wires on-screen
+  Up/Down/Left/Right/Fire/Select/Reset buttons). `cargo-ndk`
+  cross-compiles the bridge for `arm64-v8a` (real hardware) and `x86_64`
+  (the emulator ABI); UniFFI generates the Kotlin bindings (2,029 lines)
+  from the compiled library.
+
+### Notes
+
+- **Real design improvement over the original plan, not a corner cut**:
+  the plan called for a dedicated `rusty2600-android` crate doing JNI,
+  `ANativeWindow`→wgpu rendering, and AAudio — "the only `unsafe`
+  surface." The actual design instead has `run_frame` return plain owned
+  data (`FrameOutput`) rather than a native rendering-surface handle, so
+  Android's stock `Bitmap`/`AudioTrack` APIs consume it directly via
+  UniFFI's generated JNA-based Kotlin bindings. Result: **zero
+  hand-written JNI or `unsafe` on either side of the bridge** — fewer
+  `unsafe` surfaces than the plan anticipated, not an isolated one. See
+  `docs/mobile.md`'s "Design deviation" section for the full rationale.
+- **Verified running on a real Android emulator** (`Pixel_8_API_34`,
+  x86_64, KVM-accelerated) — not just "it compiles": booted, `adb install`
+  succeeded, `am start` launched `MainActivity` with no crash (confirmed
+  via `logcat` — no `FATAL EXCEPTION`/`AndroidRuntime` for the package), a
+  synthetic 4K test ROM was pushed and loaded through the real system file
+  picker (Storage Access Framework) with no crash and the background
+  emulation thread visibly consuming CPU (direct evidence `run_frame` is
+  executing continuously, not silently failing), and screenshots were
+  captured confirming the UI rendered correctly.
+- **Not verified this release**: visual output from a ROM that actually
+  writes TIA color registers (the synthetic test ROM used for
+  verification never writes `COLUBK`, so the black post-load screen is
+  expected, not a bug); a physical device (only the emulator was
+  available); Play Store packaging (explicitly out of scope, deferred
+  beyond `v2.0.0` per RustyNES's own precedent). Save/load-state UI and
+  paddle input aren't exposed in the Android app yet either — the bridge
+  crate already supports them.
+- Fixed a stale documentation-honesty issue in `README.md` found while
+  investigating GH Pages bugs earlier this window: the `WebAssembly` rows
+  claimed a `wasm-winit` (full winit+wgpu+egui) build mode exists
+  separately from `wasm-canvas`; only the canvas-2D bootstrap actually
+  exists (both feature names are currently identical placeholders, per
+  `rusty2600-frontend`'s own `Cargo.toml` comment).
+- 268 tests passing workspace-wide (+6 for the new `rusty2600-mobile`
+  tests), up from 262 at `[1.10.0]`; 272 with `--features test-roms`.
+
 ## [1.10.0] - 2026-07-01 - "Rollback"
 
 A new `rusty2600-netplay` crate: 2-player rollback netplay wrapping `ggrs`

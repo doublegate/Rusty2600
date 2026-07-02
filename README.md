@@ -98,7 +98,8 @@ look different, they visibly break.
 | **Accuracy Battery** | A real `AccuracyScore`-gated battery (`rusty2600-test-harness`), CI-enforced, growing honestly rather than claiming an inflated pass rate. *(v1.8.0)* `GoldenLogDiffer` now bundles a genuine externally-oracled golden CPU trace (20,000 instructions vs. an independent Gopher2600 run) |
 | **Lua Scripting Engine** *(v1.9.0)* | A real, tested `rusty2600-script` crate (`mlua` native backend, off by default): a deliberately-smaller-than-RustyNES `emu` API over a host-agnostic `ScriptBus` trait, gated by a `WritesLocked` determinism lock. Engine only in this release — not yet wired into the frontend |
 | **Rollback Netplay** *(v1.10.0)* | A real, tested `rusty2600-netplay` crate: 2-player rollback netplay wrapping `ggrs` (GGPO-style), `resync()` built on the existing save-state substrate, input-delay/max-prediction-window matching GGPO convention, a genuine rollback-desync test. Session crate only — direct-IP/LAN UDP transport, not yet wired into the frontend |
-| **WebAssembly** | Runs in-browser via `wasm-winit` (full winit/wgpu/egui) or a lightweight `wasm-canvas` embed mode |
+| **Android** *(v1.11.0)* | A real, tested `rusty2600-mobile` UniFFI bridge crate reused from Kotlin — zero hand-written JNI/`unsafe` (a design win over the original plan). A real Gradle/Kotlin app, **verified running on a real emulator** (booted, installed, launched crash-free, a ROM loaded via the system file picker) |
+| **WebAssembly** | Runs in-browser via a canvas-2D bootstrap (real keyboard input + Web Audio API output). `wasm-winit`/`wasm-canvas` are currently identical placeholder feature names for this one build; a full winit+wgpu+egui browser build matching the native binary is future work, not yet attempted (`docs/frontend.md`) |
 | **Pure Rust** | `winit` + `wgpu` + `cpal` + `egui` frontend; a safe `no_std + alloc` chip stack behind a one-directional crate graph |
 
 Planned via the iterative `v1.x.0` line toward `v2.0.0` — see
@@ -106,7 +107,7 @@ Planned via the iterative `v1.x.0` line toward `v2.0.0` — see
 [`CHANGELOG.md`](CHANGELOG.md) for exactly what's shipped in each release:
 closing the remaining 2 bankswitch schemes (AR/Supercharger, the ARM-driven
 DPC+/CDF/CDFJ/CDFJ+ family), wiring Lua scripting and rollback netplay
-into the frontend, and Android/iOS builds. The sprite-pack data model
+into the frontend, and an iOS build. The sprite-pack data model
 (`sprite_pack`, `hd-pack` feature) shipped in v1.4.0; its live rendering
 splice awaits a TIA
 object-ID mask. The `.r26m` movie format and
@@ -166,8 +167,9 @@ full catalogue, tiering, and interpreter architecture.
   than paying a raw-clone's worst-case cost.
 - **Run-ahead** — speculatively simulates a few frames ahead to hide a
   game's internal input lag, built on the save-state snapshot primitives.
-- **WebAssembly** — `wasm-winit` (full winit + wgpu + egui) or a lightweight
-  `wasm-canvas` embed mode; native-only features compile out automatically.
+- **WebAssembly** — a canvas-2D bootstrap with real keyboard input and Web
+  Audio API output; native-only features compile out automatically. A full
+  winit+wgpu+egui browser build (matching the native binary) is future work.
 
 ---
 
@@ -332,6 +334,7 @@ numbers as deltas across changes, not absolute cross-machine guarantees.
 | [`docs/movie.md`](docs/movie.md) | The `.r26m` TAS movie format and TAStudio-lite panel: architecture and scope |
 | [`docs/scripting.md`](docs/scripting.md) | The Lua scripting engine (`rusty2600-script`): the `emu` API, `ScriptBus`, determinism gating, scope |
 | [`docs/netplay.md`](docs/netplay.md) | Rollback netplay (`rusty2600-netplay`): the `ggrs` integration, scope, the rollback-desync test |
+| [`docs/mobile.md`](docs/mobile.md) | The mobile UniFFI bridge (`rusty2600-mobile`), the Android app, and the real-emulator verification |
 | [`docs/frontend.md`](docs/frontend.md) | The frontend crate's shape and behavior |
 | [`docs/testing-strategy.md`](docs/testing-strategy.md) | The layered accuracy-oracle methodology |
 | [`docs/performance.md`](docs/performance.md) | Measured Criterion baselines and profiling guidance |

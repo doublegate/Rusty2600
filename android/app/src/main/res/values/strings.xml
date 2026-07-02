@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Rusty2600</string>
+    <string name="load_rom">Load ROM</string>
+    <string name="btn_up">Up</string>
+    <string name="btn_down">Down</string>
+    <string name="btn_left">Left</string>
+    <string name="btn_right">Right</string>
+    <string name="btn_fire">Fire</string>
+    <string name="btn_reset">Reset</string>
+    <string name="btn_select">Select</string>
+</resources>

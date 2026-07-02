@@ -5,9 +5,33 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v1.10.0 "Rollback" — the tenth release of the
+**Current release:** v1.11.0 "Handheld" — the eleventh release of the
 `v1.1.0 -> v2.0.0` RustyNES-parity line (see `to-dos/ROADMAP.md` for the
-full plan and `CHANGELOG.md`'s `[1.10.0]` entry). Adds a new
+full plan and `CHANGELOG.md`'s `[1.11.0]` entry). Adds a new
+`rusty2600-mobile` crate: a `std`, host-testable, platform-agnostic UniFFI
+bridge over `rusty2600_core::System` (`load_rom`/`run_frame`/`save_state`/
+`load_state`/`is_rom_loaded`), reusable from both Kotlin (Android, this
+release) and Swift (`v1.12.0` "Pocket", iOS) — one Rust implementation,
+two mobile hosts. **A real design improvement over the original plan**:
+rather than the planned `rusty2600-android` JNI/`ANativeWindow`/AAudio
+glue crate ("the only `unsafe` surface"), `run_frame` returns a plain
+`Vec<u8>` RGBA8 framebuffer + `Vec<f32>` audio samples — data, not a
+surface handle — so Android's stock `Bitmap`/`AudioTrack` APIs consume it
+directly via UniFFI's generated JNA-based Kotlin bindings, with **zero
+hand-written JNI or `unsafe` on either side of the bridge**. A real
+Gradle Android app (`android/`: `MainActivity`/`EmulatorView`, AGP 8.6 /
+Kotlin 1.9 / compileSdk 34) was built and **verified running on a real
+Android emulator** (`Pixel_8_API_34`, x86_64, KVM-accelerated): booted,
+installed, launched crash-free (confirmed via logcat), and loaded a test
+ROM through the real system file picker with the background emulation
+thread actively consuming CPU — screenshots captured. Not verified this
+release: visual output from a color-writing ROM (the synthetic test ROM
+never writes `COLUBK`), a physical device (only the emulator was
+available), and Play Store packaging (explicitly out of scope, deferred
+beyond `v2.0.0` per RustyNES's own precedent). See `docs/mobile.md` for
+the full architecture, deviation rationale, and verification detail.
+
+Earlier in the line: `v1.10.0 "Rollback"` added a new
 `rusty2600-netplay` crate: 2-player rollback netplay wrapping the mature
 `ggrs` (GGPO-style) rollback engine rather than reimplementing it from
 scratch, over GGRS's own built-in UDP transport (direct-IP/LAN only this
@@ -28,31 +52,13 @@ and the WebRTC browser transport, the same pattern `rusty2600-thumb`
 (`[1.6.0]`) and `rusty2600-script` (`[1.9.0]`) already established. See
 `docs/netplay.md` for the full architecture and scope.
 
-Earlier in the line: `v1.9.0 "Scriptable"` added a new
-`rusty2600-script` crate: a real, tested Lua scripting engine (`mlua`
-native backend, off by default) exposing a deliberately-smaller-than-
-RustyNES `emu` table (`peek`/`poke`/`cpu`/`onFrame`/`setJoystick`/
-`setConsoleSwitch`/`drawText`/`drawRect`/`drawPixel`/`pause`/`saveState`/
-`loadState`) over a host-agnostic `ScriptBus` trait seam, gated by a
-`WritesLocked` determinism lock (folds RetroAchievements hardcore mode
-today; `.r26m` movie and rollback-netplay locks are documented, not
-stubbed, future additions). **This release lands the engine only** — it
-is **not yet wired into `rusty2600-frontend`** (no `scripting` feature
-flag, no live `ScriptBus` implementation, no overlay compositing, no
-`onFrame` hook tied to `EmuCore::run_frame`); a `v1.9.x` follow-up does
-that wiring, the same pattern `rusty2600-thumb` (`[1.6.0]`) and `.r26m`
-movies (`[1.7.0]`) already established for this project. A `piccolo`
-wasm-fallback backend is also deferred (`piccolo` is materially less
-mature than `mlua`; the `emu`/`ScriptBus` design is backend-agnostic so
-this stays a scoped follow-up, not a rewrite). See `docs/scripting.md`
-for the full architecture and scope.
-
-Full release-by-release detail for `[1.1.0]` through `[1.8.0]` (save-states,
+Full release-by-release detail for `[1.1.0]` through `[1.9.0]` (save-states,
 run-ahead, debugger depth, the shader stack, `Bank4A50`, the
-`rusty2600-thumb` ARM interpreter, `.r26m` movies, and the golden CPU
-trace) lives in `CHANGELOG.md` — not duplicated here to avoid this section
-drifting out of sync with the authoritative per-release record as the
-line grows. The full 8-scheme Curated cart tier
+`rusty2600-thumb` ARM interpreter, `.r26m` movies, the golden CPU trace,
+and the `rusty2600-script` Lua engine) lives in `CHANGELOG.md` — not
+duplicated here to avoid this section drifting out of sync with the
+authoritative per-release record as the line grows. The full 8-scheme
+Curated cart tier
 (v0.3.0) plus 12 BestEffort schemes (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC,
 BF/BFSC, UA, 0840, FE, SB, X07) are implemented and wired into automatic
 `detect()` — 22 of the 25 schemes in the LOCAL catalogue (`docs/cart.md`).
@@ -115,6 +121,7 @@ ROM. See `docs/riot.md` for the full writeup;
 | `rusty2600-test-harness` | accuracy oracle | Real as of v0.8.0: `Sentinel`/`run_cpu_until_sentinel` (the shared Layer 2 runner both bundled Klaus oracles now use), a real `AccuracyScore`-gated `tests/accuracy_battery.rs` (2/2, 100%), and a tolerance-aware `SnapComparator`. **`T-0602-007` closed (v1.8.0)**: `GoldenLogDiffer` now bundles a genuine externally-oracled golden CPU trace (`tests/golden/klaus_functional_test_gopher2600.trace`, 20,000 instructions captured from Gopher2600's `hardware/cpu` package) — `bundled()` reports `true`, `tests/golden_log_test.rs` confirms `first_divergence() == None` against Rusty2600's own CPU. `run_until_complete` (Layer 3, full-`System`) remains — and stays — a stub: `T-0602-006` is a permanent scope boundary, no freely-redistributable TIA/RIOT test-ROM corpus exists (researched again this release; see `docs/testing-strategy.md`). |
 | `rusty2600-script` | Lua scripting engine | New in v1.9.0: `mlua` native backend (off by default), a deliberately-smaller-than-RustyNES `emu` table (`peek`/`poke`/`cpu`/`onFrame`/`setJoystick`/`setConsoleSwitch`/`drawText`/`drawRect`/`drawPixel`/`pause`/`saveState`/`loadState`) over a host-agnostic `ScriptBus` trait, gated by `WritesLocked` (folds RetroAchievements hardcore mode today; `.r26m` movie/netplay locks are documented future additions, not stub fields). 18 tests passing. `std`-only, `unsafe`-permitted (the one exception besides `rusty2600-cheevos`, both for C-FFI reasons). **Not yet wired into `rusty2600-frontend`** — no `scripting` feature flag, no live `ScriptBus` impl, no overlay compositing yet; see `docs/scripting.md` for the full scope and the `v1.9.x` wiring plan. A `piccolo` wasm-fallback backend is also deferred. |
 | `rusty2600-netplay` | Rollback netplay | New in v1.10.0: 2-player rollback netplay wrapping `ggrs` (GGPO-style), not a from-scratch reimplementation — `resync()` reuses `[1.1.0]`'s `SaveState` substrate directly. `PortInput` (per-player, distinct from `MovieFrame`'s whole-machine packing) + `RustyConfig` (the `ggrs::Config` binding) + `RollbackSession` (wrapping `ggrs::P2PSession` over GGRS's own built-in UDP transport, direct-IP/LAN only). Input-delay=2/max-prediction-window=8 match GGPO convention. A genuine rollback-desync test (`ggrs::SyncTestSession` + a synthetic input-reactive ROM, validated by deliberately reintroducing a bug and confirming it's caught) proves the save/restore/resimulate path is correct. 6 tests passing. **Not yet wired into `rusty2600-frontend`** — no host/join-game menu, no live input capture; STUN/hole-punch NAT traversal and the WebRTC transport are also deferred to `v1.10.x`. See `docs/netplay.md` for the full scope. |
+| `rusty2600-mobile` | Mobile UniFFI bridge | New in v1.11.0: a `std`, host-testable, platform-agnostic bridge over `System` (`load_rom`/`run_frame`/`save_state`/`load_state`/`is_rom_loaded`), reusable from Kotlin (Android, this release) and Swift (`v1.12.0`, iOS). `run_frame` returns a plain `FrameOutput{rgba: Vec<u8>, audio_samples: Vec<f32>}` — data, not a surface handle — so the host's stock `Bitmap`/`AudioTrack` (or `UIImage`/`AVAudioEngine` on iOS) consumes it directly via UniFFI's generated bindings, with **zero hand-written JNI/`unsafe`** on either side (a real improvement over the original plan's dedicated `rusty2600-android` glue crate). 6 tests passing. The Android app (`android/`, real Gradle/Kotlin project) was built and **verified running on a real emulator** (`Pixel_8_API_34`, booted/installed/launched crash-free, screenshots captured, a test ROM loaded through the real system file picker). See `docs/mobile.md` for the full design-deviation rationale and verification detail. |
 
 ## Accuracy (per-suite pass counts)
 
@@ -128,8 +135,8 @@ ROM. See `docs/riot.md` for the full writeup;
 | TIA timing / draw ROMs | test-ROM corpus | permanently unavailable (`T-0602-006`) — no freely-redistributable corpus exists; see `docs/testing-strategy.md` |
 | Stella regression corpus | test-ROM corpus | same as above (`T-0602-006`) |
 | **Accuracy battery (AccuracyCoin-equivalent)** | battery | **2 / 2 (100%)** — stood up v0.8.0, `tests/accuracy_battery.rs`, CI-enforced via the existing `--features test-roms` step, ≥90% v1.0 threshold |
-| **Workspace test suite** | `cargo test --workspace` | **262 / 262** (+6 vs. v1.9.0 for the new `rusty2600-netplay` rollback-desync + unit tests) |
-| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **266 / 266** |
+| **Workspace test suite** | `cargo test --workspace` | **268 / 268** (+6 vs. v1.10.0 for the new `rusty2600-mobile` tests) |
+| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **272 / 272** |
 | `rusty2600-frontend` (`--features hd-pack`) | `cargo test -p rusty2600-frontend --features hd-pack` | **70 / 70** (+3 sprite-pack loader tests; `hd-pack` off by default, not part of the two workspace-wide counts above) |
 
 ## Board / mapper matrix
