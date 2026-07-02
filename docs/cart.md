@@ -67,7 +67,7 @@ backing the accuracy oracle. Per ref-docs/research-report.md §8.3.
 | F0 | 64 KiB | $1FF0 increments / 16×4K | — | BestEffort |
 | FE (Activision) | 8 KiB | $01FE/$01FF via JSR/RTS stack frame | — | BestEffort |
 | E0 (Parker Bros) | 8 KiB | $1FE0–$1FF7 select four 1K slices | — | BestEffort |
-| E7 (M-Network) | 16 KiB | $1FE0–$1FEB, eight 2K banks | +2 KiB RAM | Curated (not yet implemented — `T-0401-002`) |
+| E7 (M-Network) | 16 KiB | $1FE0–$1FEB, eight 2K banks | +2 KiB RAM | Curated |
 | 3F (Tigervision) | up to 512 KiB | `STA $3F` with A = bank (low 2K window) | — | BestEffort |
 | 3E (Tigervision + RAM) | var | `STA $3E` RAM-bank / `STA $3F` ROM-bank | +RAM | BestEffort |
 | UA (UA Ltd.) | 8 KiB | $0220/$0240 hotspots | — | BestEffort |
@@ -86,16 +86,26 @@ Tier totals: **2 Core**, **8 Curated**, **16 BestEffort** (26 schemes). Per
 ref-docs/research-report.md §8.1 — DPC and E7 were both originally classified
 BestEffort there; reclassified Curated per `docs/STATUS.md`'s "v1.0.0 scope"
 decision that the full 8-scheme Curated set (CV, F8, F6, F4, FA/CBS-RAM,
-Superchip, DPC, E7) closes in v0.3.0 (`to-dos/ROADMAP.md`). DPC is
-implemented and its tier is pinned by `crates/rusty2600-cart`'s own
-`BankDpc::tier()`; E7 is reclassified ahead of its own implementation
-(`T-0401-002`) so this table doesn't need touching again once it lands.
+Superchip, DPC, E7) closes in v0.3.0 (`to-dos/ROADMAP.md`). Both DPC and E7
+are implemented and their tiers are pinned by `crates/rusty2600-cart`'s own
+`BankDpc::tier()`/`BankE7::tier()` — all 8 Curated-tier schemes are done.
 **Correction (`[2.2.0]`)**: this total was previously miscounted as "25
 schemes" — a stale count from before F0/3F/3E were split into three
 distinct table rows (the source `ref-docs/research-report.md` §8.1 draft
 conflated them as one combined "F0 / 3F-variants" entry); the table's
 actual row count has always been 26, this was a tally-line bug, not a
 scheme being added or removed.
+**Correction (`[2.3.0]`)**: E7's row above was ALSO stale — it read
+"Curated (not yet implemented — `T-0401-002`)" for this entire session,
+but `BankE7` has actually been implemented and wired into `detect()`
+since commit `94ca3a4` (2026-07-01), before the `v1.1.0` release line
+even began. This doc bug was silently copied forward into `[2.1.0]`'s and
+`[2.2.0]`'s own CHANGELOG/STATUS entries (both claimed "E7... a
+pre-existing, unrelated gap" among the remaining unimplemented schemes)
+without independently verifying it against the code — a documentation
+bug, not a code regression. Both prior release entries are left as
+published (this project never rewrites CHANGELOG history); this note is
+the correction.
 
 ## Notes on the special carts
 
