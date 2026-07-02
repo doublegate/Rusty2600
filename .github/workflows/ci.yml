@@ -21,7 +21,7 @@ jobs:
             libasound2-dev libudev-dev \
             libxkbcommon-dev libwayland-dev \
             libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev
-      - uses: dtolnay/rust-toolchain@1.96
+      - uses: dtolnay/rust-toolchain@1.100
         with:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown, thumbv7em-none-eabihf
@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.96
+      - uses: dtolnay/rust-toolchain@1.100
         with:
           targets: thumbv7em-none-eabihf
       - run: cargo build -p rusty2600-core --target thumbv7em-none-eabihf --no-default-features
@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.96
+      - uses: dtolnay/rust-toolchain@1.100
       # `bench_regression_check.sh` runs the whole-system frame bench
       # (`rusty2600-core`'s `system_full_ntsc_frame`) and fails the job if
       # the measured mean exceeds a fixed absolute ceiling -- see the

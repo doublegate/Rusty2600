@@ -62,7 +62,7 @@ jobs:
             libxkbcommon-dev libwayland-dev \
             libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev
 
-      - uses: dtolnay/rust-toolchain@1.96
+      - uses: dtolnay/rust-toolchain@1.100
         with:
           targets: wasm32-unknown-unknown
 

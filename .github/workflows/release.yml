@@ -25,7 +25,7 @@ jobs:
             libasound2-dev libudev-dev \
             libxkbcommon-dev libwayland-dev \
             libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev
-      - uses: dtolnay/rust-toolchain@1.96
+      - uses: dtolnay/rust-toolchain@1.100
         with:
           targets: ${{ matrix.target }}
       - run: cargo build --release -p rusty2600-frontend --target ${{ matrix.target }}
