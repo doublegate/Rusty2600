@@ -49,6 +49,27 @@ pub enum MenuAction {
     /// Emulation -> RetroAchievements -> toggle hardcore mode.
     #[cfg(feature = "retroachievements")]
     ToggleHardcore,
+    /// Tools -> Load Script... (the path comes from the native file picker).
+    #[cfg(feature = "scripting")]
+    LoadScript,
+    /// Tools -> Unload Script.
+    #[cfg(feature = "scripting")]
+    UnloadScript,
+    /// Netplay dialog -> Connect: bind `local_port` and start synchronizing
+    /// with `remote_addr` (direct-IP/LAN only — see `docs/netplay.md`). The
+    /// underlying `RollbackSession::new` API is symmetric — both peers
+    /// supply each other's address out-of-band, there is no separate
+    /// "host and wait for any connector" server mode.
+    #[cfg(feature = "netplay")]
+    NetplayConnect {
+        /// The local UDP port to bind.
+        local_port: u16,
+        /// The peer's address.
+        remote_addr: std::net::SocketAddr,
+    },
+    /// Tools -> Disconnect Netplay.
+    #[cfg(feature = "netplay")]
+    NetplayDisconnect,
     /// View -> toggle fullscreen.
     ToggleFullscreen,
     /// File -> open the Settings window.
@@ -130,6 +151,15 @@ pub struct ShellState {
     /// UI state (`crate::debugger::DebuggerState`).
     #[cfg(feature = "debug-hooks")]
     pub debugger: crate::debugger::DebuggerState,
+    /// Whether the Host/Join Netplay dialog is open.
+    #[cfg(feature = "netplay")]
+    pub netplay_dialog_open: bool,
+    /// The local UDP port text field in the Netplay dialog.
+    #[cfg(feature = "netplay")]
+    pub netplay_local_port: String,
+    /// The remote peer address (`ip:port`) text field in the Netplay dialog.
+    #[cfg(feature = "netplay")]
+    pub netplay_remote_addr: String,
 }
 
 impl ShellState {
@@ -166,6 +196,12 @@ pub struct ShellInfo {
     /// Whether RetroAchievements has successfully identified the loaded ROM.
     #[cfg(feature = "retroachievements")]
     pub cheevos_game_loaded: bool,
+    /// Whether a Lua script is currently loaded.
+    #[cfg(feature = "scripting")]
+    pub script_loaded: bool,
+    /// Whether a rollback netplay session is currently active.
+    #[cfg(feature = "netplay")]
+    pub netplay_active: bool,
 }
 
 /// Which debugger panels are currently shown.
@@ -304,6 +340,31 @@ impl ShellState {
 
                 ui.menu_button("Tools", |ui| {
                     // TODO(impl-phase): TIA audio scope, cheat editor, ROM-DB editor, TAStudio.
+                    #[cfg(feature = "scripting")]
+                    {
+                        if info.script_loaded {
+                            if ui.button("Unload Script").clicked() {
+                                actions.push(MenuAction::UnloadScript);
+                                ui.close();
+                            }
+                        } else if ui.button("Load Script...").clicked() {
+                            actions.push(MenuAction::LoadScript);
+                            ui.close();
+                        }
+                    }
+                    #[cfg(feature = "netplay")]
+                    {
+                        if info.netplay_active {
+                            if ui.button("Disconnect Netplay").clicked() {
+                                actions.push(MenuAction::NetplayDisconnect);
+                                ui.close();
+                            }
+                        } else if ui.button("Netplay...").clicked() {
+                            self.netplay_dialog_open = true;
+                            ui.close();
+                        }
+                    }
+                    #[cfg(not(any(feature = "scripting", feature = "netplay")))]
                     ui.label("(tools — TODO)");
                 });
 
@@ -367,8 +428,77 @@ impl ShellState {
                 cheevos,
             );
         }
+        #[cfg(feature = "netplay")]
+        if self.netplay_dialog_open {
+            self.render_netplay_dialog(&ctx, &mut actions);
+        }
 
         actions
+    }
+
+    /// The Host/Join Netplay dialog (`Tools -> Netplay...`).
+    ///
+    /// Direct-IP/LAN only, matching `rusty2600-netplay`'s `[1.10.0]` scope
+    /// (see `docs/netplay.md`) — Host binds `local_port` and waits; Join
+    /// connects to `remote_addr` from its own `local_port`. Malformed
+    /// input (a non-numeric port, an unparsable address) shows an inline
+    /// error rather than silently doing nothing.
+    #[cfg(feature = "netplay")]
+    fn render_netplay_dialog(&mut self, ctx: &egui::Context, actions: &mut Vec<MenuAction>) {
+        let mut open = self.netplay_dialog_open;
+        let mut error: Option<String> = None;
+        let mut submitted = false;
+        egui::Window::new("Netplay")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Local port:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.netplay_local_port)
+                            .hint_text("9000")
+                            .desired_width(80.0),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Remote address:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.netplay_remote_addr)
+                            .hint_text("192.168.1.10:9000")
+                            .desired_width(160.0),
+                    );
+                });
+                ui.label(
+                    "Both players exchange addresses out-of-band, then each enters \
+                     the other's address here — there's no separate host/join step.",
+                );
+                ui.horizontal(|ui| {
+                    let parsed_port = self.netplay_local_port.trim().parse::<u16>();
+                    if ui.button("Connect").clicked() {
+                        let remote = self.netplay_remote_addr.trim().parse();
+                        match (parsed_port, remote) {
+                            (Ok(local_port), Ok(remote_addr)) => {
+                                actions.push(MenuAction::NetplayConnect {
+                                    local_port,
+                                    remote_addr,
+                                });
+                                submitted = true;
+                            }
+                            (Err(_), _) => error = Some("local port must be 0-65535".into()),
+                            (_, Err(_)) => {
+                                error = Some("remote address must be ip:port".into());
+                            }
+                        }
+                    }
+                });
+                if let Some(e) = &error {
+                    ui.colored_label(egui::Color32::RED, e);
+                }
+            });
+        // `open` reflects the window's own close (X) button; a successful Host/Join
+        // submission closes the dialog too, but a validation error keeps it open even
+        // though neither button click flipped `open` to false.
+        self.netplay_dialog_open = open && !submitted;
     }
 
     /// The tabbed Settings window (Video / Audio / Input / System). v0.1 wires the live config

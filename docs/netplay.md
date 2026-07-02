@@ -112,11 +112,47 @@ GGRS's own internal rollback recursion) overflowed the default ~2 MiB test
 thread stack. The test now runs on an explicit 32 MiB-stack thread rather
 than relying on an external `RUST_MIN_STACK` a CI runner might not set.
 
-## What's next
+## Frontend wiring (`netplay` feature, `rusty2600-frontend/src/netplay_session.rs`)
 
-Per `to-dos/ROADMAP.md`: a `v1.10.x` follow-up wires `RollbackSession`
-into `rusty2600-frontend` (a real host/join-game menu, live per-frame
-input capture), adds STUN/hole-punch NAT traversal for real internet
-play, and adds the WebRTC browser transport (reusing the existing wasm
-build). Only once frontend wiring lands does rollback netplay become
-something a user can actually play.
+A real `NetplaySession` wrapper, a `netplay` feature flag (off by
+default), a `Tools -> Netplay...` Connect dialog (local port + peer
+address text fields), and live per-frame input capture now exist.
+`RollbackSession::new`'s API is symmetric — both peers supply each
+other's address out-of-band — so there is no separate "host and wait for
+any connector" mode; the dialog has a single Connect action, not
+Host/Join.
+
+**Why this bypasses the `emu-thread` background loop.**
+`RollbackSession` owns and steps its OWN internal `System` — not
+something the existing `emu_thread`-spawned background thread (which
+steps `EmuCore.system` directly via `crate::runahead::step_frame`) can
+drive without a much larger refactor. Instead, connecting sets
+`EmuCore.paused = true` (so the background thread's own `paused` gate
+makes it skip stepping and sleep — no separate suppression plumbing
+needed), and `app.rs`'s `render()` drives the session directly inside its
+existing brief per-frame lock: `session.advance_frame(local_input)`, then
+copy the resulting `System` into `EmuCore.system` and call the new
+`EmuCore::extract_frame()` (a small, deliberate, additive duplication of
+`run_frame`'s video-crop/audio-drain tail — kept as a new method rather
+than refactoring `run_frame` itself, to keep the change surgical) to
+produce this frame's framebuffer/audio the same way `run_frame`/
+`step_frame` already do. **Run-ahead is bypassed while netplay is
+active** — an acceptable, documented scope cut, since the two features
+don't have an obvious combined semantics (run-ahead speculates on LOCAL
+input only, meaningless once a rollback session is authoritative over the
+timeline).
+
+**`WritesLocked` gained a real `netplay_active` field this same pass**
+(see `docs/scripting.md`) — a connected session now locks Lua script
+writes too, for the same reason RA hardcore mode does: an unreplicated
+local write would silently desync the two peers' otherwise bit-identical
+timelines.
+
+**Still deferred, unchanged from `[1.10.0]`'s own scope**: STUN/hole-punch
+NAT traversal for real internet play and the WebRTC browser transport —
+both still need a genuine external peer no sandbox can verify against.
+Console switches and paddles remain un-modeled per-player (same
+"no natural which-peer-owns-this mapping" reasoning as before). Real
+two-peer verification so far is localhost-only (`netplay_session.rs`'s
+own test, two `NetplaySession`s on `127.0.0.1` with different ports) —
+genuine LAN/cross-machine verification remains open.

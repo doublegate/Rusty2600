@@ -63,6 +63,16 @@ hd-pack = []
 # feature is a real no-op there rather than something that needs its own
 # wasm-specific exclusion.
 retroachievements = ["dep:rusty2600-cheevos"]
+# Lua scripting (`emu` table over a live game). Pulls in `rusty2600-script`
+# (`mlua`, vendoring Lua 5.4 via a C compiler) — off by default so the
+# shipped build links no extra C, same rationale as `retroachievements`.
+# Native-only: `rusty2600-script` is a `std`-only crate, and this feature's
+# frontend module is `cfg(not(target_arch = "wasm32"))`-gated.
+scripting = ["dep:rusty2600-script", "dep:mlua"]
+# 2-player rollback netplay (direct-IP/LAN only — see `docs/netplay.md`).
+# Pulls in `rusty2600-netplay` (wraps `ggrs`). Off by default; native-only
+# for the same reason as `scripting` (UDP sockets have no wasm32 story yet).
+netplay = ["dep:rusty2600-netplay"]
 
 [dependencies]
 rusty2600-core = { path = "../rusty2600-core", version = "2.0.0" }
@@ -103,6 +113,11 @@ clap = { version = "4", features = ["derive", "color", "cargo"] }
 clap_complete = "4"
 anstyle = "1"
 ratatui = { version = "0.30", optional = true }
+rusty2600-script = { path = "../rusty2600-script", version = "2.0.0", optional = true }
+rusty2600-netplay = { path = "../rusty2600-netplay", version = "2.0.0", optional = true }
+# Referenced directly (`mlua::Error`) by the `scripting`-gated frontend
+# module; version/features must match `rusty2600-script`'s own pin exactly.
+mlua = { version = "0.10", features = ["lua54", "vendored"], optional = true }
 
 # wasm32 target deps. The chip stack is `no_std + alloc`, so the browser build
 # only needs the wasm-bindgen + web-sys bridge here.

@@ -290,6 +290,68 @@ impl EmuCore {
         self.frame_count = self.frame_count.wrapping_add(1);
     }
 
+    /// Extract this frame's presentation output (framebuffer crop + drained,
+    /// DC-blocked audio) from `self.system`'s CURRENT state, without
+    /// stepping the CPU.
+    ///
+    /// For a caller (rollback netplay's frontend wiring, `netplay` feature)
+    /// that already advanced `self.system` forward by its own means (e.g.
+    /// `rusty2600_netplay::RollbackSession::advance_frame`, which owns and
+    /// steps its own `System` internally) and only needs the same video/
+    /// audio post-processing [`Self::run_frame`] performs internally after
+    /// its own stepping loop. A small, deliberate duplication of
+    /// `run_frame`'s tail (crop + audio-drain) rather than refactoring
+    /// `run_frame` itself to share a common tail method — kept additive to
+    /// avoid touching `run_frame`'s/`step_frame`'s existing bodies.
+    #[cfg(feature = "netplay")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_lossless
+    )]
+    pub fn extract_frame(&mut self) {
+        let vblank_lines = match self.region {
+            crate::palette::Region::Ntsc => 37,
+            _ => 42,
+        };
+        let active_h = self.region.active_height() as u16;
+
+        let samples = core::mem::take(&mut self.system.bus.tia.audio_buffer);
+        if !samples.is_empty() {
+            let mut out = Vec::with_capacity(samples.len());
+            for s in samples {
+                let normalized = (s as f32 / 15.0) - 1.0;
+                let r = 0.995;
+                let y = normalized - self.dc_blocker_x + r * self.dc_blocker_y;
+                self.dc_blocker_x = normalized;
+                self.dc_blocker_y = y;
+                out.push(y);
+            }
+            if let Some(tx) = &mut self.audio_tx {
+                tx.push_samples(&out);
+            }
+        }
+
+        let video = &self.system.bus.tia.video_buffer;
+        for y in 0..active_h as usize {
+            let sl = y + vblank_lines as usize;
+            for x in 0..160usize {
+                let src = sl * 160 + x;
+                let color_idx = video.get(src).copied().unwrap_or(0);
+                let rgb = self.region.lookup(color_idx >> 1);
+                let off = (y * 160 + x) * 4;
+                if off + 3 < self.framebuffer.len() {
+                    self.framebuffer[off] = (rgb >> 16) as u8;
+                    self.framebuffer[off + 1] = (rgb >> 8) as u8;
+                    self.framebuffer[off + 2] = rgb as u8;
+                    self.framebuffer[off + 3] = 255;
+                }
+            }
+        }
+
+        self.frame_count = self.frame_count.wrapping_add(1);
+    }
+
     /// Produce exactly one frame's worth of color clocks, accumulating beam dots into
     /// `frames` (the dedicated-emu-thread path).
     #[allow(
