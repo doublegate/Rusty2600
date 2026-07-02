@@ -82,6 +82,15 @@ impl Default for AudioConfig {
     }
 }
 
+/// The number of manual save-state slots per ROM (`File -> Save State` /
+/// `Load State`), matching RustyNES's own 8-slot convention — a 2600 cart's
+/// serialized `System` is tiny, so 8 slots costs nothing.
+pub const SAVE_SLOT_COUNT: u8 = 8;
+
+/// The save-state slot file extension, matching this project's existing
+/// `.r26m` TAS-movie convention.
+const SAVE_SLOT_EXTENSION: &str = "r26s";
+
 /// The full frontend config (serialized to `config.toml`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -141,6 +150,52 @@ impl Config {
     }
 }
 
+/// The base directory all ROMs' save-state slots live under
+/// (`<platform-data-dir>/Rusty2600/saves`), or `None` if no data dir is
+/// resolvable.
+///
+/// Native-only, mirroring [`Config::path`]'s own exclusion — separate from
+/// the config dir since these are user save DATA, not settings.
+#[cfg(not(target_arch = "wasm32"))]
+#[must_use]
+pub fn saves_base_dir() -> Option<std::path::PathBuf> {
+    directories::ProjectDirs::from("io.github", "doublegate", "Rusty2600")
+        .map(|d| d.data_dir().join("saves"))
+}
+
+/// The pure path-construction rule, parameterized over an explicit `base`
+/// directory so it's testable without touching the real platform data dir
+/// (see the `tests` module below) — `save_slot_dir`/`save_slot_path` are
+/// thin wrappers supplying the real [`saves_base_dir`].
+fn save_slot_dir_under(base: &std::path::Path, rom_tag: u64) -> std::path::PathBuf {
+    base.join(format!("{rom_tag:016x}"))
+}
+
+/// See [`save_slot_dir_under`].
+fn save_slot_path_under(base: &std::path::Path, rom_tag: u64, slot: u8) -> std::path::PathBuf {
+    save_slot_dir_under(base, rom_tag).join(format!("slot_{slot}.{SAVE_SLOT_EXTENSION}"))
+}
+
+/// The save-slot directory for `rom_tag`
+/// (`<saves-base-dir>/<rom_tag as 16-digit lowercase hex>/`).
+///
+/// Keeping each ROM's slots in their own directory means different games'
+/// saves can never collide, and a game's whole save history is trivially
+/// deletable/relocatable as one unit. Native-only.
+#[cfg(not(target_arch = "wasm32"))]
+#[must_use]
+pub fn save_slot_dir(rom_tag: u64) -> Option<std::path::PathBuf> {
+    saves_base_dir().map(|base| save_slot_dir_under(&base, rom_tag))
+}
+
+/// The path to one save-state slot file
+/// (`<save-slot-dir>/slot_<N>.r26s`). Native-only.
+#[cfg(not(target_arch = "wasm32"))]
+#[must_use]
+pub fn save_slot_path(rom_tag: u64, slot: u8) -> Option<std::path::PathBuf> {
+    saves_base_dir().map(|base| save_slot_path_under(&base, rom_tag, slot))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +221,65 @@ mod tests {
             s.contains("SECAM"),
             "region should serialize UPPERCASE: {s}"
         );
+    }
+
+    #[test]
+    fn slot_path_is_keyed_by_rom_tag_and_slot() {
+        let base = std::path::Path::new("/tmp/rusty2600-example");
+        let a = save_slot_path_under(base, 0xDEAD_BEEF, 3);
+        let b = save_slot_path_under(base, 0xDEAD_BEEF, 4);
+        let c = save_slot_path_under(base, 0xCAFE_F00D, 3);
+        assert_ne!(a, b, "different slots must not collide");
+        assert_ne!(a, c, "different ROMs must not collide");
+        assert!(a.to_string_lossy().contains("deadbeef"));
+        assert!(a.to_string_lossy().ends_with("slot_3.r26s"));
+    }
+
+    /// A real end-to-end save-then-load through the slot-path plumbing
+    /// (the one genuinely new integration point this feature adds on top of
+    /// the already-tested `SaveState::capture`/`encode`/`decode`/`restore`)
+    /// — isolated from the real platform data dir via an explicit `base`
+    /// under `std::env::temp_dir()`, unique per test run so parallel test
+    /// threads never collide, cleaned up afterward.
+    #[test]
+    fn save_then_load_round_trips_through_slot_path() {
+        use rusty2600_core::{SaveState, System};
+
+        let base = std::env::temp_dir().join(format!(
+            "rusty2600-slot-test-{}-{}",
+            std::process::id(),
+            "save_then_load_round_trips_through_slot_path"
+        ));
+        let rom_tag = 0x1234_5678_9abc_def0_u64;
+        let slot = 2u8;
+        let dir = save_slot_dir_under(&base, rom_tag);
+        let path = save_slot_path_under(&base, rom_tag, slot);
+        std::fs::create_dir_all(&dir).expect("create slot dir");
+
+        let mut system = System::new(7);
+        system.step_instruction();
+        system.step_instruction();
+        let before_pc = system.cpu.pc;
+        let before_clocks = system.color_clocks();
+
+        let bytes = SaveState::capture(&system, rom_tag).encode();
+        std::fs::write(&path, &bytes).expect("write slot file");
+
+        // Advance the "live" system further so restoring is a real rewind,
+        // not a no-op identity check.
+        system.step_instruction();
+        system.step_instruction();
+        assert_ne!(system.color_clocks(), before_clocks);
+
+        let read_back = std::fs::read(&path).expect("read slot file");
+        let restored = SaveState::restore(&read_back, rom_tag).expect("slot file should restore");
+
+        assert_eq!(restored.cpu.pc, before_pc);
+        assert_eq!(restored.color_clocks(), before_clocks);
+
+        // A wrong `rom_tag` must be rejected, not silently loaded.
+        assert!(SaveState::restore(&read_back, rom_tag.wrapping_add(1)).is_err());
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

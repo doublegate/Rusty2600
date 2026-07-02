@@ -591,7 +591,9 @@ impl App {
             } else {
                 rusty2600_script::Overlay::default()
             };
-            let info = ShellInfo {
+            #[cfg(not(target_arch = "wasm32"))]
+            let rom_tag = emu.rom_tag();
+            let mut info = ShellInfo {
                 board_tier: emu.board_tier().map(str::to_string),
                 region: emu.region,
                 fps: active.fps_smoothed,
@@ -608,8 +610,21 @@ impl App {
                 overlay: script_overlay,
                 #[cfg(feature = "netplay")]
                 netplay_active: active.netplay.is_some(),
+                #[cfg(not(target_arch = "wasm32"))]
+                save_slots: Vec::new(),
             };
             drop(emu); // release the brief lock BEFORE the wgpu upload + egui pass
+            // Probing save-slot status is pure filesystem `stat` — deliberately
+            // done AFTER dropping the emu lock (see `ShellInfo::save_slots`'s
+            // doc comment).
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                info.save_slots = rom_tag.map_or_else(Vec::new, |tag| {
+                    (0..crate::config::SAVE_SLOT_COUNT)
+                        .map(|slot| crate::shell::SaveSlotInfo::probe(tag, slot))
+                        .collect()
+                });
+            }
             (fb, dims, info)
         };
         active.gfx.upload(&fb, fb_dims.0, fb_dims.1);
@@ -773,6 +788,58 @@ impl App {
                     #[cfg(feature = "retroachievements")]
                     active.cheevos.close_rom();
                     active.shell.status = "ROM closed".into();
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                MenuAction::SaveStateSlot(slot) => {
+                    let emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                    let Some(rom_tag) = emu.rom_tag() else {
+                        drop(emu);
+                        active.shell.status = "no ROM loaded".into();
+                        continue;
+                    };
+                    let bytes = rusty2600_core::SaveState::capture(&emu.system, rom_tag).encode();
+                    drop(emu);
+                    let Some(path) = crate::config::save_slot_path(rom_tag, slot) else {
+                        active.shell.status = "no writable save directory".into();
+                        continue;
+                    };
+                    let result = path
+                        .parent()
+                        .map_or(Ok(()), std::fs::create_dir_all)
+                        .and_then(|()| std::fs::write(&path, &bytes));
+                    active.shell.status = match result {
+                        Ok(()) => format!("Saved to slot {slot}"),
+                        Err(e) => format!("save failed: {e}"),
+                    };
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                MenuAction::LoadStateSlot(slot) => {
+                    let rom_tag = active
+                        .core
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .rom_tag();
+                    let Some(rom_tag) = rom_tag else {
+                        active.shell.status = "no ROM loaded".into();
+                        continue;
+                    };
+                    let Some(path) = crate::config::save_slot_path(rom_tag, slot) else {
+                        active.shell.status = "no writable save directory".into();
+                        continue;
+                    };
+                    active.shell.status = match std::fs::read(&path) {
+                        Ok(bytes) => match rusty2600_core::SaveState::restore(&bytes, rom_tag) {
+                            Ok(system) => {
+                                let mut emu =
+                                    active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                                emu.system = system;
+                                drop(emu);
+                                format!("Loaded slot {slot}")
+                            }
+                            Err(e) => format!("slot {slot} load failed: {e}"),
+                        },
+                        Err(e) => format!("slot {slot} read failed: {e}"),
+                    };
                 }
                 #[cfg(feature = "retroachievements")]
                 MenuAction::ToggleHardcore => {

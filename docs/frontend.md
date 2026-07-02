@@ -117,6 +117,36 @@ synthesis (ADR 0004). Because the core is deterministic (seeded power-on phase,
 no OS RNG), a snapshot is a full serialization of `System` state and restores
 bit-identically — the basis for rewind, run-ahead, and (later) netplay rollback.
 
+### Manual save-state slots (`v2.4.0`)
+
+`File -> Save State` / `Load State` expose 8 numbered slots per ROM — the
+ordinary "save my game" menu feature, built entirely on top of the rewind
+ring's already-real `SaveState` format (`rusty2600-core`, ADR 0007); no new
+wire format was needed.
+
+- **ROM identity**: `EmuCore::load_rom` computes a 64-bit FNV-1a hash over
+  the raw ROM bytes (`rom_tag`), stored for the session's lifetime. This is
+  the same opaque `rom_tag: u64` `SaveState::capture`/`restore` already
+  required — the frontend just had no caller supplying one until now.
+- **On-disk layout**: `<platform-data-dir>/Rusty2600/saves/<rom_tag as
+  16-digit lowercase hex>/slot_<N>.r26s` (`crate::config::save_slot_dir`/
+  `save_slot_path`). Keying by `rom_tag` means two different ROMs' slots can
+  never collide, and one game's whole save history is a single deletable/
+  relocatable directory. `.r26s` matches the project's existing `.r26m`
+  TAS-movie extension convention. Native-only — the wasm build has no
+  filesystem save path yet (a later release's scope, alongside
+  `localStorage`/IndexedDB persistence for Settings).
+- **Menu status**: each slot's existence + last-modified timestamp is
+  probed fresh every frame via plain filesystem `stat` calls
+  (`SaveSlotInfo::probe`), deliberately AFTER the brief emu lock is
+  dropped — the probe only needs the `rom_tag` copied out under the lock,
+  never the emulator itself, so the File menu never adds emu-lock
+  contention to show real per-slot info.
+- **Load safety**: `SaveState::restore`'s existing `rom_tag` mismatch check
+  means a slot file can never be silently loaded against the wrong
+  cartridge; a missing, corrupt, or mismatched slot file surfaces a clear
+  status-bar message instead of panicking or silently doing nothing.
+
 ## wasm
 
 `wasm-winit` (default feature) and `wasm-canvas` (lightweight embed) both
