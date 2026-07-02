@@ -86,6 +86,30 @@ pub struct EmuCore {
     /// State for the high-pass DC blocker.
     dc_blocker_x: f32,
     dc_blocker_y: f32,
+    /// An opaque identity tag for the currently-loaded ROM (an FNV-1a hash of
+    /// its raw bytes), or `None` when no ROM is loaded. Passed to
+    /// [`SaveState::capture`]/[`SaveState::restore`] by the manual save-state
+    /// slot feature (`crate::config::save_slot_path`) so a slot file can't
+    /// silently be loaded against the wrong cartridge — see
+    /// `save_state.rs`'s own module doc for why the core itself stays
+    /// agnostic to how this tag is computed.
+    rom_tag: Option<u64>,
+}
+
+/// A 64-bit FNV-1a hash of `bytes` — a fast, allocation-free, dependency-free
+/// non-cryptographic hash, sufficient for a ROM identity tag (collisions
+/// would only mean two different ROMs can read each other's save slots,
+/// astronomically unlikely for the tiny number of ROMs any one user loads).
+#[must_use]
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = OFFSET_BASIS;
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
 }
 
 impl EmuCore {
@@ -107,6 +131,7 @@ impl EmuCore {
             frame_count: 0,
             dc_blocker_x: 0.0,
             dc_blocker_y: 0.0,
+            rom_tag: None,
         }
     }
 
@@ -131,6 +156,7 @@ impl EmuCore {
         self.snapshots.clear();
         self.frame_count = 0;
         self.rom_loaded = true;
+        self.rom_tag = Some(fnv1a64(rom));
         Ok(())
     }
 
@@ -142,6 +168,7 @@ impl EmuCore {
         self.frame_count = 0;
         self.rom_loaded = false;
         self.board_tier = None;
+        self.rom_tag = None;
         self.framebuffer.iter_mut().for_each(|b| *b = 0);
     }
 
@@ -163,6 +190,14 @@ impl EmuCore {
     #[must_use]
     pub const fn board_tier(&self) -> Option<&'static str> {
         self.board_tier
+    }
+
+    /// The currently-loaded ROM's identity tag, if any — the value passed to
+    /// [`SaveState::capture`]/[`SaveState::restore`] by the manual save-state
+    /// slot feature.
+    #[must_use]
+    pub const fn rom_tag(&self) -> Option<u64> {
+        self.rom_tag
     }
 
     /// The active display dimensions `(w, h)` for the current region.
@@ -624,5 +659,29 @@ mod tests {
         let before = core.system.color_clocks();
         core.rewind();
         assert_eq!(core.system.color_clocks(), before);
+    }
+
+    #[test]
+    fn rom_tag_is_set_on_load_and_cleared_on_close() {
+        let mut core = EmuCore::new(0);
+        assert_eq!(core.rom_tag(), None);
+        // A minimal 2K ROM image: any non-empty, detectable board will do —
+        // this crate's `detect()` recognizes a bare 2 KiB image as `Bank2K`.
+        let rom = vec![0u8; 2048];
+        core.load_rom(&rom).expect("2K image should be detected");
+        assert!(core.rom_tag().is_some());
+        core.close_rom();
+        assert_eq!(core.rom_tag(), None);
+    }
+
+    #[test]
+    fn fnv1a64_is_deterministic_and_bytes_sensitive() {
+        let a = fnv1a64(b"rusty2600");
+        let b = fnv1a64(b"rusty2600");
+        let c = fnv1a64(b"Rusty2600");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        // The well-known FNV-1a 64-bit test vector for the empty string.
+        assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
     }
 }

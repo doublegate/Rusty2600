@@ -6,6 +6,20 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Manual save-state slots** (`v2.4.0` "Save Point") — `File -> Save State`
+  / `Load State` menus with 8 numbered slots per ROM, built on the already-
+  real `SaveState` format (`rusty2600-core`, ADR 0007). Each ROM gets its
+  own slot directory keyed by an FNV-1a hash of its raw bytes
+  (`crate::config::save_slot_path`, under the platform data dir), so a
+  loaded ROM's slots can never be silently loaded against a different
+  cartridge (`SaveState::restore`'s existing `rom_tag` check enforces this).
+  Native-only for now; wasm-side persistence (`localStorage`/IndexedDB) is
+  a later release's scope. The File menu shows each slot's status (empty,
+  or its last-saved timestamp) probed fresh each frame via cheap filesystem
+  `stat` calls, never touching the emu lock.
+
 ## [2.3.0] - 2026-07-02 - "Full Catalogue"
 
 Closes the cart bankswitch catalogue to 26/26 (CDF/CDFJ/CDFJ+, the last
