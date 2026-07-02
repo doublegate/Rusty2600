@@ -224,9 +224,10 @@ impl ApplicationHandler for App {
                         Ok((bytes, _entry_name)) => {
                             if let Err(e) = emu.load_rom(&bytes) {
                                 eprintln!("rusty2600: failed to load {}: {e}", path.display());
+                            } else {
+                                #[cfg(feature = "retroachievements")]
+                                cheevos.load_rom(&bytes);
                             }
-                            #[cfg(feature = "retroachievements")]
-                            cheevos.load_rom(&bytes);
                         }
                         Err(e) => {
                             eprintln!(
@@ -633,16 +634,25 @@ impl App {
                 save_slots: Vec::new(),
             };
             drop(emu); // release the brief lock BEFORE the wgpu upload + egui pass
-            // Probing save-slot status is pure filesystem `stat` — deliberately
-            // done AFTER dropping the emu lock (see `ShellInfo::save_slots`'s
-            // doc comment).
+            // Probing save-slot status is 8 filesystem `stat` calls — too
+            // expensive to redo every frame at 60+ FPS, so `active.shell`
+            // caches the result and this only re-probes when the loaded ROM
+            // changed or a save/load-slot action marked the cache dirty (see
+            // `ShellState::save_slots_cache`'s doc comment). Deliberately
+            // done AFTER dropping the emu lock either way.
             #[cfg(not(target_arch = "wasm32"))]
             {
-                info.save_slots = rom_tag.map_or_else(Vec::new, |tag| {
-                    (0..crate::config::SAVE_SLOT_COUNT)
-                        .map(|slot| crate::shell::SaveSlotInfo::probe(tag, slot))
-                        .collect()
-                });
+                if rom_tag != active.shell.save_slots_cache_rom_tag || active.shell.save_slots_dirty
+                {
+                    active.shell.save_slots_cache = rom_tag.map_or_else(Vec::new, |tag| {
+                        (0..crate::config::SAVE_SLOT_COUNT)
+                            .map(|slot| crate::shell::SaveSlotInfo::probe(tag, slot))
+                            .collect()
+                    });
+                    active.shell.save_slots_cache_rom_tag = rom_tag;
+                    active.shell.save_slots_dirty = false;
+                }
+                info.save_slots.clone_from(&active.shell.save_slots_cache);
             }
             (fb, dims, info)
         };
@@ -787,7 +797,8 @@ impl App {
                                             .core
                                             .lock()
                                             .unwrap_or_else(PoisonError::into_inner);
-                                        if let Err(e) = emu.load_rom(&bytes) {
+                                        let load_result = emu.load_rom(&bytes);
+                                        if let Err(e) = &load_result {
                                             active.shell.status = format!("load failed: {e}");
                                         } else {
                                             let rom_label = entry_name
@@ -802,8 +813,15 @@ impl App {
                                                 .set_title(&format!("Rusty2600 - {rom_label}"));
                                         }
                                         drop(emu);
-                                        #[cfg(feature = "retroachievements")]
-                                        active.cheevos.load_rom(&bytes);
+                                        // Only spend the (potentially slow —
+                                        // MD5 + RetroAchievements lookup)
+                                        // cheevos load on a ROM that actually
+                                        // loaded; an invalid/unsupported
+                                        // image has nothing to identify.
+                                        if load_result.is_ok() {
+                                            #[cfg(feature = "retroachievements")]
+                                            active.cheevos.load_rom(&bytes);
+                                        }
                                     }
                                     Err(e) => {
                                         active.shell.status = format!("zip extraction failed: {e}");
@@ -853,6 +871,10 @@ impl App {
                         Ok(()) => format!("Saved to slot {slot}"),
                         Err(e) => format!("save failed: {e}"),
                     };
+                    // The slot's on-disk status (existence/timestamp) may
+                    // have just changed — force the next frame's menu probe
+                    // rather than waiting for the loaded ROM to change too.
+                    active.shell.save_slots_dirty = true;
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 MenuAction::LoadStateSlot(slot) => {
@@ -875,6 +897,13 @@ impl App {
                                 let mut emu =
                                     active.core.lock().unwrap_or_else(PoisonError::into_inner);
                                 emu.system = system;
+                                // The rewind ring holds snapshots from
+                                // BEFORE this load — without clearing it,
+                                // pressing Rewind right after a slot load
+                                // would jump back to the pre-load timeline,
+                                // which is a discontinuous, confusing jump
+                                // relative to what the player just did.
+                                emu.snapshots.clear();
                                 drop(emu);
                                 format!("Loaded slot {slot}")
                             }

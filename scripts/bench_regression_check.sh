@@ -29,14 +29,17 @@ CEILING_NS=3750000
 BENCH_NAME="system_full_ntsc_frame"
 ESTIMATES_JSON="target/criterion/${BENCH_NAME}/new/estimates.json"
 
+BENCH_OUT="$(mktemp -t bench_regression_check.XXXXXX.out)"
+trap 'rm -f "$BENCH_OUT"' EXIT
+
 echo "==> Running cargo bench -p rusty2600-core --bench frame_bench"
-if ! cargo bench -p rusty2600-core --bench frame_bench -- --output-format bencher >/tmp/bench_regression_check.out 2>&1; then
-  cat /tmp/bench_regression_check.out
+if ! cargo bench -p rusty2600-core --bench frame_bench -- --output-format bencher >"$BENCH_OUT" 2>&1; then
+  cat "$BENCH_OUT"
   echo
   echo "BENCH FAILED TO RUN"
   exit 1
 fi
-cat /tmp/bench_regression_check.out
+cat "$BENCH_OUT"
 
 if [ ! -f "$ESTIMATES_JSON" ]; then
   echo

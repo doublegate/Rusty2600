@@ -15,7 +15,7 @@
 use std::io::{Cursor, Read};
 
 /// The largest committed 2600 ROM image size across the whole cart catalogue
-/// (`BankAr`'s 64 KiB Supercharker image, `rusty2600-cart`'s largest fixed
+/// (`BankAr`'s 64 KiB Supercharger image, `rusty2600-cart`'s largest fixed
 /// bank array) is `0x1_0000` (64 KiB). 1 MiB is a generous ceiling — 16x
 /// headroom — against a zip entry lying about (or exploiting) its size.
 const MAX_ROM_SIZE: usize = 1024 * 1024;
@@ -107,6 +107,14 @@ pub fn extract_first_rom(bytes: &[u8]) -> Result<(Vec<u8>, String), RomArchiveEr
             continue;
         }
 
+        // The entry's own declared size, used only as a pre-allocation hint
+        // below — captured BEFORE the mutable `by_ref()` borrow, and capped
+        // at `MAX_ROM_SIZE` so a bogus huge claimed size can't over-allocate
+        // (the `take` below, not this hint, is what actually bounds how many
+        // bytes can ever be produced).
+        let size_hint =
+            usize::try_from(entry.size().min(MAX_ROM_SIZE as u64)).unwrap_or(MAX_ROM_SIZE);
+
         // Bound the READ, not just the declared size — a zip's central
         // directory can claim any uncompressed size it likes, so trusting
         // `entry.size()` alone would not actually stop a decompression
@@ -115,7 +123,7 @@ pub fn extract_first_rom(bytes: &[u8]) -> Result<(Vec<u8>, String), RomArchiveEr
         let mut limited = entry
             .by_ref()
             .take(u64::try_from(MAX_ROM_SIZE + 1).unwrap_or(u64::MAX));
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(size_hint);
         limited
             .read_to_end(&mut out)
             .map_err(|e| RomArchiveError::Malformed(e.to_string()))?;

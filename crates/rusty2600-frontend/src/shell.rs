@@ -169,7 +169,7 @@ impl SaveSlotInfo {
 }
 
 /// Formats a Unix timestamp as `YYYY-MM-DD HH:MM:SS UTC` using only
-/// `core`/`std` civil-calendar arithmetic (Howard Hinnant's `days_from_civil`
+/// `core`/`std` civil-calendar arithmetic (Howard Hinnant's `civil_from_days`
 /// algorithm, public domain) — avoids pulling `chrono`/`time` into this
 /// crate purely for a save-slot menu label.
 #[cfg(not(target_arch = "wasm32"))]
@@ -261,6 +261,28 @@ pub struct ShellState {
     /// The remote peer address (`ip:port`) text field in the Netplay dialog.
     #[cfg(feature = "netplay")]
     pub netplay_remote_addr: String,
+    /// The cached save-slot statuses shown in the File -> Save State / Load
+    /// State submenus, and the `rom_tag` they were probed against.
+    ///
+    /// Probing is 8 filesystem `stat` calls (see [`SaveSlotInfo::probe`]) —
+    /// re-running that every single frame at 60+ FPS would be needless
+    /// blocking I/O on the render path. Instead this cache is only
+    /// refreshed when the loaded ROM changes (`rom_tag` differs from the
+    /// cached one) or [`Self::save_slots_dirty`] is set (after a
+    /// save/load-slot action actually changes what's on disk) — see
+    /// `app.rs`'s frame-info population and its `SaveStateSlot`/
+    /// `LoadStateSlot` dispatch arms.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub save_slots_cache: Vec<SaveSlotInfo>,
+    /// See [`Self::save_slots_cache`].
+    #[cfg(not(target_arch = "wasm32"))]
+    pub save_slots_cache_rom_tag: Option<u64>,
+    /// Forces a re-probe of [`Self::save_slots_cache`] on the next frame
+    /// regardless of `rom_tag`, set after a save/load-slot action so the
+    /// menu reflects the change immediately rather than on the next ROM
+    /// load. See [`Self::save_slots_cache`].
+    #[cfg(not(target_arch = "wasm32"))]
+    pub save_slots_dirty: bool,
 }
 
 impl ShellState {
