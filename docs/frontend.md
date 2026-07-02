@@ -110,6 +110,41 @@ path and the debug snapshot already take, peeking the bus via
   difficulty switches, all on RIOT `SWCHB`. The frontend surfaces these as UI
   toggles (a real-panel affordance), since many games read them at boot.
 
+### Keyboard controller / Trak-Ball — researched, not modeled (`v2.5.0`)
+
+A RustyNES gap-analysis question: are the Atari Keyboard (Keypad) Controller
+and the CX-22/CX-80 Trak-Ball worth modeling? Checked against Stella's own
+implementation and properties database (`ref-proj/stella/`) rather than
+relying on memory:
+
+- **Keyboard/Keypad Controller** (`Controller::Type::Keyboard`,
+  `ref-proj/stella/src/emucore/Keyboard.hxx`) — a 12-key numeric keypad (0-9,
+  `*`, `#`), wired through the same `AnalogReadout` machinery this crate's
+  own `AnalogPaddle` (`v2.1.0`) already ports. Stella's `stella.pro`
+  properties database tags **40 ROM entries** with this controller,
+  including real official Atari releases (*Brain Games*, 1978) alongside
+  prototypes and homebrew (*Big Bird's Egg Catch*, *Oscar's Trash Race*) —
+  a genuinely real, if minor, peripheral.
+- **Trak-Ball** (`Controller::Type::TrakBall`, a `PointingDevice` subclass
+  using 2-bit quadrature-encoded relative motion, not an absolute-position
+  or RC-circuit signal) — Stella's properties database tags only **4
+  entries (2 distinct ROMs)**, both homebrew hacks (*Missile Command
+  (Trakball)* by Thomas Jentzsch, 2002) — **no official Atari 2600
+  cartridge ever shipped with Trak-Ball support**; the CX-22/CX-80
+  Trak-Ball's real historical home was the 5200/8-bit computer line and
+  arcade cabinets, not the VCS itself.
+
+**Decision: neither is modeled in this arc.** The Trak-Ball has no
+official-release justification at all. The Keyboard controller has some
+real (if minor) historical footing, but at 40 ROMs out of a catalogue of
+several thousand known 2600 titles it remains a genuinely niche peripheral,
+and — unlike the paddle, which nearly every 2600 owner had and which
+directly gated real gameplay accuracy for a meaningful fraction of the
+library (`v2.1.0`) — no title requiring it is load-bearing for this
+project's own accuracy or compatibility goals. Revisit only if a specific,
+concrete user need for a Keyboard-controller title surfaces; this is not a
+permanent "never," just a deliberately deprioritized "not yet."
+
 ## Save-states, rewind, run-ahead
 
 All snapshot/restore and rate control live **in the frontend**, never in the core

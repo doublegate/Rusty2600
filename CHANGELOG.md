@@ -6,6 +6,18 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Documentation-only research decision** (`v2.5.0` "Web Awakens", no code
+  change) — checked whether the Atari Keyboard/Keypad Controller and the
+  Trak-Ball are worth modeling, against Stella's own implementation and
+  properties database rather than assumption. Trak-Ball: zero official
+  Atari 2600 releases used it (only 2 homebrew ROMs in Stella's DB).
+  Keyboard: 40 ROMs including one real official release (*Brain Games*,
+  1978), but still niche relative to the whole catalogue. Neither is
+  modeled this arc — deliberately deprioritized, not permanently ruled
+  out. See `docs/frontend.md`.
+
 ## [2.4.0] - 2026-07-02 - "Save Point"
 
 The first release of the RustyNES gap-closure arc (`v2.4.0 -> v3.0.0`) and
