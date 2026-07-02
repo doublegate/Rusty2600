@@ -59,8 +59,8 @@ follow-up rather than a rewrite.
   subsystems a real lock to fold in.
 - **`overlay.rs`** — `Overlay`/`TextPrimitive`/`RectPrimitive`/
   `PixelPrimitive`: accumulates `emu.drawText`/`drawRect`/`drawPixel`
-  calls into a per-frame buffer a host can consume. Compositing this onto
-  the presented frame is part of the deferred frontend integration above.
+  calls into a per-frame buffer a host can consume. `[2.3.0]` wires this
+  into the frontend's render pipeline — see "Overlay compositing" below.
 - **`engine.rs`** — `ScriptEngine<B: ScriptBus>`: owns the Lua VM and
   installs the full `emu` table via `Rc<RefCell<_>>`-shared closures over
   the host's `ScriptBus` implementation.
@@ -120,11 +120,31 @@ input), so they're recorded into override fields the frontend ORs into the
 next frame's real `InputState` instead. An honest, deliberate indirection
 layer — not a corner cut — documented in `scripting.rs`'s module doc.
 
-**Overlay compositing is STILL deferred.** `ScriptState::take_overlay`
-exists and works, but no `rusty2600-frontend` render-path code consumes
-it yet — the wgpu blend-over-the-emulated-frame step remains its own
-follow-up (touching `gfx.rs`/`shader_pass.rs`), the same honest-
-partial-landing call this project made for `[1.4.0]`'s sprite-pack splice.
+**Overlay compositing landed in `[2.3.0]`.** `app.rs`'s render pass now
+calls `ScriptState::take_overlay()` right after `script.tick(...)` (inside
+the same brief emu lock) and draws the result via an unclipped `egui`
+foreground layer painter (`app.rs`'s `draw_script_overlay`), piggybacking
+on the always-on egui shell pass rather than adding a new
+`wgpu::RenderPipeline` — `gfx.rs`/`shader_pass.rs` are untouched. This
+gets `drawText` working via egui's own font rasterization (no glyph atlas
+to build) at essentially no extra render-pipeline cost.
+
+Coordinates are declared in emulated-frame pixels; the render pass scales
+them onto the actual window with a plain linear `screen / framebuffer`
+ratio — matching `Gfx::blit`'s own behavior (a fullscreen-triangle stretch
+with no aspect-preserving letterbox), so the overlay stays pixel-aligned
+with the displayed framebuffer at any window size. `drawText` has no
+color or font-size parameter in the `emu` API (see the table above), so
+the render pass uses a fixed white color and a size scaled with the
+framebuffer-to-screen ratio — a defensible default for an unspecified
+API surface, not a guess at unstated real behavior.
+
+Verified without a real GPU: a test constructs a bare `egui::Context`,
+runs one frame calling `draw_script_overlay` with a populated `Overlay`,
+and inspects the resulting `FullOutput::shapes` (egui's shape list is a
+plain, GPU-free data structure) to confirm each primitive kind actually
+produces paintable shapes, not just that the function runs without
+panicking.
 
 **`WritesLocked` gained a real second field this same pass**:
 `netplay_active` (see `docs/netplay.md`) — a connected rollback netplay
