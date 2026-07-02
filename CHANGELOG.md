@@ -6,6 +6,90 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-07-02 - "Follow-Through"
+
+Closes four of the follow-up gaps `[2.0.0]`'s reconciliation pass carried
+forward: AR/Supercharger, real TIA paddle timing, and frontend wiring for
+both Lua scripting and rollback netplay. All landed via three independent,
+parallel efforts (each independently verified against the full gate before
+merging) since they touch non-overlapping crates.
+
+### Added
+
+- **AR/Supercharger** (`T-0402-015`, BestEffort tier) — `rusty2600-cart`'s
+  `BankAr`: a full "fast-load" (ROM-image-only) port of Stella's
+  `CartridgeAR`, including a byte-exact port of Stella's 294-byte dummy
+  BIOS stub, the `$1FF8` bank-config hotspot, the 5-distinct-access
+  delayed-write RAM protocol (reconstructed via `snoop_read`/`snoop_write`
+  since this crate has no bus-wide access counter), and the `$1850`
+  fast-load multi-load hotspot. Detected via images' distinctive size (one
+  or more 8448-byte loads — never collides with any power-of-2-KiB
+  scheme). A new `Board::take_oob_pokes()` hook (default empty) lets a
+  cart stage direct RIOT-RAM writes bypassing normal bus routing —
+  mirrors Stella's own `System::pokeOob`, a genuinely reusable primitive,
+  not an AR-specific hack. Sound-load (tape-audio) mode is deliberately
+  not ported. Closes the cart catalogue to 24 of 25 schemes.
+- **Real TIA paddle timing** (`T-0501-010`) — a faithful port of Stella's
+  `AnalogReadout` RC-circuit model (`crates/rusty2600-tia/src/paddle.rs`):
+  the same R0/C/R_DUMP/U_SUPP/TRIPPOINT_LINES constants and exponential
+  charge/discharge formulas, via `libm` under `no_std`. `INPT0..=INPT3`
+  now compute live from four `AnalogPaddle` instances instead of a plain
+  stored byte; a new monotonic `Tia::paddle_clock` counter provides the
+  RC model's elapsed-time base. Wired end-to-end through every existing
+  paddle-position consumer — the native frontend (`SharedInput` widened
+  with a second atomic for paddle bytes) and `rusty2600-mobile::run_frame`
+  (both the Android and iOS hosts) — making paddle games respond to
+  paddle input for the first time on any Rusty2600 platform. Only NTSC
+  timing is modeled; PAL/SECAM-specific behavior is honestly unverified.
+- **Lua scripting frontend wiring** (`scripting` feature, off by default,
+  native-only) — a real `ScriptBus` implementation (`FrontendScriptBus`)
+  wired into the render loop, plus a `Tools -> Load/Unload Script` menu
+  entry. `FrontendScriptBus` owns a private `System` clone synced from the
+  live emulator each tick (a deliberate, documented indirection avoiding
+  `unsafe` raw pointers, since `ScriptEngine<B>` needs an owned `B` but
+  the emulator lives behind `Arc<Mutex<>>`); `setJoystick`/
+  `setConsoleSwitch` record overrides the frontend ORs into the next
+  frame's real input. Closes the `[1.9.0]` frontend-wiring gap.
+- **Rollback netplay frontend wiring** (`netplay` feature, off by default,
+  native-only) — `NetplaySession` wraps `RollbackSession` behind a
+  `Tools -> Netplay...` Connect dialog (a single symmetric Connect action,
+  matching `RollbackSession::new`'s API). While connected, the background
+  emu-thread loop is suppressed and the render loop drives the session
+  directly via a new additive `EmuCore::extract_frame()` method. Run-ahead
+  is bypassed while netplay is active (documented scope cut — the two
+  features have no obvious combined semantics). `WritesLocked` gained a
+  real `netplay_active` field, locking script writes during an active
+  session. Verified with a real two-local-peer integration test (two
+  sessions on `127.0.0.1`, actually synchronizing via GGRS's UDP handshake
+  and advancing real frames). Closes the `[1.10.0]` frontend-wiring gap;
+  direct-IP/LAN only, STUN/NAT traversal and the WebRTC transport remain
+  deferred (need real external infra to verify).
+
+### Notes
+
+- **Version note**: this was originally requested as "v2.0.1," but per
+  this project's own SemVer convention (additive work is MINOR, PATCH is
+  reserved for fixes — unbroken across all thirteen prior releases this
+  line), it ships as `v2.1.0` instead.
+- **Honest gaps carried forward, not glossed over**: overlay compositing
+  for scripting's `drawText`/`drawRect`/`drawPixel` (pixels aren't
+  composited into the render pipeline yet, though the API works); STUN/
+  NAT traversal and the WebRTC transport for netplay; console
+  switches/paddles still aren't modeled per-player in netplay; no paddle
+  test ROM exists in `tests/roms/` to cross-check the new RC simulation
+  against real game behavior (validated via unit tests of the RC math
+  only); DPC+/CDF/CDFJ/CDFJ+ ARM-coprocessor cart wiring remains
+  unattempted (deliberately not rushed — a half-correct ARM coprocessor
+  board would be worse than deferring again; closing the catalogue to
+  25/25 remains open follow-up work).
+- Test count: 283 passing on default features (287 with
+  `--features test-roms`), up from 268 at `[2.0.0]`; 86 passing with
+  `--features scripting`, 82 with `--features netplay` (both off by
+  default, verified individually and together).
+- Additive-feature default-build invariant reconfirmed: `scripting`/
+  `netplay` are native-only (wasm32-excluded) and off by default; the
+  `no_std` `rusty2600-core` gate is unaffected.
+
 ## [2.0.0] - 2026-07-02 - "Parity"
 
 The culmination release of the `v1.1.0 -> v2.0.0` RustyNES-parity line. No

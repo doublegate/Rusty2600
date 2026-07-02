@@ -5,53 +5,45 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v2.0.0 "Parity" — the culmination release of the
-`v1.1.0 -> v2.0.0` RustyNES-parity line (see `to-dos/ROADMAP.md` and
-`CHANGELOG.md`'s `[2.0.0]` entry for the full gate). No code changes from
-`[1.12.0]` — a version-line milestone plus a full doc/status reconciliation
-pass, mirroring `[1.0.0]`'s own ceremony. All four of RustyNES's
-biggest-ticket features the user chose in-scope — Lua scripting, HD
-texture packs, rollback netplay, and mobile builds (Android + iOS) —
-landed across twelve real, tested minor releases, alongside the shader
-stack and TAS movie tooling.
+**Current release:** v2.1.0 "Follow-Through" — a post-`v2.0.0` follow-up
+release closing four of the gaps the `[2.0.0]` reconciliation pass
+explicitly carried forward (see `CHANGELOG.md`'s `[2.1.0]` entry for full
+detail): AR/Supercharger, real TIA paddle timing, and frontend wiring for
+both Lua scripting and rollback netplay. Landed via three independent,
+parallel implementation efforts (non-overlapping crates, each
+independently gate-verified before merging).
 
-**Status at 2.0.0, in one paragraph**: save-states + rewind + run-ahead
-(`[1.1.0]`/`[1.2.0]`, a permanent regression-gated round-trip); debugger
-depth including the RetroAchievements UI (`[1.3.0]`); a shader stack
-defaulting to a byte-identical empty pass plus the sprite-pack data model
-(`[1.4.0]`); `Bank4A50` closing 23 of 25 cart schemes (`[1.5.0]`); a real
-ARM7TDMI Thumb-1 interpreter, not yet wired into any `Board` (`[1.6.0]`);
-`.r26m` TAS movies + TAStudio-lite (`[1.7.0]`); a genuine externally-oracled
-golden CPU trace, with the TIA-timing fixture gap staying an honestly
-documented permanent stub (`[1.8.0]`); a real, tested `rusty2600-script`
-Lua engine, not yet frontend-wired (`[1.9.0]`); a real, tested
-`rusty2600-netplay` 2-player rollback crate wrapping `ggrs`, not yet
-frontend-wired (`[1.10.0]`); and `rusty2600-mobile` — one UniFFI bridge
-driving a real Android app **verified on a real KVM-accelerated emulator**
-(`[1.11.0]`) and a real iOS app with genuinely tool-generated Swift
-bindings, **honestly unverified by compilation** since this sandbox has no
-Xcode toolchain (`[1.12.0]`) — **the one release-matrix cell not fully
-green at `2.0.0`**, carried forward rather than glossed over. 268 tests
-passing workspace-wide (272 with `--features test-roms`), up from 151
-(154) at `[1.0.0]`; full CI green (Linux/macOS/Windows + `no_std`) on
-every tagged release since `[0.5.0]`. The additive-feature default-build
-invariant holds: `rusty2600-script`/`rusty2600-netplay`/`rusty2600-mobile`
-are unwired (not merely feature-gated) into `rusty2600-frontend`, `hd-pack`/
-`retroachievements` are off by default, and the shader stack's zero-pass
-default is byte-identical to the direct blit.
+**Status at 2.1.0, in one paragraph**: `rusty2600-cart`'s `BankAr`
+(`T-0402-015`) closes the cart catalogue to 24 of 25 schemes — a full
+fast-load port of Stella's `CartridgeAR` including a byte-exact dummy-BIOS
+port and a new reusable `Board::take_oob_pokes()` primitive. Real paddle
+input (`T-0501-010`) via a faithful port of Stella's `AnalogReadout`
+RC-circuit model, wired end-to-end through native, Android, and iOS —
+paddle games respond to paddle input for the first time on any Rusty2600
+platform (NTSC-only; PAL/SECAM timing is honestly unmodeled). Lua
+scripting (`scripting` feature) and rollback netplay (`netplay` feature)
+are both now wired into `rusty2600-frontend` — real `Tools` menu entries,
+off by default, native-only — closing the `[1.9.0]`/`[1.10.0]`
+frontend-wiring gaps; netplay verified with a real two-local-peer
+integration test actually synchronizing over UDP. 283 tests passing on
+default features (287 with `--features test-roms`), up from 268 at
+`[2.0.0]`; 86 passing with `--features scripting`, 82 with
+`--features netplay`. The additive-feature default-build invariant holds:
+both new features are native-only and off by default; the `no_std`
+`rusty2600-core` gate is unaffected.
 
-**Explicit non-requirements, unchanged posture from `[1.0.0]`**: AR/
-Supercharger, the DPC+/CDF/CDFJ/CDFJ+ wiring, frontend wiring for
-scripting/netplay, real TIA paddle timing (`T-0501-010`), and full
-Xcode-verified iOS build/run all continue as their own separately-scoped
-follow-up work — none of these gate `2.0.0`, per the plan's own explicit
-gate criteria. Mobile store production launch stays out of scope, deferred
-beyond `v2.0.0` matching RustyNES's own `v2.1.0` precedent. Rusty2600's
-`v2.0.0`, unlike RustyNES's own literal "v2.0.0" (a fractional
-master-clock timebase rewrite ADR 0002 already rejected for this console),
-is the RustyNES-parity culmination milestone, not an accuracy rewrite.
+**Explicit non-requirements carried forward, honestly**: DPC+/CDF/CDFJ/
+CDFJ+ ARM-coprocessor cart wiring (closing the catalogue to 25/25) was
+deliberately not attempted — a half-correct ARM coprocessor board would be
+worse than deferring again. Overlay compositing for scripting's
+`drawText`/`drawRect`/`drawPixel` isn't in the render pipeline yet. STUN/
+NAT traversal and the WebRTC transport for netplay remain deferred (need
+real external infra to verify); console switches/paddles still aren't
+modeled per-player. No paddle test ROM exists to cross-check the new RC
+simulation against real game behavior. Full Xcode-verified iOS build/run
+(`[1.12.0]`'s own carried-forward gap) is untouched by this release.
 
-Full release-by-release detail for `[1.1.0]` through `[1.12.0]` (save-states,
+Full release-by-release detail for `[1.1.0]` through `[2.0.0]` (save-states,
 run-ahead, debugger depth, the shader stack, `Bank4A50`, the
 `rusty2600-thumb` ARM interpreter, `.r26m` movies, the golden CPU trace,
 the `rusty2600-script` Lua engine, `rusty2600-netplay` rollback netplay,
@@ -59,18 +51,19 @@ and the Android/iOS mobile builds) lives in `CHANGELOG.md` — not
 duplicated here to avoid this section drifting out of sync with the
 authoritative per-release record as the line grows. The full 8-scheme
 Curated cart tier
-(v0.3.0) plus 12 BestEffort schemes (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC,
-BF/BFSC, UA, 0840, FE, SB, X07) are implemented and wired into automatic
-`detect()` — 22 of the 25 schemes in the LOCAL catalogue (`docs/cart.md`).
-Two `Board` hooks, `snoop_write` and `snoop_read`, let bankswitch schemes
-react to accesses the console routes to TIA/RIOT space (not just the
-`$1000+` cart window) — FE, SB, and X07 all depend on them, FE additionally
-using `snoop_read`'s `val` parameter to pick a bank from the observed JSR
-stack-frame byte. Only 4A50 (`T-0402-014`), AR/Supercharger (`T-0402-015`),
-and the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family (`T-0401-006`, needing a full
-ARM7TDMI Thumb interpreter) remain — all substantially larger undertakings
-than the rest of the breadth work, deliberately deferred to a documented
-follow-up rather than rushed. Phase 5 Frontend is **fully complete**:
+(v0.3.0) plus 15 BestEffort schemes (F0, E0, 3F, 3E, EF/EFSC, DF/DFSC,
+BF/BFSC, UA, 0840, FE, SB, X07, 4A50, `[2.1.0]`'s AR/Supercharger) are
+implemented and wired into automatic `detect()` — 24 of the 25 schemes in
+the LOCAL catalogue (`docs/cart.md`). Two `Board` hooks, `snoop_write` and
+`snoop_read`, let bankswitch schemes react to accesses the console routes
+to TIA/RIOT space (not just the `$1000+` cart window) — FE, SB, X07, and
+AR all depend on them (AR additionally via `[2.1.0]`'s new
+`Board::take_oob_pokes()` hook, mirroring Stella's `System::pokeOob`).
+Only the ARM-driven DPC+/CDF/CDFJ/CDFJ+ family (`T-0401-006`, needing the
+`rusty2600-thumb` interpreter wired into a `Board` — deliberately not
+rushed at `[2.1.0]`, since a half-correct ARM coprocessor board would be
+worse than deferring again) remains, closing the catalogue at 25/25 once
+landed. Phase 5 Frontend is **fully complete**:
 rendering, audio, pacing, input, WASM/thread support, AND the real
 `debug-hooks` debugger (live 6507/TIA/RIOT/memory panels, breakpoints/step/
 continue, a side-effect-free `Bus::peek`/`peek_range`, a standalone
