@@ -27,11 +27,11 @@ bindgen = ["uniffi/cli"]
 [dependencies]
 rusty2600-core = { path = "../rusty2600-core", version = "2.3.0" }
 rusty2600-cart = { path = "../rusty2600-cart", version = "2.3.0" }
-uniffi = "0.28"
+uniffi = "0.32"
 thiserror = "2.0"
 
 [build-dependencies]
-uniffi = { version = "0.28", features = ["build"] }
+uniffi = { version = "0.32", features = ["build"] }
 
 [lints]
 workspace = true

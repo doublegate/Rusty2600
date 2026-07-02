@@ -387,7 +387,7 @@ impl ShellState {
         let mut actions = Vec::new();
         let ctx = root_ui.ctx().clone();
 
-        egui::Panel::top("menu_bar").show_inside(root_ui, |ui| {
+        egui::Panel::top("menu_bar").show(root_ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Open ROM...").clicked() {
@@ -570,7 +570,7 @@ impl ShellState {
             });
         });
 
-        egui::Panel::bottom("status_bar").show_inside(root_ui, |ui| {
+        egui::Panel::bottom("status_bar").show(root_ui, |ui| {
             ui.horizontal(|ui| {
                 let title = info.board_tier.as_deref().unwrap_or(if info.rom_loaded {
                     "<unknown board>"

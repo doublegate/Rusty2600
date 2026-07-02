@@ -14,7 +14,7 @@ jobs:
           - { os: windows-latest, target: x86_64-pc-windows-msvc, archive: zip }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         # Same set ci.yml installs: cpal needs ALSA, gilrs needs udev,
