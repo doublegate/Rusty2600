@@ -71,7 +71,17 @@ pub fn run_winit() -> Result<(), JsValue> {
     // `Config::load()` is real persistence as of `[v2.8.0]` (a `localStorage`-backed
     // counterpart to the native `config.toml` read) — previously this always started from
     // `Config::default()` since wasm32 had no `load()` at all.
-    let app = crate::app::App::with_config(crate::config::Config::load());
+    let mut config = crate::config::Config::load();
+    // `[v2.9.0]` share-link: a `?settings=<blob>` query parameter overrides the persisted
+    // config, so opening a shared URL always reflects the sender's settings rather than
+    // whatever this browser already had in `localStorage` (see `crate::share_link`'s module
+    // doc for the full design). Absent/malformed values fall straight through to the
+    // already-loaded config, never blocking boot.
+    if let Some(shared) = crate::share_link::from_location() {
+        config = shared;
+        web_sys::console::log_1(&"Rusty2600: applied settings from ?settings= share link".into());
+    }
+    let app = crate::app::App::with_config(config);
     app.run()
         .map_err(|e| JsValue::from_str(&format!("event loop error: {e}")))
 }

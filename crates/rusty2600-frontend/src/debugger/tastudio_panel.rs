@@ -250,14 +250,26 @@ pub fn render_tastudio_panel(ui: &mut egui::Ui, state: &mut TastudioState) -> Ve
         return actions;
     };
 
-    ui.horizontal(|ui| {
-        ui.label("Save branch as:");
-        ui.text_edit_singleline(&mut state.branch_name_input);
-        if ui.button("Save").clicked() {
-            actions.push(TastudioAction::SaveBranch);
-        }
-    });
-    ui.separator();
+    // `TastudioAction::SaveBranch`'s dispatch needs `rfd`'s native-only save-file dialog (see
+    // `MenuAction::TastudioSaveBranch`'s doc comment in `shell.rs`) — the wasm32 debugger
+    // overlay (`[v2.9.0]`) hides this row entirely rather than wiring a button that would push
+    // an action nothing on that target ever handles.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ui.horizontal(|ui| {
+            ui.label("Save branch as:");
+            ui.text_edit_singleline(&mut state.branch_name_input);
+            if ui.button("Save").clicked() {
+                actions.push(TastudioAction::SaveBranch);
+            }
+        });
+        ui.separator();
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        ui.label("Save branch: native-only (no file-save dialog in the browser).");
+        ui.separator();
+    }
 
     egui::ScrollArea::vertical()
         .max_height(320.0)

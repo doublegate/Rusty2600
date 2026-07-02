@@ -127,14 +127,21 @@ impl Config {
     /// `config.toml` file, the wasm32 `localStorage` value under [`LOCAL_STORAGE_KEY`]) — pure,
     /// target-agnostic, no filesystem/browser API involved, so it compiles and is exercised by the
     /// ordinary native `cargo test --workspace` run rather than only a wasm32-only build.
-    fn to_toml_string(&self) -> Result<String, toml::ser::Error> {
+    ///
+    /// `pub(crate)` as of `[v2.9.0]`: [`crate::share_link`] reuses this same helper (rather than
+    /// hand-duplicating a parallel serializer) to encode the `?settings=` share-link blob — see
+    /// its module doc for why the WHOLE `Config` is safe to share on this project (unlike
+    /// RustyNES's own curated-subset `ShareSettings`, Rusty2600's `Config` carries no
+    /// machine-local paths or login tokens).
+    pub(crate) fn to_toml_string(&self) -> Result<String, toml::ser::Error> {
         toml::to_string_pretty(self)
     }
 
     /// Parse a previously-persisted TOML string, falling back to defaults on any parse error (a
     /// missing, foreign, or corrupt persisted value must never block launch on either target). See
-    /// [`Self::to_toml_string`] for why this is deliberately target-agnostic.
-    fn from_toml_str(s: &str) -> Self {
+    /// [`Self::to_toml_string`] for why this is deliberately target-agnostic, and for the
+    /// `pub(crate)` visibility as of `[v2.9.0]`.
+    pub(crate) fn from_toml_str(s: &str) -> Self {
         toml::from_str(s).unwrap_or_default()
     }
 

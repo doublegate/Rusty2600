@@ -78,6 +78,12 @@ pub mod resampler;
 /// loader (`wasm`). Plain code spans, not intra-doc links: `app`/`wasm` are
 /// mutually `cfg`-exclusive, so only one exists in any given doc build.
 pub mod rom_archive;
+/// `?settings=` share-link encode/decode (`[v2.9.0]`).
+///
+/// Pure encode/decode/query-parsing (tested natively); only the `window.location` read/build
+/// helpers are wasm32-gated. See the module doc for the full design (why the whole [`config::Config`]
+/// is shareable here, unlike RustyNES's curated subset).
+pub mod share_link;
 pub mod shell;
 
 /// The debugger's persistent state, structured chip snapshots, and panel
