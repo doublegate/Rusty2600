@@ -10,7 +10,7 @@
 <p align="center">
   <a href="https://github.com/doublegate/Rusty2600/actions"><img src="https://github.com/doublegate/Rusty2600/workflows/CI/badge.svg" alt="Build Status"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a>
-  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v2.3.0-blue.svg" alt="Version"></a>
+  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v2.4.0-blue.svg" alt="Version"></a>
   <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/rust-1.96-orange.svg" alt="Rust: 1.96"></a>
   <br>
   <a href="#compatibility-and-accuracy"><img src="https://img.shields.io/badge/accuracy%20battery-100%25%20(2%2F2)-brightgreen.svg" alt="Accuracy battery"></a>
@@ -105,15 +105,24 @@ look different, they visibly break.
 | **CDF/CDFJ/CDFJ+ ARM Coprocessor Bankswitching** *(v2.3.0)* | Closes the cart catalogue to 26/26. One struct (`BankCdf`) covers all four sub-versions via a `CdfVersion` const table, ported from Gopher2600's `cdf` package — reuses DPC+'s ARM entry shape plus a FastJMP data-fetcher redirect and a real `ARMinterrupt` fault-servicing dispatch (CDF's driver makes genuine host-serviced calls DPC+'s never did). BestEffort tier |
 | **Android** *(v1.11.0)* | A real, tested `rusty2600-mobile` UniFFI bridge crate reused from Kotlin — zero hand-written JNI/`unsafe` (a design win over the original plan). A real Gradle/Kotlin app, **verified running on a real emulator** (booted, installed, launched crash-free, a ROM loaded via the system file picker) |
 | **iOS** *(v1.12.0)* | Reuses the `rusty2600-mobile` bridge unchanged for a SwiftUI app (`ios/`) — genuinely tool-generated Swift bindings, real Metal/AVFoundation source, and a new touch-drag rotary paddle control. This sandbox has no Xcode toolchain, so the build is honestly unverified by compilation; a `v1.12.x` follow-up completes real Xcode/Simulator/device verification |
+| **Manual Save-State Slots** *(v2.4.0)* | `File -> Save State` / `Load State` — 8 numbered slots per ROM, built on the already-real `SaveState` format (ADR 0007). Each ROM's slots are keyed by an FNV-1a hash of its raw bytes, so a slot can never silently load against the wrong cartridge; loading a slot clears the rewind ring so `Rewind` doesn't jump to a pre-load timeline. Native-only for now |
 | **WebAssembly** | Runs in-browser via a canvas-2D bootstrap (real keyboard input + Web Audio API output). `wasm-winit`/`wasm-canvas` are currently identical placeholder feature names for this one build; a full winit+wgpu+egui browser build matching the native binary is future work, not yet attempted (`docs/frontend.md`) |
+| **`.zip` ROM Loading** *(v2.4.0)* | Both the native `File -> Open ROM` dialog and the wasm demo's file loader can extract a ROM directly from a `.zip` archive (the common ROM-redistribution format) — bounded-read (decompression-bomb guard), never panics on malformed input |
 | **Pure Rust** | `winit` + `wgpu` + `cpal` + `egui` frontend; a safe `no_std + alloc` chip stack behind a one-directional crate graph |
 
-The `v1.1.0 -> v2.0.0` RustyNES-parity line is complete; `v2.1.0`,
-`v2.2.0`, and `v2.3.0` closed every follow-up gap that release's own
+The `v1.1.0 -> v2.0.0` RustyNES-parity line is complete; `v2.1.0`
+through `v2.3.0` closed every follow-up gap that release's own
 reconciliation carried forward except mobile-store submission and a real
-Xcode-verified iOS build (both explicitly deferred, not gaps) — see
-[`to-dos/ROADMAP.md`](to-dos/ROADMAP.md) for the full arc and
-[`CHANGELOG.md`](CHANGELOG.md) for exactly what shipped in each release.
+Xcode-verified iOS build (both explicitly deferred, not gaps).
+`v2.4.0` "Save Point" opens a new gap-closure arc against RustyNES itself
+(`v2.4.0 -> v3.0.0`, see [`to-dos/ROADMAP.md`](to-dos/ROADMAP.md)),
+landing manual save-state slots (the headline item — Rusty2600 previously
+had no player-facing "save my game" feature at all despite the
+underlying format being real since `v1.10.0`), a CI-gated performance-
+regression bench, a Stella-oracle differential test strengthening the
+real paddle-timing simulation, `.zip` ROM-archive loading, and a GitHub
+repo hygiene pass — see [`CHANGELOG.md`](CHANGELOG.md) for exactly what
+shipped in each release.
 Open follow-up work (each its own well-scoped future release): real
 Xcode-verified iOS build/run (this sandbox has no Xcode toolchain),
 netplay's WebRTC transport and real cross-NAT verification, and DPC+/CDF

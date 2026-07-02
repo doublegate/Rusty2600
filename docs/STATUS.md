@@ -5,7 +5,33 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v2.3.0 "Full Catalogue" — closes the cart bankswitch
+**Current release:** v2.4.0 "Save Point" — the first release of the
+RustyNES gap-closure arc (`v2.4.0 -> v3.0.0`, see
+`to-dos/ROADMAP.md`), and the first Rusty2600 release shipped through a
+real GitHub PR with CI + automated review-bot adjudication (PR #1)
+instead of a direct-to-main push. Headline item: **manual save-state
+slots** (`File -> Save State` / `Load State`, 8 numbered slots per ROM,
+`crate::config::save_slot_path`) — built entirely on the already-real
+`SaveState` format (`rusty2600-core`, ADR 0007, since `[1.10.0]`); a
+loaded ROM's slots are keyed by an FNV-1a hash of its raw bytes so a
+slot can never silently load against the wrong cartridge, and loading a
+slot now clears the rewind ring (a real bug caught by automated PR
+review — without this, pressing Rewind right after a slot load jumped
+to the pre-load timeline). Also lands: a **CI-gated performance-
+regression check** (`rusty2600-core::system_full_ntsc_frame`, an
+absolute-ceiling `perf` CI job, validated by injecting and reverting a
+real regression); a **paddle-timing Stella-oracle differential test**
+(an independently re-derived copy of Stella's `AnalogReadout` formula
+confirms every RC constant/formula in `rusty2600-tia::paddle` matches
+exactly — a real commercial-game cross-check stays honestly documented
+as blocked, no legally obtainable ROM in this environment); **`.zip`
+ROM-archive loading** (native + wasm, bounded-read decompression-bomb
+guard); and a GitHub repo hygiene pass (`CODE_OF_CONDUCT.md`,
+`SECURITY.md`, `CODEOWNERS`, `dependabot.yml`, issue templates,
+Discussions enabled). 327 tests passing on default features (331 with
+`--features test-roms`), up from 313/317 at `[2.3.0]`.
+
+**Previous release:** v2.3.0 "Full Catalogue" — closes the cart bankswitch
 catalogue to **26 of 26 schemes** and lands three more `/goal` follow-up
 items. `rusty2600-cart`'s `BankCdf` (`T-0401-006`, BestEffort tier) wires
 CDF/CDFJ/CDFJ+ — the last unimplemented scheme — into `detect()`: one
@@ -141,8 +167,8 @@ ROM. See `docs/riot.md` for the full writeup;
 | TIA timing / draw ROMs | test-ROM corpus | permanently unavailable (`T-0602-006`) — no freely-redistributable corpus exists; see `docs/testing-strategy.md` |
 | Stella regression corpus | test-ROM corpus | same as above (`T-0602-006`) |
 | **Accuracy battery (AccuracyCoin-equivalent)** | battery | **2 / 2 (100%)** — stood up v0.8.0, `tests/accuracy_battery.rs`, CI-enforced via the existing `--features test-roms` step, ≥90% v1.0 threshold |
-| **Workspace test suite** | `cargo test --workspace` | **313 / 313** (up from 268 at v1.11.0; `[2.1.0]`-`[2.3.0]` added AR/paddle-timing/scripting+netplay wiring, DPC+, and CDF/CDFJ/CDFJ+ + DPC+ music audio + script overlay + netplay STUN) |
-| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **317 / 317** |
+| **Workspace test suite** | `cargo test --workspace` | **327 / 327** (up from 313 at `[2.3.0]`; `[2.4.0]` added save-state slot round-trip + rom_tag tests, the paddle Stella-oracle differential tests, and `.zip` ROM-archive extraction tests) |
+| **Workspace test suite (`--features test-roms`)** | `cargo test --workspace --features test-roms` | **331 / 331** |
 | `rusty2600-frontend` (`--features hd-pack`) | `cargo test -p rusty2600-frontend --features hd-pack` | **70 / 70** (+3 sprite-pack loader tests; `hd-pack` off by default, not part of the two workspace-wide counts above) |
 
 ## Board / mapper matrix

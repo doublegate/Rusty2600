@@ -6,9 +6,24 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-07-02 - "Save Point"
+
+The first release of the RustyNES gap-closure arc (`v2.4.0 -> v3.0.0`) and
+the first Rusty2600 release shipped through a real GitHub PR with CI +
+automated review-bot adjudication (PR #1), instead of a direct-to-main
+push. Landed via four independent, parallel implementation efforts (plus
+a direct-authored repo-hygiene batch), each independently gate-verified
+before merging, then reviewed by two automated PR bots (GitHub Copilot,
+Gemini Code Assist) whose 9 findings were all genuine and fixed — most
+notably a real correctness bug (loading a save-state slot didn't clear
+the rewind ring, so pressing Rewind afterward jumped to the pre-load
+timeline) and a real performance issue (save-slot status was probed via
+8 filesystem `stat` calls every single frame at 60+ FPS; now cached and
+only re-probed on ROM load or a save/load-slot action).
+
 ### Added
 
-- **Manual save-state slots** (`v2.4.0` "Save Point") — `File -> Save State`
+- **Manual save-state slots** (the headline item) — `File -> Save State`
   / `Load State` menus with 8 numbered slots per ROM, built on the already-
   real `SaveState` format (`rusty2600-core`, ADR 0007). Each ROM gets its
   own slot directory keyed by an FNV-1a hash of its raw bytes
@@ -57,6 +72,30 @@ All notable changes to Rusty2600 are documented here. The format is based on
   decompression-bomb guard, not just a declared-size check), and never
   panics on malformed/corrupt input. Both the native dialog's filter list
   and the wasm demo's `<input accept>` now include `.zip`.
+- **GitHub repo hygiene** — `CODE_OF_CONDUCT.md` (Contributor Covenant
+  2.1), `SECURITY.md` (Rusty2600-specific threat model: ROM/zip parsing,
+  the Thumb coprocessor interpreter, save-state deserialization, netplay,
+  Lua scripting), `.github/CODEOWNERS`, `.github/dependabot.yml`,
+  `.github/ISSUE_TEMPLATE/config.yml` + a `scheme_request.md` template
+  scoped to the now-closed 26/26 bankswitch catalogue (variant/novel-scheme
+  requests only), and GitHub Discussions enabled. The repo description's
+  stale "23-of-25 bankswitch schemes" claim (26/26 since `[2.3.0]`) was
+  also corrected directly via `gh repo edit`.
+
+### Fixed
+
+- Addressed all 9 findings from PR #1's Copilot + Gemini Code Assist
+  automated review (all genuine, none dismissed): cached save-slot status
+  instead of re-probing 8 files via `stat` every frame; cleared the
+  rewind ring (`EmuCore::snapshots`) when a save-state slot is loaded, so
+  `Rewind` no longer jumps to the pre-load timeline; only call
+  `cheevos.load_rom()` when `emu.load_rom()` actually succeeds (both at
+  startup and the `Open ROM` dialog — a pre-existing issue surfaced
+  because this release's zip-loading work touched both call sites
+  anyway); pre-allocated the zip-entry extraction buffer using the
+  entry's own (capped) declared size; `bench_regression_check.sh` now
+  uses `mktemp` instead of a fixed `/tmp` path; two doc-comment fixes
+  (an algorithm-name mismatch, a "Supercharker" typo).
 
 ## [2.3.0] - 2026-07-02 - "Full Catalogue"
 
