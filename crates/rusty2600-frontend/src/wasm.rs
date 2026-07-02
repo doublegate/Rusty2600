@@ -34,10 +34,15 @@ use wasm_bindgen::prelude::*;
 #[allow(unused_imports)]
 use web_sys::*;
 
-/// The `#[wasm_bindgen(start)]` entry point — dispatches to [`run_winit`] if the `wasm-winit`
-/// feature is active (the default), else [`run_canvas`]. Exactly one of the two features should
-/// be enabled per build (see `web/index.html`'s `data-cargo-*` attributes for `wasm-winit`'s
-/// build; `--no-default-features --features wasm-canvas` for the fallback).
+/// The `#[wasm_bindgen(start)]` entry point.
+///
+/// Dispatches to [`run_winit`] if the `wasm-winit` feature is active (the default), else
+/// [`run_canvas`]. Exactly one of the two features should be enabled per build (see
+/// `web/index.html`'s `data-cargo-*` attributes for `wasm-winit`'s build;
+/// `--no-default-features --features wasm-canvas` for the fallback).
+///
+/// # Errors
+/// Propagates [`run_winit`]'s error (a failed winit event-loop construction) unchanged.
 #[cfg(feature = "wasm-winit")]
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
@@ -63,7 +68,10 @@ pub fn start() -> Result<(), JsValue> {
 pub fn run_winit() -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
     web_sys::console::log_1(&"Rusty2600 wasm-winit — boot".into());
-    let app = crate::app::App::with_config(crate::config::Config::default());
+    // `Config::load()` is real persistence as of `[v2.8.0]` (a `localStorage`-backed
+    // counterpart to the native `config.toml` read) — previously this always started from
+    // `Config::default()` since wasm32 had no `load()` at all.
+    let app = crate::app::App::with_config(crate::config::Config::load());
     app.run()
         .map_err(|e| JsValue::from_str(&format!("event loop error: {e}")))
 }

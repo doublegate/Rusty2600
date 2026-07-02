@@ -11,6 +11,8 @@
 //! register read-outs, until the chip models land.
 
 use crate::config::Config;
+#[cfg(target_arch = "wasm32")]
+use crate::input::TouchButton;
 use crate::palette::Region;
 
 /// An action a menu / shortcut interaction requests. Returned from the egui closure and dispatched
@@ -102,12 +104,20 @@ pub enum MenuAction {
     OpenDocs,
     /// File -> Quit.
     Quit,
-    /// A Settings-window widget changed this frame — persist `cfg` to disk.
-    /// Native-only in effect (the wasm build has no filesystem config path;
-    /// [`crate::config::Config::save`] simply doesn't exist there), but kept
-    /// as a plain action here since [`ShellState::render`] is shared code and
-    /// must never call platform-specific I/O directly.
+    /// A Settings-window widget changed this frame — persist `cfg`. Native writes
+    /// `config.toml` to disk; wasm32 writes the same TOML-serialized value to a
+    /// `localStorage` key (`[v2.8.0]`; see [`crate::config::Config::save`]'s
+    /// per-target doc comments) — kept as a plain action here since
+    /// [`ShellState::render`] is shared code and must never call
+    /// platform-specific I/O directly.
     SaveConfig,
+    /// A wasm32 on-screen touch-overlay button changed state this frame (`[v2.8.0]`) — the
+    /// touch-driven counterpart to a real keyboard's keydown/keyup event, dispatched by
+    /// `crate::app::App` into `host_input` via [`crate::input::InputState::apply_action`] exactly
+    /// like [`crate::app::App`]'s own `latch_key` does. Native has a real keyboard/gamepad and
+    /// never produces this.
+    #[cfg(target_arch = "wasm32")]
+    TouchInput(crate::input::InputAction, bool),
 }
 
 /// The console-switch menu actions (the 2600-specific panel the NES shell lacks).
@@ -287,6 +297,19 @@ pub struct ShellState {
     /// load. See [`Self::save_slots_cache`].
     #[cfg(not(target_arch = "wasm32"))]
     pub save_slots_dirty: bool,
+    /// Whether the wasm32 on-screen touch-control overlay (D-pad + fire + console switches,
+    /// `[v2.8.0]`) is shown. Defaults to visible (a touch-only device has no other way to drive
+    /// the emulator), but toggleable from `View -> Touch overlay` for a desktop-browser wasm user
+    /// who does have a real keyboard and finds it clutter — see `App::resumed`'s wasm branch for
+    /// where this is set `true` at construction (the blanket `#[derive(Default)]` above would
+    /// otherwise leave it `false`, the wrong default for this field specifically).
+    #[cfg(target_arch = "wasm32")]
+    pub touch_overlay_visible: bool,
+    /// The touch overlay's held-button state (`crate::input::TouchOverlayState`) — pure
+    /// press/hold/release + latch-edge tracking, entirely independent of the egui rendering that
+    /// drives it. See [`Self::render_touch_overlay`].
+    #[cfg(target_arch = "wasm32")]
+    pub touch: crate::input::TouchOverlayState,
 }
 
 impl ShellState {
@@ -545,6 +568,8 @@ impl ShellState {
 
                 ui.menu_button("View", |ui| {
                     ui.checkbox(&mut cfg.video.integer_scale, "Integer scale");
+                    #[cfg(target_arch = "wasm32")]
+                    ui.checkbox(&mut self.touch_overlay_visible, "Touch overlay");
                     if ui.button("Toggle fullscreen").clicked() {
                         actions.push(MenuAction::ToggleFullscreen);
                         ui.close();
@@ -608,6 +633,10 @@ impl ShellState {
         #[cfg(feature = "netplay")]
         if self.netplay_dialog_open {
             self.render_netplay_dialog(&ctx, &mut actions);
+        }
+        #[cfg(target_arch = "wasm32")]
+        if self.touch_overlay_visible {
+            self.render_touch_overlay(&ctx, &mut actions);
         }
 
         actions
@@ -708,16 +737,110 @@ impl ShellState {
         self.netplay_dialog_open = open && !submitted;
     }
 
+    /// The wasm32 on-screen touch-control overlay (`[v2.8.0]`): a D-pad + fire button (bottom of
+    /// the screen) plus a compact console-switch row (Select/Reset/Color/Difficulty), all plain
+    /// egui `Button` widgets feeding the exact same [`crate::input::InputState`] the keyboard
+    /// path populates — see [`crate::input::TouchOverlayState`] for the pure press/hold/release +
+    /// latch-edge model this drives. Gated to wasm32 only: native has a real keyboard/gamepad and
+    /// has no use for it.
+    ///
+    /// KNOWN LIMITATION (honest, not fixed here): egui-winit's default touch handling synthesizes
+    /// ONE tracked pointer from touch events (matching mouse-based widget interaction), so only a
+    /// single simultaneous finger contact is reliably recognized as "held" via
+    /// [`egui::Response::is_pointer_button_down_on`] — holding a direction while ALSO tapping Fire
+    /// with a second finger is not guaranteed to register both. This is a real egui/egui-winit
+    /// constraint (unverifiable either way in this project's own sandbox, which has no real
+    /// touchscreen to test against — see `docs/frontend.md`'s wasm-winit status section), not
+    /// something this release's code introduces; working around it would mean bypassing
+    /// `Response`-based hit-testing for raw multi-touch event tracking, a substantially bigger,
+    /// separately-scoped lift. Single-touch interaction (one control at a time, or dragging within
+    /// the D-pad) works correctly.
+    #[cfg(target_arch = "wasm32")]
+    fn render_touch_overlay(&mut self, ctx: &egui::Context, actions: &mut Vec<MenuAction>) {
+        // A small local helper (not a method — it only needs `held`, no other `self` field) so
+        // each button below is one line instead of a repeated `if response.is_pointer_button_down_on()`.
+        fn touch_button(
+            ui: &mut egui::Ui,
+            label: &str,
+            size: egui::Vec2,
+            button: TouchButton,
+            held: &mut Vec<TouchButton>,
+        ) {
+            let response = ui.add_sized(size, egui::Button::new(label));
+            if response.is_pointer_button_down_on() {
+                held.push(button);
+            }
+        }
+
+        let mut held: Vec<TouchButton> = Vec::new();
+        let dpad_btn = egui::vec2(48.0, 40.0);
+        egui::Area::new(egui::Id::new("rusty2600_touch_dpad"))
+            .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(16.0, -16.0))
+            .show(ctx, |ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_space(dpad_btn.x + 4.0);
+                        touch_button(ui, "^", dpad_btn, TouchButton::JoyUp, &mut held);
+                    });
+                    ui.horizontal(|ui| {
+                        touch_button(ui, "<", dpad_btn, TouchButton::JoyLeft, &mut held);
+                        ui.add_space(4.0);
+                        touch_button(ui, ">", dpad_btn, TouchButton::JoyRight, &mut held);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.add_space(dpad_btn.x + 4.0);
+                        touch_button(ui, "v", dpad_btn, TouchButton::JoyDown, &mut held);
+                    });
+                });
+            });
+
+        egui::Area::new(egui::Id::new("rusty2600_touch_fire"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0))
+            .show(ctx, |ui| {
+                touch_button(
+                    ui,
+                    "FIRE",
+                    egui::vec2(72.0, 72.0),
+                    TouchButton::JoyFire,
+                    &mut held,
+                );
+            });
+
+        egui::Area::new(egui::Id::new("rusty2600_touch_switches"))
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 28.0))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let sw_btn = egui::vec2(56.0, 28.0);
+                    touch_button(ui, "Select", sw_btn, TouchButton::Select, &mut held);
+                    touch_button(ui, "Reset", sw_btn, TouchButton::Reset, &mut held);
+                    touch_button(ui, "B/W", sw_btn, TouchButton::Color, &mut held);
+                    touch_button(ui, "Diff L", sw_btn, TouchButton::LeftDifficulty, &mut held);
+                    touch_button(
+                        ui,
+                        "Diff R",
+                        sw_btn,
+                        TouchButton::RightDifficulty,
+                        &mut held,
+                    );
+                });
+            });
+
+        for (action, pressed) in self.touch.update(&held) {
+            actions.push(MenuAction::TouchInput(action, pressed));
+        }
+    }
+
     /// The tabbed Settings window (Video / Audio / Input / System). v0.1 wires the live config
     /// fields; deep per-knob panels (NTSC, shader stack, per-game overrides) are TODO.
     ///
     /// Every widget here edits `cfg` in place immediately (so the change takes effect this
-    /// frame), but a live edit alone never reaches disk — [`crate::config::Config::save`] is
-    /// native-only I/O this shared module must not call directly. Instead, any widget that
-    /// reports `.changed()` pushes [`MenuAction::SaveConfig`] so the native-only app layer
-    /// persists it once, after this render pass (the previous behavior only ever saved on the
-    /// top menu bar's Region submenu, so every OTHER Settings-window change silently never
-    /// stuck between sessions).
+    /// frame), but a live edit alone never reaches disk/`localStorage` itself —
+    /// [`crate::config::Config::save`]'s per-target I/O is not something this shared module
+    /// (compiled for both native and wasm32) may call directly. Instead, any widget that reports
+    /// `.changed()` pushes [`MenuAction::SaveConfig`] so the per-target app layer persists it
+    /// once, after this render pass (the previous behavior only ever saved on the top menu bar's
+    /// Region submenu, so every OTHER Settings-window change silently never stuck between
+    /// sessions).
     fn render_settings(
         &mut self,
         ctx: &egui::Context,
@@ -821,14 +944,23 @@ impl ShellState {
 
     /// The debugger overlay: a panel selector + the live 6507/TIA/RIOT/memory
     /// panels (`crate::debugger`, behind the `debug-hooks` feature).
-    #[allow(clippy::too_many_lines)]
+    ///
+    /// `needless_pass_by_ref_mut` is allowed at the function level (harmless either way: with
+    /// `debug-hooks` on, `actions` genuinely IS pushed into below; without it — the wasm32 build's
+    /// convention, since `debug-hooks` pulls in the native-only `rfd::FileDialog` call, see
+    /// `Cargo.toml`'s doc comments — NONE of this function's `DebugStep`/`DebugContinue`/
+    /// `TastudioJumpToFrame`/`TastudioSaveBranch` arms compile in, so `actions` is never pushed
+    /// into at all). A parameter-level `#[allow]`/`cfg_attr` did not reliably suppress this
+    /// specific lint in testing, hence the function-level placement — first surfaced by verifying
+    /// `cargo clippy --target wasm32-unknown-unknown --no-default-features --features wasm-winit`
+    /// (`[v2.8.0]`; this exact build/feature combination had not been clippy-checked before).
+    #[allow(clippy::too_many_lines, clippy::needless_pass_by_ref_mut)]
     fn render_debugger(
         &mut self,
         ctx: &egui::Context,
         info: &ShellInfo,
-        #[cfg_attr(not(feature = "debug-hooks"), allow(unused_variables))] actions: &mut Vec<
-            MenuAction,
-        >,
+        #[cfg_attr(not(feature = "debug-hooks"), allow(unused_variables, clippy::ptr_arg))]
+        actions: &mut Vec<MenuAction>,
         #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
         cheevos: &mut crate::cheevos::CheevosState,
         #[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))] script: Option<

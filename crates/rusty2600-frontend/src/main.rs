@@ -11,8 +11,11 @@
 //! display buffer, the NTSC/PAL/SECAM palette, the joystick / paddle / console-switch input map,
 //! and the 6507 / TIA / RIOT debugger panels). See `docs/frontend.md`.
 
+// First surfaced by verifying `cargo clippy --target wasm32-unknown-unknown --no-default-features
+// --features wasm-winit` (`[v2.8.0]`; this exact build/feature combination had not been
+// clippy-checked before) — a plain no-op fn trivially satisfies `missing_const_for_fn`.
 #[cfg(target_arch = "wasm32")]
-fn main() {}
+const fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::process::ExitCode;
