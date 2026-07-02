@@ -82,7 +82,7 @@ backing the accuracy oracle. Per ref-docs/research-report.md §8.3.
 | DPC+ | var | Harmony/Melody ARM emulates DPC+ | ARM coproc | BestEffort |
 | CDF / CDFJ / CDFJ+ | var | Harmony/Melody ARM | ARM coproc | BestEffort |
 
-Tier totals: **2 Core**, **8 Curated**, **15 BestEffort** (25 schemes). Per
+Tier totals: **2 Core**, **8 Curated**, **16 BestEffort** (26 schemes). Per
 ref-docs/research-report.md §8.1 — DPC and E7 were both originally classified
 BestEffort there; reclassified Curated per `docs/STATUS.md`'s "v1.0.0 scope"
 decision that the full 8-scheme Curated set (CV, F8, F6, F4, FA/CBS-RAM,
@@ -90,6 +90,12 @@ Superchip, DPC, E7) closes in v0.3.0 (`to-dos/ROADMAP.md`). DPC is
 implemented and its tier is pinned by `crates/rusty2600-cart`'s own
 `BankDpc::tier()`; E7 is reclassified ahead of its own implementation
 (`T-0401-002`) so this table doesn't need touching again once it lands.
+**Correction (`[2.2.0]`)**: this total was previously miscounted as "25
+schemes" — a stale count from before F0/3F/3E were split into three
+distinct table rows (the source `ref-docs/research-report.md` §8.1 draft
+conflated them as one combined "F0 / 3F-variants" entry); the table's
+actual row count has always been 26, this was a tally-line bug, not a
+scheme being added or removed.
 
 ## Notes on the special carts
 
