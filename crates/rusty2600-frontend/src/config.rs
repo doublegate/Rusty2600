@@ -5,6 +5,12 @@
 //! the audio settings, and the per-player [`crate::input::KeyBindings`]. This is the RustyNES
 //! config schema, 2600-adapted (the region drives the frame rate + the active scanline count, and
 //! the binding table maps keys to the 2600 joystick / console-switch actions, not an NES d-pad).
+//!
+//! Persistence has two backends, selected by target: native reads/writes a real `config.toml`
+//! file under the platform config dir ([`Config::path`]); wasm32 has no filesystem, so it
+//! persists the same TOML-serialized schema to a single `localStorage` key instead (`[v2.8.0]`;
+//! see [`Config::load`]/[`Config::save`]'s wasm32 doc comments). Both backends share the same
+//! pure `to_toml_string`/`from_toml_str` (de)serialization helpers.
 
 use serde::{Deserialize, Serialize};
 
@@ -110,7 +116,28 @@ pub struct Config {
     pub p2: KeyBindings,
 }
 
+/// The `localStorage` key the wasm32 build persists its config under. Native-only counterpart is
+/// [`Config::path`] (a real file); the wasm32 build has no filesystem, so a single string key
+/// under the page's origin-scoped storage is the equivalent "where does this live" concept.
+#[cfg(target_arch = "wasm32")]
+const LOCAL_STORAGE_KEY: &str = "rusty2600.config";
+
 impl Config {
+    /// Serialize to the same TOML representation both persistence backends store (the native
+    /// `config.toml` file, the wasm32 `localStorage` value under [`LOCAL_STORAGE_KEY`]) — pure,
+    /// target-agnostic, no filesystem/browser API involved, so it compiles and is exercised by the
+    /// ordinary native `cargo test --workspace` run rather than only a wasm32-only build.
+    fn to_toml_string(&self) -> Result<String, toml::ser::Error> {
+        toml::to_string_pretty(self)
+    }
+
+    /// Parse a previously-persisted TOML string, falling back to defaults on any parse error (a
+    /// missing, foreign, or corrupt persisted value must never block launch on either target). See
+    /// [`Self::to_toml_string`] for why this is deliberately target-agnostic.
+    fn from_toml_str(s: &str) -> Self {
+        toml::from_str(s).unwrap_or_default()
+    }
+
     /// The on-disk config path (`<platform-config-dir>/Rusty2600/config.toml`), or `None` if no
     /// config dir is resolvable. Native-only.
     #[cfg(not(target_arch = "wasm32"))]
@@ -128,10 +155,7 @@ impl Config {
         let Some(path) = Self::path() else {
             return Self::default();
         };
-        std::fs::read_to_string(&path).map_or_else(
-            |_| Self::default(),
-            |s| toml::from_str(&s).unwrap_or_default(),
-        )
+        std::fs::read_to_string(&path).map_or_else(|_| Self::default(), |s| Self::from_toml_str(&s))
     }
 
     /// Persist the config to disk (best-effort; creates the parent dir). Native-only.
@@ -146,21 +170,53 @@ impl Config {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let s = toml::to_string_pretty(self)
+        let s = self
+            .to_toml_string()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         std::fs::write(path, s)
     }
 
-    /// wasm32's `save()` — a no-op. `wasm-winit`'s `App::with_config` always starts from
-    /// `Config::default()` (no `Config::load()` counterpart exists for this target either), so
-    /// there is nothing to persist to yet; `SetRegion`/`SaveConfig`'s dispatch arms call this
-    /// unconditionally on both targets, so it must exist here with the same signature rather than
-    /// needing its own `#[cfg]` at every call site. Real wasm persistence
-    /// (`localStorage`/IndexedDB) is later-release scope (`v2.8.0`).
+    /// wasm32's `load()` — the `localStorage` counterpart to the native path's `config.toml` read.
+    /// Falls back to defaults (never blocks launch) if there is no `window`/no storage available
+    /// (private-browsing/storage-disabled), the key isn't set yet (first run), or the stored value
+    /// fails to parse (`[v2.8.0]`; previously an explicit no-op — this target had no `load()` at
+    /// all, and `wasm.rs::run_winit` always started from `Config::default()`).
+    #[cfg(target_arch = "wasm32")]
+    #[must_use]
+    pub fn load() -> Self {
+        Self::local_storage()
+            .and_then(|storage| storage.get_item(LOCAL_STORAGE_KEY).ok().flatten())
+            .map_or_else(Self::default, |s| Self::from_toml_str(&s))
+    }
+
+    /// wasm32's `save()` — persists to `localStorage` (best-effort: a browser with storage
+    /// disabled/full silently keeps running with an unpersisted config rather than treating this
+    /// as a hard error, matching the native path's own "never block on a persistence failure"
+    /// posture). `[v2.8.0]`; previously an explicit no-op stub (see this project's `docs/
+    /// frontend.md` for the prior "later-release scope" note this closes).
+    ///
+    /// # Errors
+    /// Never actually returns an `Err` — kept as `Result` to match the native `save()` signature
+    /// every call site dispatches through identically (see `crate::shell::MenuAction::SaveConfig`'s
+    /// dispatch arm in `app.rs`), even though this target's persistence failures are swallowed
+    /// rather than propagated.
     #[cfg(target_arch = "wasm32")]
     #[allow(clippy::unnecessary_wraps)]
-    pub const fn save(&self) -> std::io::Result<()> {
+    pub fn save(&self) -> std::io::Result<()> {
+        if let Ok(s) = self.to_toml_string()
+            && let Some(storage) = Self::local_storage()
+        {
+            let _ = storage.set_item(LOCAL_STORAGE_KEY, &s);
+        }
         Ok(())
+    }
+
+    /// `window().local_storage()` returns `Result<Option<Storage>, JsValue>` — collapse every
+    /// failure mode (no `window` at all, the call itself erroring, or no storage object available)
+    /// to a plain `None`, since [`Self::load`]/[`Self::save`] only ever want a best-effort handle.
+    #[cfg(target_arch = "wasm32")]
+    fn local_storage() -> Option<web_sys::Storage> {
+        web_sys::window()?.local_storage().ok()?
     }
 }
 
@@ -228,6 +284,53 @@ mod tests {
         assert_eq!(back.p1.binds.len(), cfg.p1.binds.len());
     }
 
+    /// The pure `to_toml_string`/`from_toml_str` helpers both persistence backends share
+    /// (`config.toml` on native, `localStorage` on wasm32 — see [`Config::save`]/[`Config::load`]'s
+    /// wasm32 doc comments) — exercised here target-agnostically so this is real coverage under
+    /// the ordinary native `cargo test --workspace` run, not just a wasm32-only build nobody runs
+    /// in CI.
+    #[test]
+    fn to_toml_string_round_trips_through_from_toml_str() {
+        let cfg = Config {
+            region: Region::Pal,
+            audio: AudioConfig {
+                volume: 0.42,
+                ..AudioConfig::default()
+            },
+            video: VideoConfig {
+                integer_scale: true,
+                ..VideoConfig::default()
+            },
+            ..Config::default()
+        };
+
+        let s = cfg.to_toml_string().expect("serialize");
+        let back = Config::from_toml_str(&s);
+
+        assert_eq!(back.region, cfg.region);
+        assert!((back.audio.volume - 0.42).abs() < f32::EPSILON);
+        assert!(back.video.integer_scale);
+    }
+
+    /// A corrupt/foreign persisted value must fall back to defaults rather than panicking or
+    /// propagating a parse error — this is the exact case a stale/incompatible `localStorage`
+    /// value (e.g. from an older schema version) hits on wasm32, and the exact case a hand-edited
+    /// or truncated `config.toml` hits natively.
+    #[test]
+    fn from_toml_str_falls_back_to_default_on_garbage() {
+        let back = Config::from_toml_str("this is not valid toml {{{");
+        assert_eq!(back.audio.sample_rate, Config::default().audio.sample_rate);
+        assert_eq!(back.region, Config::default().region);
+    }
+
+    /// An empty string (the realistic "key exists but was never written," or a wiped value) must
+    /// also fall back to defaults cleanly, not just genuinely malformed TOML.
+    #[test]
+    fn from_toml_str_handles_empty_string() {
+        let back = Config::from_toml_str("");
+        assert_eq!(back.audio.sample_rate, Config::default().audio.sample_rate);
+    }
+
     #[test]
     fn region_serializes_uppercase() {
         let cfg = Config {
@@ -241,6 +344,12 @@ mod tests {
         );
     }
 
+    // `save_slot_path_under`/`save_slot_dir_under` are native-only (see their own doc
+    // comments) — this test (and `save_then_load_round_trips_through_slot_path` below) must be
+    // gated the same way so `cargo clippy --target wasm32-unknown-unknown --all-targets` can
+    // actually type-check the test binary (first verified in `[v2.8.0]`; this exact wasm32
+    // `--all-targets` invocation had not been run before).
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn slot_path_is_keyed_by_rom_tag_and_slot() {
         let base = std::path::Path::new("/tmp/rusty2600-example");
@@ -258,7 +367,9 @@ mod tests {
     /// the already-tested `SaveState::capture`/`encode`/`decode`/`restore`)
     /// — isolated from the real platform data dir via an explicit `base`
     /// under `std::env::temp_dir()`, unique per test run so parallel test
-    /// threads never collide, cleaned up afterward.
+    /// threads never collide, cleaned up afterward. Native-only for the same reason
+    /// `slot_path_is_keyed_by_rom_tag_and_slot` above is.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn save_then_load_round_trips_through_slot_path() {
         use rusty2600_core::{SaveState, System};

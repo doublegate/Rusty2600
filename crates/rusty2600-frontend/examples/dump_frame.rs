@@ -3,13 +3,31 @@
 //! shipped product surface — used while debugging TIA video output.
 //!
 //! Usage: cargo run --example `dump_frame` -- <rom-path> <num-frames> <out-dir> [dump-from]
+//!
+//! Native-only: uses `rusty2600_frontend::EmuCore` (gated `not(target_arch = "wasm32")` in
+//! `lib.rs`) plus plain `std::fs`/CLI-arg I/O that has no wasm32 use case anyway — this is a
+//! developer-only headless diagnostic tool, never shipped to the browser build. `main` below is
+//! `not(target_arch = "wasm32")`-gated with an empty wasm32 stub (matching `src/main.rs`'s own
+//! established convention for the real binary) rather than a crate-level `#![cfg]`, since an
+//! example target still needs SOME `main` fn to exist for cargo to build it on every target. First
+//! surfaced by verifying `cargo clippy --target wasm32-unknown-unknown --all-targets` (`[v2.8.0]`;
+//! this exact invocation had not been run before this release).
 
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 use rusty2600_frontend::EmuCore;
+#[cfg(not(target_arch = "wasm32"))]
 use rusty2600_frontend::input::InputState;
+#[cfg(not(target_arch = "wasm32"))]
 use std::env;
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::Write;
 
+#[cfg(not(target_arch = "wasm32"))]
 fn write_ppm(path: &str, w: u32, h: u32, rgba: &[u8]) {
     let mut f = fs::File::create(path).expect("create ppm");
     write!(f, "P6\n{w} {h}\n255\n").unwrap();
@@ -20,6 +38,7 @@ fn write_ppm(path: &str, w: u32, h: u32, rgba: &[u8]) {
     f.write_all(&rgb).unwrap();
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let args: Vec<String> = env::args().collect();
     let rom_path = args
