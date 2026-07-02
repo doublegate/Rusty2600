@@ -1865,6 +1865,609 @@ impl Board for BankDpc {
     }
 }
 
+/// One plain (non-fractional) DPC+ data fetcher: `Low`/`Hi` form the 16-bit
+/// pointer into the 4 KiB data segment; `Top`/`Bottom` define its "window."
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+struct DpcPlusFetcher {
+    low: u8,
+    hi: u8,
+    top: u8,
+    bottom: u8,
+}
+
+impl DpcPlusFetcher {
+    const fn inc(&mut self) {
+        self.low = self.low.wrapping_add(1);
+        if self.low == 0x00 {
+            self.hi = self.hi.wrapping_add(1);
+        }
+    }
+
+    const fn dec(&mut self) {
+        self.low = self.low.wrapping_sub(1);
+        if self.low == 0xFF {
+            self.hi = self.hi.wrapping_sub(1);
+        }
+    }
+
+    /// Ported verbatim from Gopher2600's `dataFetcher.isWindow()` — a
+    /// byte-wraparound comparison, NOT the simpler "low between bottom and
+    /// top" check the DPC patent describes, because (per Gopher2600's own
+    /// comment) real DPC+ demo ROMs rely on this exact on-demand formula's
+    /// behavior at the low=bottom=0 power-on state.
+    const fn is_window(&self) -> bool {
+        let a = (self.top as i16).wrapping_sub(self.low as i16) & 0xFF;
+        let b = (self.top as i16).wrapping_sub(self.bottom as i16) & 0xFF;
+        a > b
+    }
+
+    const fn addr(&self) -> usize {
+        ((self.hi as usize) << 8 | self.low as usize) & 0x0FFF
+    }
+}
+
+/// One fractional DPC+ data fetcher: advances its `Low`/`Hi` pointer by a
+/// sub-integer amount per read, accumulated in `count` (an 8-bit
+/// accumulator — NOT the 32-bit type a music fetcher's `count` uses;
+/// deliberately different widths, matching Gopher2600's own two distinct
+/// fetcher types exactly).
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+struct DpcPlusFracFetcher {
+    low: u8,
+    hi: u8,
+    increment: u8,
+    count: u8,
+}
+
+impl DpcPlusFracFetcher {
+    const fn inc(&mut self) {
+        let (new_count, overflowed) = self.count.overflowing_add(self.increment);
+        self.count = new_count;
+        if overflowed || new_count < self.increment {
+            self.low = self.low.wrapping_add(1);
+            if self.low == 0x00 {
+                self.hi = (self.hi.wrapping_add(1)) & 0x0F;
+            }
+        }
+    }
+
+    const fn addr(&self) -> usize {
+        ((self.hi as usize) << 8 | self.low as usize) & 0x0FFF
+    }
+}
+
+/// One DPC+ music-mode data fetcher: a 32-bit phase accumulator selecting a
+/// sample from a 32-byte waveform table. **`count` is never advanced** —
+/// DPC+'s music-mode continuous-time audio (`Step()` in the reference,
+/// driven by elapsed CPU cycles) is honestly NOT implemented; the register
+/// read/write plumbing (`$05`, `$5D..=$5F`, `$75..=$77`) round-trips
+/// correctly, but the waveform-index math always samples index 0 of
+/// whichever waveform is selected. Documented in `docs/cart.md`, not
+/// silently dropped — a `rusty2600-tia` audio-timing follow-up, not a
+/// mobile/cart-catalogue-breadth one.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+struct DpcPlusMusicFetcher {
+    waveform: u8,
+    freq: u32,
+    count: u32,
+}
+
+/// DPC+'s galois-style RNG (`$00..=$04` reads, `$70..=$74` writes) — the
+/// exact "10adab1e" constant + rotate-and-xor formula Gopher2600's
+/// `randomNumberFetcher.next()`/`.prev()` implement.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+struct DpcPlusRng(u32);
+
+impl DpcPlusRng {
+    const MAGIC: u32 = 0x10ad_ab1e;
+
+    const fn next(&mut self) {
+        let v = self.0;
+        self.0 = if v & (1 << 10) != 0 {
+            Self::MAGIC ^ ((v >> 11) | (v << 21))
+        } else {
+            (v >> 11) | (v << 21)
+        };
+    }
+
+    const fn prev(&mut self) {
+        let v = self.0;
+        self.0 = if v & (1 << 31) != 0 {
+            ((Self::MAGIC & v) << 11) | ((Self::MAGIC ^ v) >> 21)
+        } else {
+            (v << 11) | (v >> 21)
+        };
+    }
+}
+
+/// DPC+ (Harmony/Melody ARM coprocessor cart, `T-0401-006`): a real
+/// ARM7TDMI Thumb-1 interpreter (`rusty2600-thumb`, landed `[1.6.0]`) drives
+/// the cartridge's own graphics/RNG logic, ported from Gopher2600's Go
+/// `hardware/memory/cartridge/dpcplus` package (~1,700 lines), not Stella's
+/// C++ `CartDPCPlus.cxx` — matching this project's established precedent
+/// for ARM-adjacent code (`docs/thumb.md`'s own "why Gopher2600, not
+/// Stella" rationale). BestEffort tier.
+///
+/// **Image layout**: `[3072B driver][N*4096B banks][4096B data][1024B
+/// freq]`. The "custom ROM" region the ARM's own program counter executes
+/// from is the SAME bytes as the 6507-visible bank data — Harmony carts
+/// embed ARM Thumb machine code directly inside the flash the 6507 also
+/// sees as its own opcodes, a well-documented dual-purpose-bytes trick
+/// (confirmed against Gopher2600's own `mmap.customROMOrigin`/`Memtop`
+/// spanning exactly `bankSize * NumBanks()`).
+///
+/// **Register window** `$1000..=$107F` (`addr & 0xFFF < 0x80`); `$1080` and
+/// above in the current bank is plain 6507-executable ROM. Hotspots
+/// `$1FF6..=$1FFB` (BANK0..=BANK5) bankswitch on EITHER a read or a write,
+/// except while the ARM coprocessor is actively executing (mirrors
+/// Gopher2600's `callfn.IsActive()` gate — real hardware can't bankswitch
+/// out from under a running ARM program).
+///
+/// **The ARM entry point** (`$5A` write = `254`/`255`, "CALLFUNCTION"):
+/// synchronously builds a fresh [`rusty2600_thumb::Arm7Tdmi`] against this
+/// board's own segments (a [`DpcPlusArmMemory`] borrow), reset to the
+/// cartridge's entry vector, and steps it until [`rusty2600_thumb::StepOutcome::ProgramEnded`]
+/// (a `BX`/`BLX` back to the entry `LR`) or a bounded safety-cap of steps
+/// (a defensive limit against a runaway/buggy ROM — NOT real hardware
+/// behavior, since real silicon has no such cap). This matches Gopher2600's
+/// own `Run()` semantics for this call shape exactly: `Run()` only resets
+/// ARM registers when the PRIOR yield was `YieldProgramEnded`, and this
+/// board's CALLFUNCTION loop always runs to `YieldProgramEnded` before
+/// returning control to the 6507 — so a fresh reset-and-run-to-completion
+/// each CALLFUNCTION call is behaviorally identical to Gopher2600's
+/// persistent-instance model for this scheme (DPC+ never uses the
+/// `YieldSyncWithVCS` mid-execution-resume path Gopher2600 itself says
+/// "DPC+ does not support").
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BankDpcPlus {
+    driver_rom: alloc::vec::Vec<u8>,
+    custom_rom: alloc::vec::Vec<u8>,
+    data_rom: alloc::vec::Vec<u8>,
+    freq_rom: alloc::vec::Vec<u8>,
+    driver_ram: alloc::vec::Vec<u8>,
+    data_ram: alloc::vec::Vec<u8>,
+    freq_ram: alloc::vec::Vec<u8>,
+    bank: usize,
+    bank_count: usize,
+    fetcher: [DpcPlusFetcher; 8],
+    frac_fetcher: [DpcPlusFracFetcher; 8],
+    music: [DpcPlusMusicFetcher; 3],
+    rng: DpcPlusRng,
+    fast_fetch: bool,
+    /// Set when the last byte fetched through the register window's plain
+    /// ROM path (`cpu_read` at `addr & 0xFFF >= 0x80`) was `0xA9` (the
+    /// 6507's `LDA #immediate` opcode) — the FastFetch trigger.
+    lda_pending: bool,
+    /// Staged parameter bytes for the `$59`/`$5A` function-call protocol
+    /// (max 4 used).
+    parameters: alloc::vec::Vec<u8>,
+    /// `true` while a CALLFUNCTION is executing — gates bankswitch hotspots,
+    /// mirroring Gopher2600's `callfn.IsActive()`.
+    arm_active: bool,
+}
+
+impl BankDpcPlus {
+    const DRIVER_SIZE: usize = 3072;
+    const DATA_SIZE: usize = 4096;
+    const FREQ_SIZE: usize = 1024;
+    const BANK_SIZE: usize = 4096;
+    /// A defensive cap on Thumb instructions per CALLFUNCTION — real
+    /// silicon has no such limit; this exists only to bound a malformed or
+    /// buggy ROM's ARM program from hanging the emulator. Chosen generously
+    /// (a real DPC+ frame-update routine runs a few thousand instructions).
+    const ARM_STEP_SAFETY_CAP: u32 = 4_000_000;
+
+    /// Build from a DPC+ image. Bank count is derived from the image size
+    /// (`(len - driver - data - freq) / bank_size`); returns `None` if the
+    /// image is too small or not an exact multiple.
+    #[must_use]
+    pub fn new(rom: &[u8]) -> Option<Self> {
+        let overhead = Self::DRIVER_SIZE + Self::DATA_SIZE + Self::FREQ_SIZE;
+        if rom.len() <= overhead || (rom.len() - overhead) % Self::BANK_SIZE != 0 {
+            return None;
+        }
+        let bank_count = (rom.len() - overhead) / Self::BANK_SIZE;
+        if bank_count == 0 || bank_count > 8 {
+            return None;
+        }
+
+        let driver_rom = rom[..Self::DRIVER_SIZE].to_vec();
+        let custom_end = Self::DRIVER_SIZE + bank_count * Self::BANK_SIZE;
+        let custom_rom = rom[Self::DRIVER_SIZE..custom_end].to_vec();
+        let data_rom = rom[custom_end..custom_end + Self::DATA_SIZE].to_vec();
+        let freq_rom = rom
+            [custom_end + Self::DATA_SIZE..custom_end + Self::DATA_SIZE + Self::FREQ_SIZE]
+            .to_vec();
+
+        Some(Self {
+            driver_ram: driver_rom.clone(),
+            data_ram: data_rom.clone(),
+            freq_ram: freq_rom.clone(),
+            driver_rom,
+            custom_rom,
+            data_rom,
+            freq_rom,
+            bank: 0,
+            bank_count,
+            fetcher: [DpcPlusFetcher::default(); 8],
+            frac_fetcher: [DpcPlusFracFetcher::default(); 8],
+            music: [DpcPlusMusicFetcher::default(); 3],
+            rng: DpcPlusRng(0x2B43_5044), // ASCII "DPC+"
+            fast_fetch: false,
+            lda_pending: false,
+            parameters: alloc::vec::Vec::new(),
+            arm_active: false,
+        })
+    }
+
+    fn hotspot(&mut self, addr: u16) -> bool {
+        if self.arm_active {
+            return false;
+        }
+        let a = addr & 0x1FFF;
+        if (0x1FF6..=0x1FFB).contains(&a) {
+            self.bank = (a - 0x1FF6) as usize;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Run the ARM coprocessor to completion (or the safety cap), matching
+    /// the `$5A` write value `254`/`255` CALLFUNCTION path — see the type
+    /// doc's "The ARM entry point" section.
+    fn run_arm(&mut self) {
+        self.arm_active = true;
+        let mem = DpcPlusArmMemory {
+            driver_rom: &mut self.driver_rom,
+            custom_rom: &mut self.custom_rom,
+            data_rom: &mut self.data_rom,
+            freq_rom: &mut self.freq_rom,
+            driver_ram: &mut self.driver_ram,
+            data_ram: &mut self.data_ram,
+            freq_ram: &mut self.freq_ram,
+        };
+        let mut arm = rusty2600_thumb::Arm7Tdmi::new(mem);
+        for _ in 0..Self::ARM_STEP_SAFETY_CAP {
+            let (outcome, _cycles) = arm.step();
+            match outcome {
+                rusty2600_thumb::StepOutcome::Normal => {}
+                rusty2600_thumb::StepOutcome::ProgramEnded
+                | rusty2600_thumb::StepOutcome::Fault(_) => break,
+            }
+        }
+        self.arm_active = false;
+    }
+
+    fn dispatch_function_call(&mut self, data: u8) {
+        match data {
+            0 => self.parameters.clear(),
+            1 => {
+                // "Copy ROM to fetcher": parameters = [addr_lo, addr_hi,
+                // fetcher_index, count]. Copies `count` bytes from
+                // custom_rom (relative to the START of the custom-ROM
+                // region, i.e. addr - driver_size) into data_ram at the
+                // named fetcher's current pointer.
+                if self.parameters.len() == 4 {
+                    let addr = u16::from(self.parameters[1]) << 8 | u16::from(self.parameters[0]);
+                    let fetcher_idx = usize::from(self.parameters[2] & 0x07);
+                    let count = self.parameters[3];
+                    let base = self.fetcher[fetcher_idx].addr();
+                    let src_base = usize::from(addr).saturating_sub(self.custom_rom.len());
+                    for i in 0..usize::from(count) {
+                        let src = src_base + i;
+                        let dst = (base + i) & 0x0FFF;
+                        if let Some(&byte) = self.data_rom.get(src) {
+                            if let Some(slot) = self.data_ram.get_mut(dst) {
+                                *slot = byte;
+                            }
+                        }
+                    }
+                }
+                self.parameters.clear();
+            }
+            2 => {
+                // "Copy value to fetcher": parameters = [value, _, fetcher_index, count].
+                // Ported verbatim from Gopher2600's own formula
+                // (`o := uint16(f.Low+i) | (uint16(f.Hi+i) << 8)`) — `hi` is
+                // ALSO advanced by `i` here, not held constant, so this
+                // does NOT fill a contiguous `count`-byte block; it writes
+                // at 0x0050, 0x0151, 0x0252, ... for a `low=0x50` start.
+                // This may be a copy-paste artifact in the reference (a
+                // genuine per-byte fill would only advance `low`), but
+                // Stella can't cross-check it (it runs the real ARM driver
+                // code rather than short-circuiting this service in C++),
+                // so it's ported exactly rather than "corrected" on a
+                // guess — see the matching test's comment for the worked
+                // addresses.
+                if self.parameters.len() == 4 {
+                    let value = self.parameters[0];
+                    let fetcher_idx = usize::from(self.parameters[2] & 0x07);
+                    let count = self.parameters[3];
+                    let f = self.fetcher[fetcher_idx];
+                    for i in 0..usize::from(count) {
+                        let low = f.low.wrapping_add(i as u8);
+                        let hi = f.hi.wrapping_add(i as u8);
+                        let dst = ((hi as usize) << 8 | low as usize) & 0x0FFF;
+                        if let Some(slot) = self.data_ram.get_mut(dst) {
+                            *slot = value;
+                        }
+                    }
+                }
+                self.parameters.clear();
+            }
+            254 | 255 => self.run_arm(),
+            _ => {}
+        }
+    }
+
+    fn read_register(&mut self, a: u16) -> u8 {
+        match a {
+            0x00 => {
+                self.rng.next();
+                self.rng.0 as u8
+            }
+            0x01 => {
+                self.rng.prev();
+                self.rng.0 as u8
+            }
+            0x02 => (self.rng.0 >> 8) as u8,
+            0x03 => (self.rng.0 >> 16) as u8,
+            0x04 => (self.rng.0 >> 24) as u8,
+            0x05 => {
+                // Music-fetcher 3-channel sum. `count` is never advanced
+                // (see `DpcPlusMusicFetcher`'s doc), so this always samples
+                // waveform index 0 for each active channel.
+                let mut sum: u8 = 0;
+                for m in &self.music {
+                    let idx = (usize::from(m.waveform) << 5) + ((m.count >> 27) as usize);
+                    sum = sum.wrapping_add(self.data_ram.get(idx & 0x0FFF).copied().unwrap_or(0));
+                }
+                sum
+            }
+            0x08..=0x0F => {
+                let i = usize::from(a & 0x07);
+                let data = self
+                    .data_ram
+                    .get(self.fetcher[i].addr())
+                    .copied()
+                    .unwrap_or(0);
+                self.fetcher[i].inc();
+                data
+            }
+            0x10..=0x17 => {
+                let i = usize::from(a & 0x07);
+                let data = if self.fetcher[i].is_window() {
+                    self.data_ram
+                        .get(self.fetcher[i].addr())
+                        .copied()
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+                self.fetcher[i].inc();
+                data
+            }
+            0x18..=0x1F => {
+                let i = usize::from(a & 0x07);
+                let data = self
+                    .data_ram
+                    .get(self.frac_fetcher[i].addr())
+                    .copied()
+                    .unwrap_or(0);
+                self.frac_fetcher[i].inc();
+                data
+            }
+            0x20..=0x23 => {
+                let i = usize::from(a & 0x07);
+                if self.fetcher[i].is_window() {
+                    0xFF
+                } else {
+                    0x00
+                }
+            }
+            _ => 0,
+        }
+    }
+
+    fn write_register(&mut self, a: u16, val: u8) {
+        match a {
+            0x28..=0x2F => {
+                let i = usize::from(a & 0x07);
+                self.frac_fetcher[i].low = val;
+                self.frac_fetcher[i].count = 0;
+            }
+            0x30..=0x37 => {
+                let i = usize::from(a & 0x07);
+                self.frac_fetcher[i].hi = val & 0x0F;
+            }
+            0x38..=0x3F => {
+                let i = usize::from(a & 0x07);
+                self.frac_fetcher[i].increment = val;
+                self.frac_fetcher[i].count = 0;
+            }
+            0x40..=0x47 => self.fetcher[usize::from(a & 0x07)].top = val,
+            0x48..=0x4F => self.fetcher[usize::from(a & 0x07)].bottom = val,
+            0x50..=0x57 => self.fetcher[usize::from(a & 0x07)].low = val,
+            0x58 => self.fast_fetch = val == 0,
+            0x59 => {
+                if self.parameters.len() < 4 {
+                    self.parameters.push(val);
+                }
+            }
+            0x5A => self.dispatch_function_call(val),
+            0x5D..=0x5F => self.music[usize::from(a - 0x5D)].waveform = val & 0x7F,
+            0x60..=0x67 => {
+                let i = usize::from(a & 0x07);
+                self.fetcher[i].dec();
+                let dst = self.fetcher[i].addr();
+                if let Some(slot) = self.data_ram.get_mut(dst) {
+                    *slot = val;
+                }
+            }
+            0x68..=0x6F => self.fetcher[usize::from(a & 0x07)].hi = val,
+            0x70 => self.rng.0 = 0x2B43_5044,
+            0x71 => self.rng.0 = (self.rng.0 & 0xFFFF_FF00) | u32::from(val),
+            0x72 => self.rng.0 = (self.rng.0 & 0xFFFF_00FF) | (u32::from(val) << 8),
+            0x73 => self.rng.0 = (self.rng.0 & 0xFF00_FFFF) | (u32::from(val) << 16),
+            0x74 => self.rng.0 = (self.rng.0 & 0x00FF_FFFF) | (u32::from(val) << 24),
+            0x75..=0x77 => {
+                let m = usize::from(a - 0x75);
+                let base = usize::from(val) << 2;
+                if let Some(bytes) = self.freq_ram.get(base..base + 4) {
+                    self.music[m].freq =
+                        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                }
+            }
+            0x78..=0x7F => {
+                let i = usize::from(a & 0x07);
+                let dst = self.fetcher[i].addr();
+                if let Some(slot) = self.data_ram.get_mut(dst) {
+                    *slot = val;
+                }
+                self.fetcher[i].inc();
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The `rusty2600_thumb::ThumbMemory` view over a [`BankDpcPlus`]'s own
+/// segments, borrowed for the duration of one [`BankDpcPlus::run_arm`]
+/// call. Origins match Gopher2600's Harmony-architecture `mmap` table
+/// exactly: Flash at `0x0000_0000` (driver/custom/data/freq ROM, in that
+/// order), SRAM at `0x4000_0000` (the matching RAM copies).
+struct DpcPlusArmMemory<'a> {
+    driver_rom: &'a mut alloc::vec::Vec<u8>,
+    custom_rom: &'a mut alloc::vec::Vec<u8>,
+    data_rom: &'a mut alloc::vec::Vec<u8>,
+    freq_rom: &'a mut alloc::vec::Vec<u8>,
+    driver_ram: &'a mut alloc::vec::Vec<u8>,
+    data_ram: &'a mut alloc::vec::Vec<u8>,
+    freq_ram: &'a mut alloc::vec::Vec<u8>,
+}
+
+impl DpcPlusArmMemory<'_> {
+    const FLASH_BASE: u32 = 0x0000_0000;
+    const SRAM_BASE: u32 = 0x4000_0000;
+
+    fn driver_rom_origin(&self) -> u32 {
+        Self::FLASH_BASE
+    }
+    fn custom_rom_origin(&self) -> u32 {
+        Self::FLASH_BASE + Self::DRIVER_SIZE_U32
+    }
+    fn data_rom_origin(&self) -> u32 {
+        self.custom_rom_origin() + self.custom_rom.len() as u32
+    }
+    fn freq_rom_origin(&self) -> u32 {
+        self.data_rom_origin() + self.data_rom.len() as u32
+    }
+    fn driver_ram_origin(&self) -> u32 {
+        Self::SRAM_BASE
+    }
+    fn data_ram_origin(&self) -> u32 {
+        Self::SRAM_BASE + Self::DRIVER_SIZE_U32
+    }
+    fn freq_ram_origin(&self) -> u32 {
+        self.data_ram_origin() + self.data_ram.len() as u32
+    }
+
+    const DRIVER_SIZE_U32: u32 = BankDpcPlus::DRIVER_SIZE as u32;
+}
+
+impl rusty2600_thumb::ThumbMemory for DpcPlusArmMemory<'_> {
+    fn map(&mut self, addr: u32, _write: bool, _executing: bool) -> Option<(&mut [u8], u32)> {
+        // Compute every origin FIRST (all `&self` calls) before taking any
+        // `&mut` borrow of the underlying buffers below — interleaving the
+        // two doesn't borrow-check, since `Self::*_origin` recursively reads
+        // sibling buffers' `.len()` to derive later segments' bases.
+        let origins = [
+            self.driver_rom_origin(),
+            self.custom_rom_origin(),
+            self.data_rom_origin(),
+            self.freq_rom_origin(),
+            self.driver_ram_origin(),
+            self.data_ram_origin(),
+            self.freq_ram_origin(),
+        ];
+        let bufs: [&mut alloc::vec::Vec<u8>; 7] = [
+            self.driver_rom,
+            self.custom_rom,
+            self.data_rom,
+            self.freq_rom,
+            self.driver_ram,
+            self.data_ram,
+            self.freq_ram,
+        ];
+        for (origin, buf) in origins.into_iter().zip(bufs) {
+            let len = buf.len() as u32;
+            if addr >= origin && addr < origin + len {
+                return Some((buf.as_mut_slice(), origin));
+            }
+        }
+        None
+    }
+
+    fn reset_vectors(&self) -> (u32, u32, u32) {
+        // Ported from Gopher2600's `Static.ResetVectors()`: SP starts near
+        // the top of the freq-RAM SRAM window, LR is the custom-ROM
+        // region's own origin (the address a `BX LR` returning from the
+        // ARM program lands on — this board's CALLFUNCTION loop watches
+        // for that via `StepOutcome::ProgramEnded`), PC starts 8 bytes into
+        // that same region (past a small header).
+        let sp = self.freq_ram_origin() + self.freq_ram.len() as u32 - 3;
+        let lr = self.custom_rom_origin();
+        let pc = self.custom_rom_origin() + 8;
+        (sp, lr, pc)
+    }
+
+    fn is_executable(&self, _addr: u32) -> bool {
+        true
+    }
+}
+
+impl Board for BankDpcPlus {
+    fn cpu_read(&mut self, addr: u16) -> u8 {
+        if self.hotspot(addr) {
+            return 0;
+        }
+        let a = addr & 0x0FFF;
+        if a >= 0x0080 {
+            let data = self
+                .custom_rom
+                .get(self.bank * Self::BANK_SIZE + a as usize)
+                .copied()
+                .unwrap_or(0);
+            if self.fast_fetch && self.lda_pending && data < 0x28 {
+                self.lda_pending = false;
+                return self.read_register(u16::from(data));
+            }
+            self.lda_pending = self.fast_fetch && data == 0xA9;
+            return data;
+        }
+        self.read_register(a)
+    }
+
+    fn cpu_write(&mut self, addr: u16, val: u8) {
+        if self.hotspot(addr) {
+            return;
+        }
+        let a = addr & 0x0FFF;
+        if a >= 0x0028 && a <= 0x007F {
+            self.write_register(a, val);
+        }
+        // `a < 0x28` (RNG/music/data-fetcher READ registers) and `a >=
+        // 0x80` (plain ROM) are not writable — matches Gopher2600's
+        // `AccessVolatile`'s `default:` falling through to a ROM write only
+        // via `poke` (debugger-only), never a real 6507 write.
+    }
+
+    fn tier(&self) -> Tier {
+        Tier::BestEffort
+    }
+}
+
 /// AR / Supercharger (Starpath/Arcadia): a tape-loading cart with 6 KiB of
 /// RAM (three 2 KiB banks, indices 0-2) plus a synthesized 2 KiB dummy BIOS
 /// ROM bank (index 3), mapped as two independent 2 KiB windows
@@ -2369,6 +2972,11 @@ pub enum Cartridge {
     /// dummy BIOS ROM, a 5-bit bank-pair-select hotspot at `$1FF8`, and a
     /// 5-distinct-access delayed-write RAM protocol (BestEffort tier)
     BankAr(BankAr),
+    /// DPC+ (Harmony/Melody ARM coprocessor): a real ARM7TDMI Thumb-1
+    /// interpreter (`rusty2600-thumb`) drives graphics/RNG logic; 6 banks
+    /// selected via `$1FF6..=$1FFB`, an `$5A` "CALLFUNCTION" register
+    /// entry point (BestEffort tier)
+    BankDpcPlus(BankDpcPlus),
 }
 
 impl Board for Cartridge {
@@ -2397,6 +3005,7 @@ impl Board for Cartridge {
             Self::BankX07(b) => b.cpu_read(addr),
             Self::Bank4A50(b) => b.cpu_read(addr),
             Self::BankAr(b) => b.cpu_read(addr),
+            Self::BankDpcPlus(b) => b.cpu_read(addr),
         }
     }
 
@@ -2425,6 +3034,7 @@ impl Board for Cartridge {
             Self::BankX07(b) => b.cpu_write(addr, val),
             Self::Bank4A50(b) => b.cpu_write(addr, val),
             Self::BankAr(b) => b.cpu_write(addr, val),
+            Self::BankDpcPlus(b) => b.cpu_write(addr, val),
         }
     }
 
@@ -2453,6 +3063,7 @@ impl Board for Cartridge {
             Self::BankX07(b) => b.tier(),
             Self::Bank4A50(b) => b.tier(),
             Self::BankAr(b) => b.tier(),
+            Self::BankDpcPlus(b) => b.tier(),
         }
     }
 
@@ -2481,6 +3092,7 @@ impl Board for Cartridge {
             Self::BankX07(b) => b.tick(),
             Self::Bank4A50(b) => b.tick(),
             Self::BankAr(b) => b.tick(),
+            Self::BankDpcPlus(b) => b.tick(),
         }
     }
 
@@ -2509,6 +3121,7 @@ impl Board for Cartridge {
             Self::BankX07(b) => b.tick_coprocessor(),
             Self::Bank4A50(b) => b.tick_coprocessor(),
             Self::BankAr(b) => b.tick_coprocessor(),
+            Self::BankDpcPlus(b) => b.tick_coprocessor(),
         }
     }
 
@@ -2537,6 +3150,7 @@ impl Board for Cartridge {
             Self::BankX07(b) => b.snoop_write(addr, val),
             Self::Bank4A50(b) => b.snoop_write(addr, val),
             Self::BankAr(b) => b.snoop_write(addr, val),
+            Self::BankDpcPlus(b) => b.snoop_write(addr, val),
         }
     }
 
@@ -2565,12 +3179,14 @@ impl Board for Cartridge {
             Self::BankX07(b) => b.snoop_read(addr, val),
             Self::Bank4A50(b) => b.snoop_read(addr, val),
             Self::BankAr(b) => b.snoop_read(addr, val),
+            Self::BankDpcPlus(b) => b.snoop_read(addr, val),
         }
     }
 
     fn take_oob_pokes(&mut self) -> alloc::vec::Vec<(u16, u8)> {
         match self {
             Self::BankAr(b) => b.take_oob_pokes(),
+            Self::BankDpcPlus(b) => b.take_oob_pokes(),
             _ => alloc::vec::Vec::new(),
         }
     }
@@ -2825,6 +3441,38 @@ fn is_probably_4a50(rom: &[u8]) -> bool {
     target + 2 < len && rom[target] == 0x0C && (rom[target + 2] & 0xFE) == 0x6E
 }
 
+/// DPC+ images match Gopher2600's exact overhead formula (`3072 + N*4096 +
+/// 4096 + 1024`, `N` in `1..=8`) AND contain the literal ASCII bytes
+/// `"DPC+"` at least twice — the same content signature Stella's own
+/// `CartDetector::isProbablyDPCplus` uses ("DPC+ ARM code has 2 occurrences
+/// of the string DPC+"). The size formula ALONE is ambiguous (a 6-bank
+/// image is exactly 32 KiB — the same size several already-implemented
+/// schemes, e.g. F4/F4SC/3E/3F, also use), so the content signature is the
+/// real gate, not the size; the size check is only a cheap early-out.
+fn is_probably_dpc_plus(rom: &[u8]) -> bool {
+    let overhead = BankDpcPlus::DRIVER_SIZE + BankDpcPlus::DATA_SIZE + BankDpcPlus::FREQ_SIZE;
+    if rom.len() <= overhead || (rom.len() - overhead) % BankDpcPlus::BANK_SIZE != 0 {
+        return false;
+    }
+    let bank_count = (rom.len() - overhead) / BankDpcPlus::BANK_SIZE;
+    if bank_count == 0 || bank_count > 8 {
+        return false;
+    }
+    const NEEDLE: &[u8; 4] = b"DPC+";
+    let mut occurrences = 0u8;
+    if rom.len() >= NEEDLE.len() {
+        for window in rom.windows(NEEDLE.len()) {
+            if window == NEEDLE {
+                occurrences += 1;
+                if occurrences >= 2 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Detect the bankswitch scheme from a ROM image and build the board.
 ///
 /// Same-size same-catalogue collisions (CV vs plain 2K/4K, Superchip vs
@@ -2848,6 +3496,18 @@ pub fn detect(rom: &[u8]) -> Option<Cartridge> {
         let num_loads = rom.len() / BankAr::LOAD_SIZE;
         if num_loads >= 1 && num_loads <= 32 {
             return BankAr::new(rom).map(Cartridge::BankAr);
+        }
+    }
+
+    // DPC+ (`T-0401-006`): the size formula alone collides with several
+    // already-implemented schemes (a 6-bank image is exactly 32 KiB, the
+    // same size as F4/F4SC/3E/3F/etc.), so this checks BEFORE the
+    // size-based match below and is gated on the real "DPC+" ASCII content
+    // signature (see `is_probably_dpc_plus`'s doc comment), never on size
+    // alone — a real F4/3E/3F image is never misdetected.
+    if is_probably_dpc_plus(rom) {
+        if let Some(board) = BankDpcPlus::new(rom) {
+            return Some(Cartridge::BankDpcPlus(board));
         }
     }
 
@@ -3988,5 +4648,263 @@ mod tests {
             0xA0,
             "page 0's identifying byte should have been copied into RAM bank 0"
         );
+    }
+
+    /// Build a minimal, structurally-valid DPC+ image (1 bank — `new()`
+    /// accepts `1..=8`, real carts almost always ship 6, but the register
+    /// semantics being tested don't depend on bank count) with a real,
+    /// hand-assembled Thumb-1 program placed at the ARM entry point
+    /// (`custom_rom_origin + 8`, matching `DpcPlusArmMemory::reset_vectors`).
+    ///
+    /// The program: `MOV R0, #0x42` / `LDR R1, [PC, #4]` (loads the 32-bit
+    /// literal `data_ram_origin` from the pool right after the code) /
+    /// `STRB R0, [R1, #0]` (writes 0x42 to the first byte of data RAM) /
+    /// `BX LR` (LR is already `custom_rom_origin` from the reset vector, so
+    /// this ends the program via `StepOutcome::ProgramEnded` exactly as
+    /// `docs/thumb.md` describes). Opcodes hand-verified against the
+    /// ARM7TDMI Thumb-1 format 3/6/9/5 bit layouts (matching
+    /// `rusty2600-thumb`'s own `fmt3`/`fmt6`/`fmt9`/`fmt5` test encoders).
+    fn dpc_plus_rom_with_arm_program(bank_count: usize) -> alloc::vec::Vec<u8> {
+        let overhead = BankDpcPlus::DRIVER_SIZE + BankDpcPlus::DATA_SIZE + BankDpcPlus::FREQ_SIZE;
+        let mut rom = alloc::vec![0u8; overhead + bank_count * BankDpcPlus::BANK_SIZE];
+
+        // Program placed at custom_rom offset 8 == image offset
+        // DRIVER_SIZE + 8 (the ARM entry point).
+        let program_offset = BankDpcPlus::DRIVER_SIZE + 8;
+        let instructions: [u16; 4] = [
+            0x2042, // MOV R0, #0x42
+            0x4901, // LDR R1, [PC, #4]  (word8=1)
+            0x7008, // STRB R0, [R1, #0]
+            0x4770, // BX LR
+        ];
+        for (i, insn) in instructions.iter().enumerate() {
+            let bytes = insn.to_le_bytes();
+            rom[program_offset + i * 2] = bytes[0];
+            rom[program_offset + i * 2 + 1] = bytes[1];
+        }
+        // Literal pool immediately after the 4 instructions (8 bytes),
+        // 4-byte aligned since program_offset itself is 4-aligned
+        // (DRIVER_SIZE=3072 is a multiple of 4, +8 stays a multiple of 4).
+        // data_ram_origin = SRAM_BASE(0x4000_0000) + DRIVER_SIZE(0xC00).
+        let data_ram_origin: u32 = 0x4000_0000 + BankDpcPlus::DRIVER_SIZE as u32;
+        let literal_offset = program_offset + 8;
+        rom[literal_offset..literal_offset + 4].copy_from_slice(&data_ram_origin.to_le_bytes());
+
+        rom
+    }
+
+    #[test]
+    fn dpc_plus_detects_and_lands_besteffort() {
+        let mut rom = dpc_plus_rom_with_arm_program(6);
+        // `detect()`'s real gate is the "DPC+" ASCII signature occurring
+        // twice, matching Stella's own `isProbablyDPCplus` exactly.
+        rom[100..104].copy_from_slice(b"DPC+");
+        rom[200..204].copy_from_slice(b"DPC+");
+        let cart = detect(&rom).expect("6-bank DPC+ image with a real signature should detect");
+        assert!(matches!(cart, Cartridge::BankDpcPlus(_)));
+        assert_eq!(cart.tier(), Tier::BestEffort);
+    }
+
+    #[test]
+    fn dpc_plus_size_alone_does_not_misdetect_as_dpc_plus() {
+        // A 32 KiB image that matches the SIZE formula but has no "DPC+"
+        // signature must fall through to whatever the size-based match
+        // resolves to (F4, since no other signature matches either) — the
+        // content-signature gate must not be size-only.
+        let rom = dpc_plus_rom_with_arm_program(6);
+        let cart = detect(&rom).expect("32 KiB image should still detect as something");
+        assert!(
+            !matches!(cart, Cartridge::BankDpcPlus(_)),
+            "a 32 KiB image with no \"DPC+\" signature must not be misdetected as DPC+"
+        );
+    }
+
+    #[test]
+    fn dpc_plus_bankswitch_hotspots_select_all_six_banks() {
+        let rom = dpc_plus_rom_with_arm_program(6);
+        let mut cart = BankDpcPlus::new(&rom).unwrap();
+        // Tag each bank's byte at register-window-exempt offset 0x80 (the
+        // first plain-ROM byte) with its own bank index for a distinctive
+        // read-back.
+        for b in 0..6usize {
+            cart.custom_rom[b * BankDpcPlus::BANK_SIZE + 0x80] = b as u8 + 1;
+        }
+        for b in 0..6u16 {
+            let _ = cart.cpu_read(0x1FF6 + b);
+            assert_eq!(
+                cart.cpu_read(0x1080),
+                b as u8 + 1,
+                "bank {b} should be selected"
+            );
+        }
+    }
+
+    #[test]
+    fn dpc_plus_bankswitch_gated_while_arm_active() {
+        let rom = dpc_plus_rom_with_arm_program(6);
+        let mut cart = BankDpcPlus::new(&rom).unwrap();
+        cart.arm_active = true;
+        cart.cpu_write(0x1FF7, 0); // would select bank 1 if not gated
+        assert_eq!(
+            cart.bank, 0,
+            "bankswitch hotspots must be inert while the ARM is running"
+        );
+    }
+
+    #[test]
+    fn dpc_plus_plain_fetcher_reads_and_increments() {
+        let rom = dpc_plus_rom_with_arm_program(1);
+        let mut cart = BankDpcPlus::new(&rom).unwrap();
+        cart.data_ram[0x0100] = 0xAB;
+        cart.data_ram[0x0101] = 0xCD;
+        cart.fetcher[0].low = 0x00;
+        cart.fetcher[0].hi = 0x01;
+        assert_eq!(cart.cpu_read(0x1008), 0xAB, "F0 read at $08");
+        assert_eq!(
+            cart.cpu_read(0x1008),
+            0xCD,
+            "F0 auto-incremented after the first read"
+        );
+    }
+
+    #[test]
+    fn dpc_plus_fractional_fetcher_advances_by_increment_accumulator() {
+        let rom = dpc_plus_rom_with_arm_program(1);
+        let mut cart = BankDpcPlus::new(&rom).unwrap();
+        cart.data_ram[0x0200] = 0x11;
+        cart.data_ram[0x0201] = 0x22;
+        cart.frac_fetcher[0].low = 0x00;
+        cart.frac_fetcher[0].hi = 0x02;
+        cart.frac_fetcher[0].increment = 0x80; // half — two `inc()`s should roll over
+        // Each read uses the CURRENT pointer, THEN advances the count
+        // accumulator for next time — so the rollover triggered by the
+        // second read's `inc()` only becomes visible on the THIRD read.
+        assert_eq!(
+            cart.cpu_read(0x1018),
+            0x11,
+            "read 1: low=0, count 0x00->0x80 (no rollover)"
+        );
+        assert_eq!(
+            cart.cpu_read(0x1018),
+            0x11,
+            "read 2: low still 0 (rollover happens in this call's inc(), not yet visible)"
+        );
+        assert_eq!(
+            cart.cpu_read(0x1018),
+            0x22,
+            "read 3: low advanced to 1 by the second read's inc() (count 0x80+0x80 overflowed)"
+        );
+    }
+
+    #[test]
+    fn dpc_plus_windowed_fetcher_reads_zero_outside_window() {
+        let rom = dpc_plus_rom_with_arm_program(1);
+        let mut cart = BankDpcPlus::new(&rom).unwrap();
+        cart.data_ram[0x0300] = 0x55;
+        cart.fetcher[0].low = 0x00;
+        cart.fetcher[0].hi = 0x03;
+        cart.fetcher[0].top = 0x00;
+        cart.fetcher[0].bottom = 0x00;
+        // top==bottom==low==0 -> `is_window()`'s wraparound formula is
+        // false at this exact power-on-like state (see the type's doc
+        // comment on why the naive "between top/bottom" check is wrong).
+        assert!(!cart.fetcher[0].is_window());
+        assert_eq!(
+            cart.cpu_read(0x1010),
+            0x00,
+            "F0 windowed read outside its window is 0"
+        );
+    }
+
+    #[test]
+    fn dpc_plus_rng_next_and_prev_are_inverses() {
+        let rom = dpc_plus_rom_with_arm_program(1);
+        let mut cart = BankDpcPlus::new(&rom).unwrap();
+        let start = cart.rng.0;
+        let _ = cart.cpu_read(0x1000); // RNG.next()
+        let advanced = cart.rng.0;
+        assert_ne!(start, advanced, "RNG.next() should change state");
+        let _ = cart.cpu_read(0x1001); // RNG.prev()
+        assert_eq!(
+            cart.rng.0, start,
+            "RNG.prev() should exactly undo the immediately-prior next()"
+        );
+    }
+
+    #[test]
+    fn dpc_plus_rng_seed_writes_are_ored_in_byte_by_byte() {
+        let rom = dpc_plus_rom_with_arm_program(1);
+        let mut cart = BankDpcPlus::new(&rom).unwrap();
+        cart.cpu_write(0x1070, 0); // reset to "DPC+" constant
+        assert_eq!(cart.rng.0, 0x2B43_5044);
+        cart.cpu_write(0x1071, 0xFF); // OR into byte 0
+        assert_eq!(cart.rng.0, 0x2B43_50FF);
+    }
+
+    #[test]
+    fn dpc_plus_fast_fetch_redirects_lda_immediate_operand() {
+        let rom = dpc_plus_rom_with_arm_program(1);
+        let mut cart = BankDpcPlus::new(&rom).unwrap();
+        cart.cpu_write(0x1058, 0x00); // enable FastFetch (data == 0 means ON)
+        cart.fetcher[0].low = 0x00;
+        cart.fetcher[0].hi = 0x04;
+        cart.data_ram[0x0400] = 0x99;
+        cart.custom_rom[0x0080] = 0xA9; // LDA #immediate opcode
+        cart.custom_rom[0x0081] = 0x08; // operand: register $08 (F0)
+        let _ = cart.cpu_read(0x1080); // fetch the 0xA9 byte, arms lda_pending
+        let redirected = cart.cpu_read(0x1081); // should redirect to register $08 instead of returning 0x08
+        assert_eq!(
+            redirected, 0x99,
+            "FastFetch should redirect through F0 instead of returning the literal operand byte"
+        );
+    }
+
+    #[test]
+    fn dpc_plus_arm_callfunction_executes_a_real_thumb_program() {
+        // The test that actually proves the ARM coprocessor is wired, not
+        // just that the registers decode: a real hand-assembled Thumb-1
+        // program writes a known byte into data RAM, then `BX LR` ends the
+        // program via `StepOutcome::ProgramEnded`.
+        let rom = dpc_plus_rom_with_arm_program(1);
+        let mut cart = BankDpcPlus::new(&rom).unwrap();
+        assert_eq!(cart.data_ram[0], 0x00, "data RAM starts zeroed");
+        cart.cpu_write(0x105A, 254); // CALLFUNCTION -> run_arm()
+        assert_eq!(
+            cart.data_ram[0], 0x42,
+            "the synthetic Thumb program should have written 0x42 to data_ram[0] via a real STRB"
+        );
+        assert!(
+            !cart.arm_active,
+            "arm_active must be cleared once the program ends"
+        );
+    }
+
+    #[test]
+    fn dpc_plus_function_call_two_fills_data_ram_with_a_constant() {
+        let rom = dpc_plus_rom_with_arm_program(1);
+        let mut cart = BankDpcPlus::new(&rom).unwrap();
+        cart.fetcher[0].low = 0x50;
+        cart.fetcher[0].hi = 0x00;
+        // parameters = [value=0x7E, unused, fetcher_index=0, count=3]
+        cart.cpu_write(0x1059, 0x7E);
+        cart.cpu_write(0x1059, 0x00);
+        cart.cpu_write(0x1059, 0x00);
+        cart.cpu_write(0x1059, 0x03);
+        cart.cpu_write(0x105A, 2); // function 2: copy value to fetcher
+        // Ported verbatim from Gopher2600's own function-2 formula
+        // (`o := uint16(f.Low+i) | (uint16(f.Hi+i) << 8)`) — note `Hi` is
+        // ALSO incremented by `i`, not held constant, so successive writes
+        // land at 0x0050, 0x0151, 0x0252, not a contiguous 0x50..=0x52
+        // block. This looks like it could be a copy-paste artifact in the
+        // reference (a genuine per-byte fill would only ever advance
+        // `Low`), but it's what the actual driver-visible behavior is in
+        // the reference implementation this crate ports from, and this
+        // BestEffort-tier function-2 service is not independently
+        // verifiable against a second oracle (Stella runs the real ARM
+        // driver code rather than short-circuiting this operation in C++),
+        // so it's ported exactly rather than "corrected" on a guess.
+        assert_eq!(cart.data_ram[0x0050], 0x7E);
+        assert_eq!(cart.data_ram[0x0151], 0x7E);
+        assert_eq!(cart.data_ram[0x0252], 0x7E);
     }
 }

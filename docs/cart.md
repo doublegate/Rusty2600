@@ -203,15 +203,72 @@ behavior). Stella's `finalizeLoad`/`getImage()` ROM-image re-export
 machinery is not ported — this crate's own `SaveState` format already
 covers persistence uniformly across every board.
 
-DPC+/CDF/CDFJ/CDFJ+ (`T-0401-006`, needing the `rusty2600-thumb` ARM7TDMI
-interpreter wired into a `Board`/`Cartridge` variant) remains unimplemented
-— its own separate, larger undertaking (register-map research per family,
-a `ThumbMemory` impl, a `tick_coprocessor()` hook into the scheduler), not
-attempted alongside AR in this pass. The tiered TODOs above track it; the
-honesty gate's oracle set only needs extending for `Core`/`Curated`
-schemes (never `BestEffort` — `BankAr` correctly does NOT appear in
-`tests/mapper_tier_honesty.rs`'s oracle set, since that gate exists
-precisely to keep `BestEffort` boards OUT of the accuracy-oracle corpus).
+**DPC+ (`T-0401-006`, DONE)**: the first Harmony/Melody ARM coprocessor
+family — a real ARM7TDMI Thumb-1 interpreter (`rusty2600-thumb`, landed
+`[1.6.0]`) finally wired into a `Board`/`Cartridge` variant (`BankDpcPlus`).
+Ported from Gopher2600's Go `hardware/memory/cartridge/dpcplus` package
+(~1,700 lines), not Stella's C++ `CartDPCPlus.cxx` — matching this
+project's established precedent for ARM-adjacent code (`docs/thumb.md`'s
+own "why Gopher2600, not Stella" rationale). Image layout: `[3072B
+driver][N*4096B banks][4096B data][1024B freq]`; bank count is derived from
+the image size, not hardcoded (real carts almost always ship 6 banks =
+32 KiB total). Detection is content-signature-gated (the literal ASCII
+bytes `"DPC+"` occurring at least twice — the same signature Stella's own
+`isProbablyDPCplus` uses), NOT size-based: a 6-bank DPC+ image is exactly
+32 KiB, the SAME size several already-implemented schemes (F4/F4SC/3E/3F)
+also use, so a bare size check would misdetect real F4/3E/3F ROMs.
+
+The register window (`$1000..=$107F`) implements the RNG (Gopher2600's
+`0x10adab1e` galois-style formula), 8 plain + 8 windowed + 8 fractional
+data fetchers (the windowed-fetcher `isWindow()` check is ported as a
+byte-wraparound comparison, not the naive "low between top/bottom" the DPC
+patent describes — Gopher2600's own comment explains why the naive version
+misses real DPC+ demo ROMs at the low=bottom=0 power-on state), FastFetch
+(`LDA #immediate` operand redirection for addresses `< 0x28`), and the
+`$5A` "CALLFUNCTION" register — the actual ARM entry point. A write of
+`254`/`255` there synchronously builds a fresh `Arm7Tdmi` against this
+board's own driver/custom/data/freq ROM+RAM segments (mapped at Gopher2600's
+own Harmony-architecture addresses: Flash at `0x0000_0000`, SRAM at
+`0x4000_0000`) and steps it to `StepOutcome::ProgramEnded` (a `BX`/`BLX`
+back to the entry `LR`) or a defensive step-count safety cap (NOT real
+hardware behavior — a guard against a runaway/buggy ROM). This exactly
+matches Gopher2600's own `Run()` semantics for this call shape: it only
+resets ARM registers when the prior yield was `YieldProgramEnded`, and this
+board's CALLFUNCTION loop always runs to `YieldProgramEnded` before
+returning to the 6507, so a fresh reset-and-run-to-completion each call is
+behaviorally identical to Gopher2600's persistent-instance model here (DPC+
+never uses the `YieldSyncWithVCS` mid-execution-resume path Gopher2600
+itself says "DPC+ does not support"). Verified with a real hand-assembled
+synthetic Thumb-1 program (not just register-decode tests) proving the ARM
+actually executes and mutates data RAM via a genuine `STRB`.
+
+One new, genuinely reusable `Board` hook: none needed here (unlike AR's
+`take_oob_pokes()`) — the ARM entry point is a synchronous call from within
+`cpu_write`, not a per-color-clock scheduler tick, so no `Bus`/scheduler
+changes were needed at all.
+
+**Honestly deferred, not silently dropped**: DPC+'s music-mode continuous-
+time audio (the reference's `Step(clock)`-driven phase accumulator) is NOT
+implemented — the register plumbing (`$05`, `$5D..=$5F`, `$75..=$77`)
+round-trips correctly, but the waveform-index math always samples index 0,
+so DPC+ music-mode audio is silent/incorrect on that one channel. This is a
+`rusty2600-tia` audio-timing follow-up, not a cart-catalogue-breadth one.
+Function-call service `2` ("copy value to fetcher pointer, N times") is
+ported with Gopher2600's own address formula verbatim, including what looks
+like a copy-paste artifact (`Hi` is ALSO advanced by the loop index, not
+held constant, so it does not fill a contiguous block) — Stella can't
+cross-check this specific service since it runs the real ARM driver code
+rather than short-circuiting it in C++, so it's ported exactly rather than
+silently "corrected" on a guess (see `BankDpcPlus`'s own doc comment and
+its matching test for the worked addresses). CDF/CDFJ/CDFJ+ (the other
+three Harmony/Melody families) remain their own future, separately-scoped
+follow-up — closing the catalogue to 25/25 needs those too, and rushing
+them alongside DPC+ risked landing something half-correct.
+
+BestEffort tier for `BankDpcPlus`. `tests/mapper_tier_honesty.rs`'s oracle
+set is correctly NOT extended — that gate is `Core`/`Curated`-only (exists
+precisely to keep `BestEffort` boards OUT of the accuracy-oracle corpus),
+confirmed by both this board and `BankAr` before it.
 
 ### `Board::snoop_write`/`snoop_read` — bankswitching outside the cart window
 
