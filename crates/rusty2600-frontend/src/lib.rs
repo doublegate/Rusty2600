@@ -88,16 +88,19 @@ pub mod shell;
 #[cfg(feature = "debug-hooks")]
 pub mod debugger;
 
-// The always-on egui App shell + the wgpu blit + the run loop. Native only — wasm routes through
-// `wasm::start`.
-#[cfg(not(target_arch = "wasm32"))]
+// The always-on egui App shell + the wgpu blit + the run loop. Native, OR wasm32 with the real
+// `wasm-winit` build (v2.5.0) — `wasm-canvas`'s bootstrap (`wasm::run_canvas`) is the fallback
+// when `wasm-winit` is off. `app.rs`'s own doc comment covers exactly which of its code paths are
+// wasm-safe (native-only crates like `rfd`/`gilrs`/`directories` stay behind their own
+// `#[cfg(not(target_arch = "wasm32"))]` splits within the file).
+#[cfg(any(not(target_arch = "wasm32"), feature = "wasm-winit"))]
 pub mod app;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod audio;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), feature = "wasm-winit"))]
 pub mod gfx;
 /// The composable post-process shader stack `gfx` presents through.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), feature = "wasm-winit"))]
 pub mod shader_pass;
 
 /// The player/missile/ball sprite-replacement data model + loader
@@ -105,9 +108,11 @@ pub mod shader_pass;
 #[cfg(all(not(target_arch = "wasm32"), feature = "hd-pack"))]
 pub mod sprite_pack;
 
-// The dedicated emulation thread + the shared-state handles (native; the thread spawn itself is
-// behind the `emu-thread` feature, but the handle types + the `EmuCore` are always present).
-#[cfg(not(target_arch = "wasm32"))]
+// The emulator core handle + shared-state types `app.rs` drives (native, or wasm32 with
+// `wasm-winit` — see `app` above). The OS-thread spawn a `emu-thread` build performs stays
+// feature-gated INSIDE `app.rs`, not here — `wasm-winit` builds must not enable `emu-thread` (see
+// `Cargo.toml`'s doc comment).
+#[cfg(any(not(target_arch = "wasm32"), feature = "wasm-winit"))]
 pub mod emu_thread;
 
 /// Run-ahead: hides a game's internal input lag.

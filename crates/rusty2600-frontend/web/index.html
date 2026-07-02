@@ -7,11 +7,28 @@
     <title>Rusty2600 — cycle-accurate Atari 2600 emulator in your browser</title>
 
     <!--
-        GitHub Pages host for the wasm32 frontend (the canvas-2D bootstrap in
-        `src/wasm.rs`). Live at https://doublegate.github.io/Rusty2600/
+        GitHub Pages host for the wasm32 frontend. Live at
+        https://doublegate.github.io/Rusty2600/
+
+        STILL BUILDS `wasm-canvas` (the proven canvas-2D bootstrap), not the new
+        `wasm-winit` real winit+wgpu+egui build landed alongside this comment in
+        v2.5.0. `wasm-winit` compiles cleanly and a real `trunk build` produces a
+        working bundle (verified), but the wgpu adapter-request step itself could
+        NOT be verified actually rendering a frame in this project's sandboxed
+        headless-Chromium test environment (see `docs/frontend.md`'s wasm-winit
+        status section + `Cargo.toml`'s wasm32 `wgpu` dependency comment for the
+        full investigation) — real desktop browsers with genuine GPU access may
+        well work where that sandbox could not, but this is a real open question,
+        not a confirmed capability. Keeping the PROVEN `wasm-canvas` as what
+        actually deploys to the live public page until that's confirmed (swap
+        this to `data-cargo-no-default-features` + `data-cargo-features=
+        "wasm-winit"` once verified in a real browser — see git history for the
+        exact attributes used during that verification attempt).
     -->
     <link data-trunk rel="rust" href="../Cargo.toml"
-          data-target-name="rusty2600_frontend" data-cargo-features="wasm-winit" />
+          data-target-name="rusty2600_frontend"
+          data-cargo-no-default-features
+          data-cargo-features="wasm-canvas" />
 
     <style>
         :root {

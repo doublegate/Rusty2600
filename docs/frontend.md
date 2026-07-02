@@ -149,8 +149,53 @@ wire format was needed.
 
 ## wasm
 
-`wasm-winit` (default feature) and `wasm-canvas` (lightweight embed) both
-build for `wasm32-unknown-unknown`. The Trunk project lives at
+Two independent wasm32 entry points, selected by feature flag (`src/wasm.rs`;
+see its module doc and `Cargo.toml`'s `[features]` doc comment):
+
+- **`wasm-winit`** (the default as of v2.5.0) — the real `app::App`, the SAME
+  winit+wgpu+egui shell the native build uses, compiled for
+  `wasm32-unknown-unknown`. `emu-thread`/`debug-hooks`/`retroachievements`/
+  `scripting`/`netplay` are NOT wasm-safe and must stay off (see
+  `Cargo.toml`'s feature doc comments) — `web/index.html` builds it via
+  `data-cargo-no-default-features` + `data-cargo-features="wasm-winit"`.
+  ROM loading routes through a hidden `<input type=file>`
+  (`App::trigger_wasm_rom_picker`) rather than `rfd` (native-only, not even
+  a wasm32 dependency); `Config::save()` is a no-op stub on this target (real
+  `localStorage`/IndexedDB persistence is `v2.8.0` scope).
+
+  **Honest status (v2.5.0 landing)**: compiles cleanly (`cargo check
+  --target wasm32-unknown-unknown --no-default-features --features
+  wasm-winit`, zero warnings) and a real `trunk build` produces a working
+  `dist/` bundle. Loaded in a real browser (headless Chromium), `run_winit()`
+  executes and logs correctly — but the `Gfx::new_async` adapter-request step
+  could NOT be verified rendering an actual frame in this sandbox: the
+  available headless-Chromium-with-SwiftShader environment has no
+  `navigator.gpu` (no real WebGPU) and, in this specific setup, wgpu 29's
+  adapter request also failed to fall back to the compiled-in GL/WebGL2
+  backend (`wgpu-hal`'s `gles` feature, confirmed present via `cargo tree -e
+  features`) — see `Cargo.toml`'s wasm32 `wgpu` dependency comment for the
+  full investigation (a likely wgpu-internal `webgpu`-vs-`wgpu_core`
+  build-script exclusivity for this target, not something fixable from this
+  project's own `Cargo.toml` alone, since `egui-wgpu`'s own unconditional
+  `wgpu` dependency reintroduces the `webgpu` feature via Cargo's per-crate
+  feature unification regardless of this crate's own `default-features =
+  false`). **Rendering + keyboard input are therefore UNVERIFIED end-to-end**
+  — real desktop browsers with genuine GPU access (real WebGPU, or a real
+  hardware-accelerated GL driver instead of SwiftShader) may well work where
+  this sandboxed headless environment could not; that is a real, open
+  question for the next release/session with browser access to confirm, not
+  a claimed-working capability. Audio is an explicitly deferred stretch goal
+  (the native `cpal`-based `audio.rs`/`AudioProducer` stays native-only;
+  wasm-winit audio would need to reuse `wasm-canvas`'s proven Web Audio
+  `AudioSink` pattern instead, not attempted yet).
+
+- **`wasm-canvas`** (the older, simpler fallback — kept as a safety net) — a
+  bare canvas-2D `requestAnimationFrame` bootstrap with real, proven-working
+  keyboard input, ROM loading (including `.zip` archives), and Web Audio
+  output. This is genuinely complete and live-verified (it was the sole demo
+  through `v2.4.0`).
+
+Both build for `wasm32-unknown-unknown`. The Trunk project lives at
 `crates/rusty2600-frontend/web/` (not a repo-root `web/`) — `trunk build
 --release` from that directory produces `dist/`, which `.github/workflows/
 pages.yml` deploys to GitHub Pages (demo at `/`, rustdoc at `/api/`) on every

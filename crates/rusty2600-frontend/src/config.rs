@@ -150,6 +150,18 @@ impl Config {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         std::fs::write(path, s)
     }
+
+    /// wasm32's `save()` — a no-op. `wasm-winit`'s `App::with_config` always starts from
+    /// `Config::default()` (no `Config::load()` counterpart exists for this target either), so
+    /// there is nothing to persist to yet; `SetRegion`/`SaveConfig`'s dispatch arms call this
+    /// unconditionally on both targets, so it must exist here with the same signature rather than
+    /// needing its own `#[cfg]` at every call site. Real wasm persistence
+    /// (`localStorage`/IndexedDB) is later-release scope (`v2.8.0`).
+    #[cfg(target_arch = "wasm32")]
+    #[allow(clippy::unnecessary_wraps)]
+    pub const fn save(&self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// The base directory all ROMs' save-state slots live under
