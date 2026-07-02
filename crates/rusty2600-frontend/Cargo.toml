@@ -104,7 +104,7 @@ toml = "1.1"
 # bzip2/lzma/zstd/xz/aes-crypto (unneeded codecs/encryption that would only
 # bloat the native binary and the wasm bundle for no benefit — ROM zips are
 # plain Deflate or Store).
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 # Already transitive deps of wgpu; direct here is free.
 pollster = "0.4"
