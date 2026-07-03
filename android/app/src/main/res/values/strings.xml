@@ -9,4 +9,13 @@
     <string name="btn_fire">Fire</string>
     <string name="btn_reset">Reset</string>
     <string name="btn_select">Select</string>
+    <string name="btn_save_state">Save State</string>
+    <string name="btn_load_state">Load State</string>
+    <string name="dialog_save_state_title">Save State</string>
+    <string name="dialog_load_state_title">Load State</string>
+    <string name="no_rom_loaded">No ROM loaded</string>
+    <string name="saved_to_slot">Saved to slot %1$d</string>
+    <string name="loaded_slot">Loaded slot %1$d</string>
+    <string name="save_failed">Save failed: %1$s</string>
+    <string name="load_failed">Load failed: %1$s</string>
 </resources>
