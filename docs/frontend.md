@@ -33,6 +33,108 @@ UI + present. This is the only `std`/`unsafe`-carrying crate.
 - **Frame line budget.** NTSC 262 lines / PAL 312 lines drives the present cadence
   (≈60 Hz NTSC, ≈50 Hz PAL).
 
+## Shader stack (`v1.4.0`, expanded `v2.10.0` "Prism")
+
+`rusty2600-gfx-shaders` (`no_std`) carries the WGSL source for every
+built-in post-process pass; `crate::shader_pass::ShaderStack` runs them.
+Settings -> Video's "Shader stack" checkboxes build a `Vec<PassKind>`
+(`crate::config::VideoConfig::shader_passes`) in click order; **empty is
+the default**, and an empty stack skips `ShaderStack` entirely —
+`Gfx::present` falls straight through to the unchanged direct nearest-blit,
+so the byte-identical-default invariant holds by construction (the same
+guarantee `[1.1.0]`'s `uv_scale` landed with).
+
+### The five built-in passes
+
+| Pass | What it is | Position constraint |
+|---|---|---|
+| `CompositeArtifact` | A horizontal chroma-bleed blur in already-decoded RGB space — a stylistic approximation, honestly labeled as such (not a real signal decode). | None — any position. |
+| `CrtScanline` | Darkens every other output row. | None. |
+| `NtscComposite` (`v2.10.0`) | A genuine YIQ-domain composite decode — see below. | **Must be first.** |
+| `HqNx` (`v2.10.0`) | Edge-directed pixel-art smoothing (an independent WGSL adaptation of the published hqx technique). | None. |
+| `Xbrz` (`v2.10.0`) | Edge-directed pixel-art smoothing with the xBR diagonal-dominance rule (an independent WGSL adaptation, characteristically rounder corners than `HqNx`). | None. |
+
+### Arbitrary-length ping-pong (corrected from the original fixed 2-slot design)
+
+Through `v2.9.0` `ShaderStack` was hard-limited to exactly 2 chained passes
+— its own doc comment argued a third pass would need a third intermediate
+texture. That turned out to be wrong: a linear chain of single-input/
+single-output passes only ever needs TWO intermediate textures regardless
+of length (pass `i` reads whichever texture pass `i-1` wrote and writes the
+other one, or the swapchain target if it's the last pass). `v2.10.0`
+generalized `ShaderStack::render` to loop over any number of passes with
+the same two textures the 2-pass design already allocated — see
+`shader_pass.rs`'s module doc for the exact alternation rule.
+
+### The `NtscComposite` pass: a real YIQ decode, not a bigger blur
+
+The TIA's colour value is 4 bits of hue + 3 bits of luma (`docs/tia.md`),
+looked up through a baked, region-specific RGB table
+(`crate::palette`) — there is no live signal math on the CPU side. The
+raw palette-index byte (`colour7 = colu >> 1`) is threaded through
+alongside the RGBA framebuffer, purely additively:
+`rusty2600_core`/every chip crate is completely untouched; only
+`rusty2600-frontend`'s OWN presentation buffers gained a parallel `index`
+field (`present_buffer::Frame::index`, `EmuCore::index_buffer`), populated
+at the exact same call site the existing RGB conversion already runs, and
+a small `R8Uint` texture (`ShaderStack`'s `index_texture`, `Gfx::upload_index`)
+that nothing samples unless `NtscComposite` is actually in the active
+stack.
+
+**The technique** (adapted from the Bisqwit/Mesen NES composite decoder,
+NOT ported — the TIA's colour generation is architecturally different from
+the NES PPU's; see `rusty2600_gfx_shaders::NTSC_COMPOSITE_WGSL`'s own doc
+comment for the full derivation): the TIA's dot clock runs at exactly the
+NTSC colour-subcarrier frequency, so — unlike the NES — there's no
+progressive per-dot phase drift to synthesize; a given `(hue, luma)` value
+decodes, in isolation, to one fixed YIQ point, which is exactly what the
+existing measured NTSC RGB table already captures. The genuinely
+TIA-specific work is modelling a real NTSC decoder's **chroma/luma
+bandwidth differential** (chroma ~0.6-1.5 MHz vs. luma ~4.2 MHz in a
+broadcast decoder) — the actual physical origin of 2600 "artifact colors."
+The pass converts a 5-tap horizontal neighbourhood's raw `(hue, luma)`
+entries to YIQ, passes the CENTRE tap's Y through unblended (sharp luma),
+takes a weighted 5-tap average of I/Q (blurred chroma), and converts back
+to RGB.
+
+**Verification**: the RGB<->YIQ matrix pair is a true inverse (up to f32
+rounding), so a uniform neighbourhood (no colour transition) decodes back
+to the exact same RGB a direct palette lookup would give — verified in
+pure Rust (`shader_pass.rs`'s `ntsc_yiq_round_trip_matches_palette_for_every_entry`
+test) against every one of the 128 real NTSC palette entries, independent
+of WGSL/naga/wgpu execution. A second test
+(`ntsc_composite_wgsl_table_matches_frontend_palette`) keeps the WGSL's
+baked copy of the palette table honest against `palette::NTSC`'s own
+values. **Honesty**: this is NOT a transistor-level composite-signal
+simulation (no colorburst timing, no sub-pixel oversampling) and it is
+NTSC-only — PAL's subcarrier uses a different phase-alternating modulation
+this pass doesn't model, and SECAM has no chroma at all, so the Settings
+checkbox disables itself outside the NTSC region. It IS a genuine
+signal-domain (YIQ, not RGB) decode modelling a real, named NTSC
+phenomenon the pre-existing `CompositeArtifact` RGB blur does not attempt.
+
+Because `NtscComposite` samples the raw index texture (not the RGBA
+ping-pong texture), it can only usefully be the stack's first pass — the
+Settings UI enforces this by always re-sorting it to position 0 when
+enabled (`shell.rs`); `ShaderStack::render` also defensively skips it if it
+somehow ends up elsewhere (a wgpu bind-group-layout mismatch would
+otherwise panic).
+
+### Constrained `.slangp`/`.cgp` preset importer (`v2.10.0`)
+
+Settings -> Video -> "Import shader preset..." (native-only — needs
+`rfd`'s file dialog) opens a `.slangp`/`.cgp` RetroArch shader preset and
+maps its `shaderN = path` entries onto this project's five built-in passes
+by recognizing well-known filename stems (`crate::slang_preset`) —
+matching RustyNES's own ADR 0013 design philosophy: this is **not** a
+GLSL/Slang -> WGSL transpiler and never will be. An unrecognized filename
+is reported to the user as unsupported, never silently dropped; a pure
+pass-through stem (`stock`/`passthrough`/`pixellate`) is silently skipped
+(it isn't a missing capability). An `ntsc`/`composite` stem always maps to
+the position-flexible `CompositeArtifact`, never the position-constrained
+`NtscComposite`, so an imported preset can never produce an invalid stack
+regardless of where the preset places that shader.
+
 ## The debugger (`debug-hooks`, v0.5.0)
 
 Real as of v0.5.0 — `crates/rusty2600-frontend/src/debugger/` (default-on
@@ -308,6 +410,25 @@ see its module doc and `Cargo.toml`'s `[features]` doc comment):
     weight, not console complexity, dominates. Icons are a placeholder (`web/icon.svg`, a simple
     joystick glyph in the page's own dark/amber palette, rasterized via `rsvg-convert` to 192px/
     512px PNGs) — this project has no dedicated logo/brand asset yet.
+
+  **`v2.10.0` "Prism" shader-stack expansion** — verified via `cargo check`/
+  `cargo clippy --target wasm32-unknown-unknown --no-default-features
+  --features wasm-winit` (and again with `,debug-hooks`), zero warnings, same
+  posture as every other wasm-winit addition above. This release's new
+  `ShaderStack::upload_index`/`NtscComposite` path adds an `R8Uint`
+  (`texture_2d<u32>`, `textureLoad`-only) texture binding, which is a NEWER
+  and less commonly exercised wgpu/WebGL2 code path than the plain
+  `Rgba8UnormSrgb` + filtering-sampler bindings every other pass uses —
+  type-checks and validates via naga on this target, but (like the rest of
+  `wasm-winit`'s rendering story, see the honest-status note below) has NOT
+  been confirmed to actually render correctly against a real browser's
+  WebGL2/WebGPU backend in this sandbox. `HqNx`/`Xbrz` reuse the exact same
+  bind-group shape `CompositeArtifact`/`CrtScanline` already had, so they
+  carry no additional wasm32 risk beyond what was already unverified before
+  this release. The `.slangp`/`.cgp` preset importer (`crate::slang_preset`)
+  is pure parsing logic with no GPU or file-picker dependency of its own, but
+  its own UI entry point (Settings -> Video -> "Import shader preset...")
+  is native-only (`rfd`), matching the save-state-slot actions' own gate.
 
   **Honest status (v2.5.0 landing)**: compiles cleanly (`cargo check
   --target wasm32-unknown-unknown --no-default-features --features

@@ -85,6 +85,14 @@ pub mod rom_archive;
 /// is shareable here, unlike RustyNES's curated subset).
 pub mod share_link;
 pub mod shell;
+/// A constrained RetroArch `.slangp`/`.cgp` shader-preset importer (`v2.10.0`).
+///
+/// Pure parsing/mapping logic (no GPU, no I/O beyond the caller handing
+/// over the file text) — see the module doc for the honesty-gated design
+/// (maps known shader-name stems to Rusty2600's own built-in
+/// [`rusty2600_gfx_shaders::PassKind`] set; anything unrecognized is
+/// reported, never silently dropped).
+pub mod slang_preset;
 
 /// The debugger's persistent state, structured chip snapshots, and panel
 /// renderers (6507/TIA/RIOT/memory + a standalone disassembler).
