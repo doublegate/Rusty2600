@@ -300,8 +300,14 @@ impl Gfx {
             usage: wgpu::BufferUsages::COPY_SRC,
         });
 
-        let shader_stack =
-            crate::shader_pass::ShaderStack::new(&device, format, config.width, config.height);
+        let shader_stack = crate::shader_pass::ShaderStack::new(
+            &device,
+            format,
+            config.width,
+            config.height,
+            MAX_W,
+            MAX_H,
+        );
 
         Ok(Self {
             device,
@@ -376,6 +382,18 @@ impl Gfx {
         (self.fb_w, self.fb_h)
     }
 
+    /// Upload the raw per-dot TIA palette-index byte alongside the RGBA
+    /// framebuffer (`Self::upload`), for [`rusty2600_gfx_shaders::PassKind::NtscComposite`]'s
+    /// genuine YIQ decode pass (see `crate::shader_pass`'s module doc for
+    /// why it needs the un-decoded byte, not RGBA). Additive: nothing reads
+    /// this texture unless that pass is actually in the active stack, so
+    /// calling this every frame (as `app.rs` does, unconditionally) has no
+    /// effect on the existing RGB present path. A length mismatch is
+    /// skipped, mirroring [`Self::upload`].
+    pub fn upload_index(&mut self, indices: &[u8], w: u32, h: u32) {
+        self.shader_stack.upload_index(&self.queue, indices, w, h);
+    }
+
     /// Acquire the next surface texture for the frame, or `None` if the surface is lost (the
     /// caller reconfigures and retries next frame).
     ///
@@ -421,6 +439,13 @@ impl Gfx {
     /// `passes` (`rusty2600-gfx-shaders`' [`rusty2600_gfx_shaders::PassKind`])
     /// after the base blit. An empty `passes` list calls [`Self::blit`]
     /// directly — the byte-identical zero-pass default.
+    ///
+    /// When `passes[0]` is [`rusty2600_gfx_shaders::PassKind::NtscComposite`]
+    /// the base RGB blit is skipped entirely — that pass reads the raw
+    /// palette-index texture ([`Self::upload_index`]) instead, so the usual
+    /// "blit into the stack's first ping-pong slot" step would be wasted
+    /// work whose output nothing samples (see `crate::shader_pass`'s module
+    /// doc for the full rationale).
     pub fn present(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -431,8 +456,10 @@ impl Gfx {
             self.blit(encoder, target);
             return;
         }
-        let first_target = self.shader_stack.first_target_view();
-        self.blit(encoder, &first_target);
+        if passes[0] != rusty2600_gfx_shaders::PassKind::NtscComposite {
+            let first_target = self.shader_stack.first_target_view();
+            self.blit(encoder, &first_target);
+        }
         self.shader_stack.render(encoder, target, passes);
     }
 }

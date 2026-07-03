@@ -48,6 +48,13 @@ pub struct EmuCore {
     /// the active sub-rect is `region.active_height()` rows tall). The present path
     /// copies it out under one brief lock without touching the core internals.
     framebuffer: Vec<u8>,
+    /// The raw TIA palette-index byte (`colour7 = colu >> 1`) alongside
+    /// `framebuffer`, one byte per pixel, same sub-rect convention.
+    /// Additive (`v2.10.0`): populated at the SAME site as `framebuffer`
+    /// (never instead of it — see `run_frame`/`extract_frame`), feeding
+    /// [`rusty2600_gfx_shaders::PassKind::NtscComposite`]'s genuine YIQ
+    /// decode pass via [`crate::gfx::Gfx::upload_index`].
+    index_buffer: Vec<u8>,
     /// The board's accuracy tier label, cached for the status bar (the 2600 `Board`
     /// trait has no name; `Tier::name` is the honesty marker).
     board_tier: Option<&'static str>,
@@ -135,6 +142,7 @@ impl EmuCore {
             paused: false,
             rom_loaded: false,
             framebuffer: vec![0u8; (MAX_W * MAX_H * 4) as usize],
+            index_buffer: vec![0u8; (MAX_W * MAX_H) as usize],
             board_tier: None,
             #[cfg(not(target_arch = "wasm32"))]
             audio_tx: None,
@@ -197,6 +205,7 @@ impl EmuCore {
         self.board_tier = None;
         self.rom_tag = None;
         self.framebuffer.iter_mut().for_each(|b| *b = 0);
+        self.index_buffer.iter_mut().for_each(|b| *b = 0);
     }
 
     /// Rewinds the emulator state by one frame if history is available.
@@ -241,6 +250,16 @@ impl EmuCore {
         let (w, h) = self.fb_dims();
         let len = (w * h * 4) as usize;
         &self.framebuffer[..len.min(self.framebuffer.len())]
+    }
+
+    /// The current raw palette-index slice (the active region's `w*h` bytes),
+    /// parallel to [`Self::framebuffer`] — see [`Self::index_buffer`]'s field
+    /// doc comment.
+    #[must_use]
+    pub fn index_buffer(&self) -> &[u8] {
+        let (w, h) = self.fb_dims();
+        let len = (w * h) as usize;
+        &self.index_buffer[..len.min(self.index_buffer.len())]
     }
 
     /// Run a single frame sequentially and accumulate the beam dots into `self.framebuffer`.
@@ -357,6 +376,15 @@ impl EmuCore {
                     self.framebuffer[off + 2] = rgb as u8;
                     self.framebuffer[off + 3] = 255;
                 }
+                // Additive (`v2.10.0`): stash the SAME raw byte `rgb` was
+                // just decoded from, alongside it, for
+                // `PassKind::NtscComposite`'s decode pass. Never read here —
+                // this loop's own RGB conversion above is completely
+                // unchanged.
+                let idx_off = y * 160 + x;
+                if idx_off < self.index_buffer.len() {
+                    self.index_buffer[idx_off] = color_idx >> 1;
+                }
             }
         }
 
@@ -419,6 +447,12 @@ impl EmuCore {
                     self.framebuffer[off + 1] = (rgb >> 8) as u8;
                     self.framebuffer[off + 2] = rgb as u8;
                     self.framebuffer[off + 3] = 255;
+                }
+                // See `run_frame`'s identical companion write — additive,
+                // `v2.10.0`.
+                let idx_off = y * 160 + x;
+                if idx_off < self.index_buffer.len() {
+                    self.index_buffer[idx_off] = color_idx >> 1;
                 }
             }
         }
@@ -615,6 +649,10 @@ impl EmuCore {
                                     let out_g = (g * a + bg_g * (255 - a)) / 255;
                                     let out_b = (b * a + bg_b * (255 - a)) / 255;
                                     frame.put_dot(x, y, (out_r << 16) | (out_g << 8) | out_b);
+                                    // The raw TIA byte is a hardware fact independent of
+                                    // this cosmetic hd-pack splice — record the ORIGINAL
+                                    // `color_idx`, not the replacement bitmap's colour.
+                                    frame.put_index(x, y, color_idx >> 1);
                                     continue;
                                 }
                             }
@@ -623,6 +661,7 @@ impl EmuCore {
                 }
 
                 frame.put_dot(x, y, rgb);
+                frame.put_index(x, y, color_idx >> 1);
             }
         }
 

@@ -33,6 +33,14 @@ pub enum MenuAction {
     /// Native-only, matching [`MenuAction::SaveStateSlot`].
     #[cfg(not(target_arch = "wasm32"))]
     LoadStateSlot(u8),
+    /// Settings -> Video -> Import shader preset... (`v2.10.0`): a native
+    /// file picker selects a `.slangp`/`.cgp` file, `crate::slang_preset`
+    /// parses + maps it, and the dispatch replaces `cfg.video.shader_passes`
+    /// with the mapped result — reporting anything unsupported in the
+    /// status bar. Native-only: `rfd::FileDialog` has no wasm32 story,
+    /// matching [`MenuAction::SaveStateSlot`].
+    #[cfg(not(target_arch = "wasm32"))]
+    ImportShaderPreset,
     /// Emulation -> Pause / Resume toggle.
     TogglePause,
     /// Emulation -> Reset (the console Reset switch / soft reset).
@@ -914,16 +922,56 @@ impl ShellState {
                         for kind in [
                             rusty2600_gfx_shaders::PassKind::CompositeArtifact,
                             rusty2600_gfx_shaders::PassKind::CrtScanline,
+                            rusty2600_gfx_shaders::PassKind::NtscComposite,
+                            rusty2600_gfx_shaders::PassKind::HqNx,
+                            rusty2600_gfx_shaders::PassKind::Xbrz,
                         ] {
+                            // `NtscComposite` only does anything under the NTSC region
+                            // (see its own doc comment — PAL/SECAM use a different or
+                            // absent chroma model this pass doesn't attempt): disable
+                            // its checkbox rather than let a user enable a pass with no
+                            // visible effect under the current region.
+                            let region_ok = kind != rusty2600_gfx_shaders::PassKind::NtscComposite
+                                || cfg.region == Region::Ntsc;
                             let mut enabled = cfg.video.shader_passes.contains(&kind);
-                            if ui.checkbox(&mut enabled, kind.label()).changed() {
+                            let resp = ui.add_enabled(
+                                region_ok,
+                                egui::Checkbox::new(&mut enabled, kind.label()),
+                            );
+                            if !region_ok {
+                                resp.on_hover_text("NTSC region only");
+                            } else if resp.changed() {
                                 if enabled {
                                     cfg.video.shader_passes.push(kind);
                                 } else {
                                     cfg.video.shader_passes.retain(|p| *p != kind);
                                 }
+                                // `PassKind::requires_first_position` passes (currently
+                                // just `NtscComposite`) sample the raw palette-index
+                                // texture, not the RGBA ping-pong texture, so they only
+                                // work as the stack's FIRST pass — see
+                                // `shader_pass.rs`'s module doc. The Settings UI is the
+                                // only place stacks are constructed, so pin it to the
+                                // front here rather than teach `ShaderStack::render`
+                                // (or the user) about manual reordering.
+                                if let Some(pos) = cfg
+                                    .video
+                                    .shader_passes
+                                    .iter()
+                                    .position(|p| p.requires_first_position())
+                                {
+                                    let first = cfg.video.shader_passes.remove(pos);
+                                    cfg.video.shader_passes.insert(0, first);
+                                }
                                 changed = true;
                             }
+                        }
+                        // Constrained `.slangp`/`.cgp` preset importer (`v2.10.0`,
+                        // `crate::slang_preset`): native-only, matching the save-state
+                        // slot actions' own `rfd`-availability gate.
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if ui.button("Import shader preset...").clicked() {
+                            actions.push(MenuAction::ImportShaderPreset);
                         }
                     }
                     1 => {
