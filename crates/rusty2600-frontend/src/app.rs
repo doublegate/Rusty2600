@@ -1186,6 +1186,20 @@ impl App {
                                     if unsupported == 0 {
                                         format!("Imported preset: {mapped} pass(es) mapped")
                                     } else {
+                                        // Print exactly what the status bar's "(see log)"
+                                        // points to (Copilot, PR #20): an earlier version
+                                        // said "see log" without ever logging anything.
+                                        for entry in &result.unsupported {
+                                            if let crate::slang_preset::ImportedPass::Unsupported {
+                                                path,
+                                                reason,
+                                            } = entry
+                                            {
+                                                eprintln!(
+                                                    "rusty2600: preset import: unsupported pass '{path}' ({reason})"
+                                                );
+                                            }
+                                        }
                                         format!(
                                             "Imported preset: {mapped} pass(es) mapped, \
                                              {unsupported} unsupported (see log)"

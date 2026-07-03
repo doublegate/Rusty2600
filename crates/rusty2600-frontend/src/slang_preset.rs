@@ -86,12 +86,28 @@ impl ImportResult {
 
 /// A parsed key/value line from a preset (INI-ish, `key = value`, `#`/`//`
 /// comments, optional surrounding quotes on the value).
+///
+/// Handles a trailing inline comment after the value (`shader0 = "path" #
+/// note` / `shader0 = path // note`) — a quoted value keeps everything
+/// inside its own quotes verbatim (so a path itself can't be truncated by a
+/// `#`/`//` that happens to appear inside it) and only strips a comment
+/// starting AFTER the closing quote; an unquoted value simply stops at the
+/// first `#` or `//`.
 fn parse_kv(line: &str) -> Option<(String, String)> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') || line.starts_with("//") {
         return None;
     }
     let (k, v) = line.split_once('=')?;
+    let v = v.trim();
+    let v = v.strip_prefix('"').map_or_else(
+        || {
+            let hash = v.find('#').unwrap_or(v.len());
+            let slashes = v.find("//").unwrap_or(v.len());
+            &v[..hash.min(slashes)]
+        },
+        |rest| rest.find('"').map_or(v, |end| &v[..=end + 1]),
+    );
     let v = v.trim().trim_matches('"').trim();
     Some((k.trim().to_ascii_lowercase(), v.to_string()))
 }
@@ -137,7 +153,7 @@ fn map_stem_to_builtin(stem: &str) -> StemMap {
         || stem.contains("geom")
     {
         StemMap::Builtin(PassKind::CrtScanline)
-    } else if stem == "stock" || stem == "passthrough" || stem.contains("pixellate") {
+    } else if stem.contains("stock") || stem.contains("passthrough") || stem.contains("pixellate") {
         StemMap::Skip
     } else {
         StemMap::Unsupported
@@ -157,7 +173,12 @@ fn map_stem_to_builtin(stem: &str) -> StemMap {
 /// `shaderN` entries at all (i.e. it is not a recognizable RetroArch
 /// preset).
 pub fn import_preset(text: &str) -> Result<ImportResult, String> {
-    let mut shader_paths: Vec<(usize, String)> = Vec::new();
+    // A `BTreeMap` rather than a `Vec` + sort: keeps entries ordered by index
+    // AND deduplicates a repeated `shaderN` key to its LAST declared value
+    // (standard RetroArch/INI-style override semantics — a later line wins)
+    // instead of pushing both and producing a duplicate/redundant pass.
+    let mut shader_paths: std::collections::BTreeMap<usize, String> =
+        std::collections::BTreeMap::new();
 
     for line in text.lines() {
         let Some((k, v)) = parse_kv(line) else {
@@ -166,7 +187,7 @@ pub fn import_preset(text: &str) -> Result<ImportResult, String> {
         if let Some(rest) = k.strip_prefix("shader")
             && let Ok(idx) = rest.parse::<usize>()
         {
-            shader_paths.push((idx, v));
+            shader_paths.insert(idx, v);
         }
     }
 
@@ -175,7 +196,6 @@ pub fn import_preset(text: &str) -> Result<ImportResult, String> {
             "no `shaderN = …` entries found — not a recognizable RetroArch preset".to_string(),
         );
     }
-    shader_paths.sort_by_key(|(i, _)| *i);
 
     let mut result = ImportResult::default();
     for (_, path) in shader_paths {
@@ -299,5 +319,45 @@ mod tests {
         let text = "shader1 = crt-geom.slang\nshader0 = hq4x.slang\n";
         let r = import_preset(text).unwrap();
         assert_eq!(r.passes, vec![PassKind::HqNx, PassKind::CrtScanline]);
+    }
+
+    // Regression tests for PR #20 bot-review findings (Gemini Code Assist).
+
+    #[test]
+    fn parse_kv_strips_trailing_hash_comment_on_unquoted_value() {
+        let (k, v) = parse_kv("shader0 = crt-geom.slang # a note").unwrap();
+        assert_eq!(k, "shader0");
+        assert_eq!(v, "crt-geom.slang");
+    }
+
+    #[test]
+    fn parse_kv_strips_trailing_slash_comment_on_unquoted_value() {
+        let (k, v) = parse_kv("shader0 = crt-geom.slang // a note").unwrap();
+        assert_eq!(k, "shader0");
+        assert_eq!(v, "crt-geom.slang");
+    }
+
+    #[test]
+    fn parse_kv_keeps_quoted_value_verbatim_even_with_trailing_comment() {
+        let (k, v) = parse_kv("shader0 = \"crt-geom.slang\" # a note").unwrap();
+        assert_eq!(k, "shader0");
+        assert_eq!(v, "crt-geom.slang");
+    }
+
+    #[test]
+    fn duplicate_shadern_key_keeps_the_last_declared_value() {
+        // RetroArch/INI override semantics: a later `shader0 = ...` line wins over an
+        // earlier one, rather than both being pushed as separate passes.
+        let text = "shader0 = crt-geom.slang\nshader0 = hq4x.slang\n";
+        let r = import_preset(text).unwrap();
+        assert_eq!(r.passes, vec![PassKind::HqNx]);
+    }
+
+    #[test]
+    fn stock_and_passthrough_match_as_substrings_not_just_exact_names() {
+        let text = "shader0 = my-stock-shader.slang\nshader1 = passthrough_alt.slang\n";
+        let r = import_preset(text).unwrap();
+        assert_eq!(r.passes, Vec::new());
+        assert_eq!(r.unsupported_count(), 0);
     }
 }

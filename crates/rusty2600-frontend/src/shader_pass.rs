@@ -47,6 +47,24 @@
 
 use rusty2600_gfx_shaders::PassKind;
 
+/// The passes [`ShaderStack::render`] will actually execute, in order:
+/// `passes` with any [`PassKind::requires_first_position`] entry dropped
+/// unless it's genuinely at index 0. Extracted as a plain, `wgpu`-free
+/// function so it's directly unit-testable (see the module's `#[cfg(test)]`
+/// tests) — [`ShaderStack::render`] must derive its ping-pong parity and
+/// `is_last` check from THIS list's own indices, not the original `passes`
+/// indices, or a skipped entry desyncs both (see `render`'s own doc
+/// comment for the bug this fixes, caught by PR #20's bot review).
+fn active_passes(passes: &[PassKind]) -> Vec<PassKind> {
+    passes
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|&(i, kind)| !(kind.requires_first_position() && i != 0))
+        .map(|(_, kind)| kind)
+        .collect()
+}
+
 /// One full-screen-triangle post-process pipeline.
 struct Pass {
     pipeline: wgpu::RenderPipeline,
@@ -460,18 +478,30 @@ impl ShaderStack {
     /// other position, the pass is skipped defensively (it would otherwise
     /// bind a `u32` texture against a pipeline built for a `f32`+sampler
     /// bind group, a wgpu validation panic) — the Settings UI never
-    /// constructs such a stack itself (see `shell.rs`).
+    /// constructs such a stack itself (see `shell.rs`), but a hand-edited
+    /// config could.
+    ///
+    /// The defensive skip filters `passes` down to the ACTUALLY-EXECUTED
+    /// list first, then computes ping-pong parity (`i % 2`) and `is_last`
+    /// from THAT filtered list's own index — not the original `passes`
+    /// index. An earlier version indexed both off the original list; bot
+    /// review (PR #20, Gemini Code Assist + Copilot) caught that this was
+    /// wrong whenever a skipped pass wasn't at position 0: a skipped LAST
+    /// entry meant no executed pass ever saw `is_last = true` (nothing
+    /// writes `target`, the swapchain — a blank frame), and a skipped
+    /// MIDDLE entry desynced which ping-pong texture actually held the
+    /// latest write from the parity of subsequent ORIGINAL positions
+    /// (reading stale data). Filtering first puts both in one consistent
+    /// index space.
     pub fn render(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         passes: &[PassKind],
     ) {
-        let n = passes.len();
-        for (i, &kind) in passes.iter().enumerate() {
-            if kind.requires_first_position() && i != 0 {
-                continue;
-            }
+        let active = active_passes(passes);
+        let n = active.len();
+        for (i, &kind) in active.iter().enumerate() {
             let is_last = i == n - 1;
             let src: &wgpu::BindGroup = if i == 0 && kind.requires_first_position() {
                 &self.index_bind_group
@@ -576,6 +606,53 @@ mod tests {
         ] {
             assert!(!kind.requires_first_position());
         }
+    }
+
+    // Regression tests for a real bug PR #20's bot review caught (Gemini Code Assist +
+    // Copilot, both independently): `ShaderStack::render` used to index ping-pong parity and
+    // `is_last` off the ORIGINAL `passes` list even though a `requires_first_position` pass
+    // at any index other than 0 is skipped — desyncing both whenever the skipped entry wasn't
+    // at position 0. These exercise the extracted `active_passes` filter directly (the actual
+    // GPU rendering isn't testable without a real wgpu device, but `active_passes`'s output IS
+    // exactly what `render`'s `is_last`/parity logic is computed from).
+
+    #[test]
+    fn active_passes_is_unchanged_when_nothing_needs_skipping() {
+        let passes = [PassKind::CrtScanline, PassKind::HqNx];
+        assert_eq!(active_passes(&passes), passes);
+    }
+
+    #[test]
+    fn active_passes_keeps_a_leading_ntsc_composite() {
+        let passes = [PassKind::NtscComposite, PassKind::CrtScanline];
+        assert_eq!(active_passes(&passes), passes);
+    }
+
+    #[test]
+    fn active_passes_drops_a_misplaced_ntsc_composite_at_the_end() {
+        // The bug: with the ORIGINAL list's length (2) and the skipped entry at the
+        // original last index, no executed pass would ever see `is_last = true`.
+        // `active_passes` must drop it so the caller's own `n = active.len()` (1) and
+        // `is_last` check are computed against the pass that's ACTUALLY last.
+        let passes = [PassKind::CrtScanline, PassKind::NtscComposite];
+        assert_eq!(active_passes(&passes), vec![PassKind::CrtScanline]);
+    }
+
+    #[test]
+    fn active_passes_drops_a_misplaced_ntsc_composite_in_the_middle() {
+        // The bug: `CrtScanline` is at ORIGINAL index 2 (even parity) but ends up at
+        // FILTERED index 1 (odd parity) once the skipped middle entry is dropped —
+        // exactly the parity desync `render`'s ping-pong `i % 2` read/write must be
+        // computed against the filtered index for, not the original one.
+        let passes = [
+            PassKind::HqNx,
+            PassKind::NtscComposite,
+            PassKind::CrtScanline,
+        ];
+        assert_eq!(
+            active_passes(&passes),
+            vec![PassKind::HqNx, PassKind::CrtScanline]
+        );
     }
 
     /// The genuine part of the NTSC-composite decode's honesty claim (see
