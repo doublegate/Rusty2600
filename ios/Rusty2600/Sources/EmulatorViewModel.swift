@@ -16,6 +16,7 @@ final class EmulatorViewModel: ObservableObject {
     @Published var rgba = [UInt8](repeating: 0, count: frameWidth * frameHeight * 4)
     @Published var loadError: String?
     @Published var isRunning = false
+    @Published var saveSlots: [SaveSlots.SlotInfo] = []
 
     var joystick0 = MobileJoystick(up: false, down: false, left: false, right: false, fire: false)
     var switches = MobileSwitches(
@@ -23,6 +24,13 @@ final class EmulatorViewModel: ObservableObject {
     )
     var paddle0Position: UInt8 = 128
     var paddle0Fire = false
+
+    /// The currently-loaded ROM's identity tag (see `fnv1aRomTag`), or `nil`
+    /// before any ROM is loaded. Keys [SaveSlots] the same way Android's
+    /// `MainActivity.currentRomTag` keys `SaveSlots.kt`. `@Published` so
+    /// `ContentView`'s Save State / Load State buttons re-enable themselves
+    /// immediately on load, not just on the next incidental redraw.
+    @Published private(set) var currentRomTag: UInt64?
 
     func loadRom(from url: URL) {
         guard url.startAccessingSecurityScopedResource() else {
@@ -33,10 +41,63 @@ final class EmulatorViewModel: ObservableObject {
 
         do {
             let bytes = try Data(contentsOf: url)
-            let romTag = UInt64(bytes.count) &* 2_654_435_761 // a cheap opaque tag; any stable hash works
+            let romTag = fnv1aRomTag(bytes)
             try emulator.loadRom(bytes: bytes, romTag: romTag)
+            currentRomTag = romTag
             loadError = nil
+            refreshSaveSlots()
             startLoopIfNeeded()
+        } catch let error as MobileError {
+            loadError = "Load failed: \(error)"
+        } catch {
+            loadError = "Load failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Refreshes [saveSlots] from the filesystem for the currently-loaded
+    /// ROM (a no-op, clearing the list, when no ROM is loaded).
+    func refreshSaveSlots() {
+        guard let currentRomTag else {
+            saveSlots = []
+            return
+        }
+        saveSlots = SaveSlots.probeAll(romTag: currentRomTag)
+    }
+
+    /// Captures the running emulator's current state
+    /// (`MobileEmulator.saveState`) and writes it into `slot`
+    /// ([SaveSlots.save]), overwriting whatever was there before. Mirrors
+    /// `MainActivity.showSaveStateDialog`'s Android behavior exactly.
+    func saveState(slot: Int) {
+        guard let currentRomTag else {
+            loadError = "No ROM loaded"
+            return
+        }
+        do {
+            let bytes = try emulator.saveState()
+            try SaveSlots.save(romTag: currentRomTag, slot: slot, data: bytes)
+            loadError = nil
+            refreshSaveSlots()
+        } catch let error as MobileError {
+            loadError = "Save failed: \(error)"
+        } catch {
+            loadError = "Save failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// The Load State counterpart to [saveState]: a no-op (no error surfaced)
+    /// when `slot` is empty, matching Android's `showLoadStateDialog`
+    /// disabled-empty-slot behavior -- the caller's slot-picker UI is
+    /// expected to have already excluded empty slots from selection.
+    func loadState(slot: Int) {
+        guard let currentRomTag else {
+            loadError = "No ROM loaded"
+            return
+        }
+        guard let bytes = SaveSlots.load(romTag: currentRomTag, slot: slot) else { return }
+        do {
+            try emulator.loadState(bytes: bytes)
+            loadError = nil
         } catch let error as MobileError {
             loadError = "Load failed: \(error)"
         } catch {
