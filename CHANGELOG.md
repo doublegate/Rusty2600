@@ -6,6 +6,84 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-07-03 - "Prism"
+
+Seventh release of the RustyNES gap-closure arc, shipped through PR #20.
+Grows `rusty2600-gfx-shaders` beyond its CRT scanline + composite-artifact
+approximation: a genuine NTSC composite YIQ decode, hqNx/xBRZ upscaling,
+a generalized arbitrary-length shader stack, and a constrained RetroArch
+`.slangp`/`.cgp` preset importer. Reviewed by GitHub Copilot and Gemini
+Code Assist — 6 findings, all genuine and fixed, including a real
+`ShaderStack::render` bug both bots independently caught.
+
+### Added
+
+- **A genuine NTSC composite YIQ decode** (`PassKind::NtscComposite`) —
+  adapted (not ported) from the Bisqwit/Mesen signal-decode technique
+  for the TIA's own 4-bit-hue+3-bit-luma color model. The TIA's dot
+  clock runs at exactly the NTSC subcarrier frequency, so a `(hue,
+  luma)` pair decodes in isolation to one fixed YIQ point (already
+  captured by the existing measured palette); the genuinely new
+  modeling is the real chroma/luma bandwidth differential (~0.6-1.5 MHz
+  chroma vs ~4.2 MHz luma) that's the actual physical cause of 2600
+  "artifact colors" — sharp centre-tap luma, a 5-tap weighted chroma
+  blend. NTSC-only (the Settings checkbox is disabled for PAL/SECAM).
+  Verified in pure Rust: the forward/inverse YIQ matrix pair is proven a
+  true inverse for all 128 real NTSC palette entries, and the WGSL's
+  duplicated palette table is guarded against transcription drift from
+  the real frontend table. Needed threading the raw palette-index byte
+  through the presentation path (`present_buffer::Frame::index`,
+  `EmuCore::index_buffer()`) additively, never replacing the existing
+  RGB conversion.
+- **hqNx and xBRZ upscaling passes** (`PassKind::HqNx`/`Xbrz`) —
+  independently re-derived WGSL adaptations of the published
+  edge-directed pixel-art smoothing techniques (not ports of any
+  existing source).
+- **A generalized `ShaderStack`** — the prior fixed-2-slot design now
+  loops over an arbitrary pass list with the same 2 ping-pong textures.
+- **A constrained `.slangp`/`.cgp` preset importer**
+  (`crates/rusty2600-frontend/src/slang_preset.rs`) — matches
+  RustyNES's own ADR 0013 scope exactly: maps known community shader
+  filename stems to the 5 built-in passes, reports anything unrecognized
+  as explicitly unsupported (never silently dropped), never attempts
+  real shader-source translation. Deliberately never maps to the
+  position-constrained `NtscComposite`.
+
+### Fixed
+
+- **A real `ShaderStack::render` bug** (Gemini Code Assist + Copilot,
+  independently caught) — ping-pong parity and `is_last` were computed
+  off the original `passes` index even though a misplaced
+  `requires_first_position` pass gets defensively skipped. A skipped
+  LAST entry meant no executed pass ever wrote the swapchain (a blank
+  frame); a skipped MIDDLE entry desynced which ping-pong texture
+  actually held the latest write (reading stale data). Fixed by
+  filtering to the actually-executed pass list first and indexing off
+  that, with direct unit tests for both cases.
+- **Inline `#`/`//` comments in a `.slangp`/`.cgp` value** (Gemini Code
+  Assist) — `parse_kv` now strips a trailing comment after the value,
+  without truncating a quoted path that happens to contain one of those
+  characters inside its own quotes.
+- **Duplicate `shaderN` keys weren't deduplicated** (Gemini Code Assist)
+  — a repeated key now keeps only its last-declared value (RetroArch
+  override semantics) via a `BTreeMap`, instead of producing a
+  duplicate/redundant pass.
+- **`stock`/`passthrough` stem matching was exact-match only** (Gemini
+  Code Assist) — now matches as a substring, consistent with every
+  other stem check.
+- **"(see log)" logged nothing** (Copilot) — unsupported preset passes
+  are now actually printed to stderr.
+
+### Test count
+
+374 tests passing on default features (378 with `--features test-roms`)
+— up from 349/353, 25 new tests covering the YIQ round-trip/palette
+parity, the preset importer, and the `ShaderStack::render` bug fixes.
+Full CI green — Linux/macOS/Windows, the perf regression gate, and the
+`no_std` gate. Also independently verified: `cargo clippy --target
+wasm32-unknown-unknown --features wasm-winit[,debug-hooks]` clean,
+`--features wasm-canvas` unaffected.
+
 ## [2.9.0] - 2026-07-02 - "Full Circle"
 
 Sixth release of the RustyNES gap-closure arc, shipped through PR #19.

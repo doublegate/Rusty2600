@@ -5,51 +5,54 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v2.9.0 "Full Circle" — the sixth release of the
+**Current release:** v2.10.0 "Prism" — the seventh release of the
 RustyNES gap-closure arc (`v2.4.0 -> v3.0.0`, see `to-dos/ROADMAP.md`),
-shipped through PR #19. Closes the remaining `wasm-winit` capability gap
-against RustyNES: a **`?settings=` share-link** (round-trips the whole
-`Config` through a hand-rolled, URL-safe base64 codec, pure and unit-
-tested natively), a **wasm32-safe debugger overlay** (`debug-hooks` now
-confirmed wasm32-safe for `wasm-winit` — CPU/TIA/RIOT/Memory panels plus
-nearly every other native debugger panel work identically in-browser,
-except TAStudio's native-only "Save branch" file dialog), and **PWA
-install** (`web/manifest.json`/`sw.js`, network-first navigation +
-cache-first-then-revalidate sub-resources). In-browser **Lua scripting
-was investigated for real** (not re-deferred on old reasoning) and
-stays deliberately unsupported on `wasm32`: `mlua`'s vendored C build is
-confirmed a hard wall on `wasm32-unknown-unknown`, and the one realistic
-pure-Rust fallback, `piccolo`, isn't yet workable — its only published
-release implements almost none of Lua's `string`/`table` stdlib, and its
-more-complete branch is unpublished and explicitly pre-1.0-unstable (see
-`docs/scripting.md`). PR #19's bot review found 2 findings, both fixed:
-a service-worker `activate` that could wipe unrelated origin caches, and
-a stale-while-revalidate strategy on `index.html` that could break
-offline loads after a deploy (now network-first for navigation). 349
-tests passing on default features (353 with `--features test-roms`, up
-from 342/346).
+shipped through PR #20. Grows `rusty2600-gfx-shaders` beyond its prior
+CRT scanline + composite-artifact approximation: a **genuine NTSC
+composite YIQ decode** (`PassKind::NtscComposite`, NTSC-only) adapted
+from the Bisqwit/Mesen technique for the TIA's own 4-bit-hue+3-bit-luma
+color model — models the real chroma/luma bandwidth differential that's
+the actual physical cause of 2600 "artifact colors," verified in pure
+Rust (the forward/inverse YIQ matrix pair is a true inverse for all 128
+real NTSC palette entries); **hqNx/xBRZ upscaling passes**, independently
+re-derived (not ported); a **generalized `ShaderStack`** (arbitrary
+pass-list length, not the prior fixed 2-slot design); and a **constrained
+`.slangp`/`.cgp` preset importer** matching RustyNES's own ADR 0013 scope
+(maps known filename stems to built-ins, reports the rest as explicitly
+unsupported, never attempts real shader translation). PR #20's bot review
+found 6 findings, all fixed — most notably a real `ShaderStack::render`
+bug both Gemini Code Assist and Copilot independently caught: ping-pong
+parity and `is_last` were computed off the original pass-list index even
+though a misplaced position-constrained pass gets defensively skipped,
+which could desync both (a blank frame, or a wrong-texture read). 374
+tests passing on default features (378 with `--features test-roms`, up
+from 349/353).
 
-**Previous release:** v2.8.0 "Touchpoint" — the first wave of
-`wasm-winit` web parity: an on-screen touch overlay, real `localStorage`
-config persistence, and confirmation that the Settings panel and
-console-switch menu already work on wasm32. Shipped through PR #18. See
-`[2.8.0]` in `CHANGELOG.md` for full detail.
+**Previous release:** v2.9.0 "Full Circle" — closed the remaining
+`wasm-winit` capability gap: a `?settings=` share-link, a wasm32-safe
+debugger overlay, PWA install, and a real (not re-deferred) investigation
+into in-browser Lua scripting that concluded honestly deferred (`mlua`
+confirmed a hard wall on wasm32; `piccolo` not yet workable). Shipped
+through PR #19. See `[2.9.0]` in `CHANGELOG.md` for full detail.
 
-**Historical**: v2.7.0 "True Colors" (PR #17) shipped the TIA object-ID
-mask plus a live HD-pack rendering splice. v2.6.0 "Rollback Bridge"
-(PR #15 + PR #16) shipped browser WebRTC netplay transport plus a master
-dependency-upgrade sweep consolidating 12 Dependabot PRs. v2.5.0 "Web
-Awakens" (PR #14) shipped real `winit`+`wgpu`+`egui` rendering on
-`wasm32`, a debugger Lua console panel, and a Keyboard Controller/
-Trak-Ball research decision. v2.4.0 "Save Point" (PR #1) shipped manual
-save-state slots, a CI-gated performance-regression check, a paddle-
-timing Stella-oracle differential test, `.zip` ROM-archive loading, and
-a GitHub repo hygiene pass. v2.3.0 "Full Catalogue" closed the cart
-bankswitch catalogue to **26 of 26 schemes** (CDF/CDFJ/CDFJ+, the last
-scheme) and landed DPC+ music-mode audio, script overlay compositing,
-and a live-tested netplay STUN client. Full detail for every release
-lives in `CHANGELOG.md`, which this file never duplicates beyond a
-one-paragraph summary of the two most recent releases.
+**Historical**: v2.8.0 "Touchpoint" (PR #18) shipped the first wave of
+`wasm-winit` web parity: an on-screen touch overlay and real
+`localStorage` config persistence. v2.7.0 "True Colors" (PR #17) shipped
+the TIA object-ID mask plus a live HD-pack rendering splice. v2.6.0
+"Rollback Bridge" (PR #15 + PR #16) shipped browser WebRTC netplay
+transport plus a master dependency-upgrade sweep consolidating 12
+Dependabot PRs. v2.5.0 "Web Awakens" (PR #14) shipped real
+`winit`+`wgpu`+`egui` rendering on `wasm32`, a debugger Lua console
+panel, and a Keyboard Controller/Trak-Ball research decision. v2.4.0
+"Save Point" (PR #1) shipped manual save-state slots, a CI-gated
+performance-regression check, a paddle-timing Stella-oracle differential
+test, `.zip` ROM-archive loading, and a GitHub repo hygiene pass. v2.3.0
+"Full Catalogue" closed the cart bankswitch catalogue to **26 of 26
+schemes** (CDF/CDFJ/CDFJ+, the last scheme) and landed DPC+ music-mode
+audio, script overlay compositing, and a live-tested netplay STUN
+client. Full detail for every release lives in `CHANGELOG.md`, which
+this file never duplicates beyond a one-paragraph summary of the two
+most recent releases.
 
 **Honest verification boundary**: netplay's STUN client (`[2.3.0]`) and
 WebRTC transport (`[2.6.0]`) are each genuinely tested against a real
@@ -60,14 +63,15 @@ itself doesn't complete — see `docs/netplay.md`). The HD-pack live
 splice (`[2.7.0]`) is proven only against a proof-of-mechanism 1x1
 placeholder bitmap — no polished replacement-art library exists yet.
 The touch overlay, `localStorage` persistence, share-link, debugger
-overlay, and PWA install (`[2.8.0]`-`[2.9.0]`) are all verified via
-`cargo check`/`clippy --target wasm32-unknown-unknown` and native unit
-tests for their pure logic, but NOT live-browser-verified — this
-sandbox's headless Chromium has no working GPU adapter, so `wasm-winit`
-rendering itself remains unconfirmed since `[2.5.0]` (see
-`docs/frontend.md`). In-browser Lua scripting remains unsupported on
-`wasm32` pending an upstream `piccolo` release with real stdlib
-coverage — not something this project controls or can schedule against.
+overlay, PWA install, and shader stack expansion (`[2.8.0]`-`[2.10.0]`)
+are all verified via `cargo check`/`clippy --target
+wasm32-unknown-unknown` and native unit tests for their pure logic, but
+NOT live-browser-verified — this sandbox's headless Chromium has no
+working GPU adapter, so `wasm-winit` rendering itself remains
+unconfirmed since `[2.5.0]` (see `docs/frontend.md`). In-browser Lua
+scripting remains unsupported on `wasm32` pending an upstream `piccolo`
+release with real stdlib coverage — not something this project controls
+or can schedule against.
 
 Earlier: `v2.1.0 "Follow-Through"` closed three gaps `[2.0.0]` carried
 forward — AR/Supercharger (`BankAr`, a full port of Stella's
