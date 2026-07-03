@@ -37,8 +37,12 @@ object SaveSlots {
     /** One save-state slot's on-disk status, probed fresh from the filesystem. */
     data class SlotInfo(val slot: Int, val exists: Boolean, val modifiedMillis: Long?)
 
+    // `ULong.toString(16)` + `padStart` (not a `Long` cast through `"%016x".format`, PR #21 bot
+    // review, Gemini Code Assist): the cast relied on JVM-specific `%x` behavior for a value with
+    // the sign bit set once reinterpreted as `Long`, which happens to work but isn't guaranteed
+    // idiomatic Kotlin; `ULong`'s own `toString(radix)` has no such ambiguity.
     private fun slotDir(context: Context, romTag: ULong): File =
-        File(context.filesDir, "saves/${"%016x".format(romTag.toLong())}")
+        File(context.filesDir, "saves/${romTag.toString(16).padStart(16, '0')}")
 
     /** The path to one save-state slot file (`<slot-dir>/slot_<N>.r26s`). */
     fun slotFile(context: Context, romTag: ULong, slot: Int): File =

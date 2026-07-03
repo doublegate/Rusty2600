@@ -56,32 +56,54 @@ final class EmulatorViewModel: ObservableObject {
 
     /// Refreshes [saveSlots] from the filesystem for the currently-loaded
     /// ROM (a no-op, clearing the list, when no ROM is loaded).
+    ///
+    /// `probeAll`'s disk I/O (existence + modification-date checks for all 8
+    /// slots) is offloaded to a detached background task (PR #21 bot review,
+    /// Gemini Code Assist) rather than running synchronously on the
+    /// `@MainActor` this whole class is confined to, so the UI thread never
+    /// blocks on filesystem access.
     func refreshSaveSlots() {
         guard let currentRomTag else {
             saveSlots = []
             return
         }
-        saveSlots = SaveSlots.probeAll(romTag: currentRomTag)
+        Task {
+            let slots = await Task.detached(priority: .userInitiated) {
+                SaveSlots.probeAll(romTag: currentRomTag)
+            }.value
+            self.saveSlots = slots
+        }
     }
 
     /// Captures the running emulator's current state
     /// (`MobileEmulator.saveState`) and writes it into `slot`
     /// ([SaveSlots.save]), overwriting whatever was there before. Mirrors
     /// `MainActivity.showSaveStateDialog`'s Android behavior exactly.
+    ///
+    /// The bridge call and file write both run inside a detached background
+    /// task (PR #21 bot review, Gemini Code Assist) rather than
+    /// synchronously on the `@MainActor` -- state serialization plus a disk
+    /// write is real work that shouldn't block the UI thread, matching
+    /// `MainActivity.showSaveStateDialog`'s own `emuHandler.post { ... }`
+    /// offload on Android.
     func saveState(slot: Int) {
         guard let currentRomTag else {
             loadError = "No ROM loaded"
             return
         }
-        do {
-            let bytes = try emulator.saveState()
-            try SaveSlots.save(romTag: currentRomTag, slot: slot, data: bytes)
-            loadError = nil
-            refreshSaveSlots()
-        } catch let error as MobileError {
-            loadError = "Save failed: \(error)"
-        } catch {
-            loadError = "Save failed: \(error.localizedDescription)"
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    let bytes = try self.emulator.saveState()
+                    try SaveSlots.save(romTag: currentRomTag, slot: slot, data: bytes)
+                }.value
+                self.loadError = nil
+                self.refreshSaveSlots()
+            } catch let error as MobileError {
+                self.loadError = "Save failed: \(error)"
+            } catch {
+                self.loadError = "Save failed: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -89,19 +111,29 @@ final class EmulatorViewModel: ObservableObject {
     /// when `slot` is empty, matching Android's `showLoadStateDialog`
     /// disabled-empty-slot behavior -- the caller's slot-picker UI is
     /// expected to have already excluded empty slots from selection.
+    ///
+    /// Same background-task offload as [saveState], for the same reasons
+    /// (PR #21 bot review, Gemini Code Assist).
     func loadState(slot: Int) {
         guard let currentRomTag else {
             loadError = "No ROM loaded"
             return
         }
-        guard let bytes = SaveSlots.load(romTag: currentRomTag, slot: slot) else { return }
-        do {
-            try emulator.loadState(bytes: bytes)
-            loadError = nil
-        } catch let error as MobileError {
-            loadError = "Load failed: \(error)"
-        } catch {
-            loadError = "Load failed: \(error.localizedDescription)"
+        Task {
+            do {
+                let bytes = await Task.detached(priority: .userInitiated) {
+                    SaveSlots.load(romTag: currentRomTag, slot: slot)
+                }.value
+                guard let bytes else { return }
+                try await Task.detached(priority: .userInitiated) {
+                    try self.emulator.loadState(bytes: bytes)
+                }.value
+                self.loadError = nil
+            } catch let error as MobileError {
+                self.loadError = "Load failed: \(error)"
+            } catch {
+                self.loadError = "Load failed: \(error.localizedDescription)"
+            }
         }
     }
 

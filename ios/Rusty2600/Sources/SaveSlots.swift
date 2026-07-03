@@ -9,10 +9,15 @@ import Foundation
 /// named after that ROM's identity tag so two different ROMs' slots can
 /// never collide or be silently cross-loaded.
 ///
-/// Uses `FileManager.default.urls(for: .documentDirectory, ...)` -- the
-/// iOS-idiomatic per-app document store, matching Android's `Context.filesDir`
-/// and desktop's `directories::ProjectDirs::data_dir()`: a private, per-app
-/// save-data location, not shared/external storage.
+/// Uses `URL.applicationSupportDirectory` -- a genuinely private, per-app
+/// location matching Android's `Context.filesDir` and desktop's
+/// `directories::ProjectDirs::data_dir()`. NOT `.documentDirectory` (PR #21
+/// bot review, Copilot): on iOS, `Documents/` is user-visible via the Files
+/// app / iTunes-style file sharing (depending on entitlements) and is meant
+/// for user-facing documents, which contradicts this module's own stated
+/// "private, per-app save-data location" intent -- `Application Support` is
+/// the location Apple's own docs recommend for exactly this kind of
+/// internal, non-user-facing app data.
 enum SaveSlots {
     /// Matches `rusty2600_frontend::config::SAVE_SLOT_COUNT` and
     /// `android/`'s `SaveSlots.SLOT_COUNT`.
@@ -46,12 +51,14 @@ enum SaveSlots {
         }()
     }
 
-    private static var documentsDirectory: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    // `URL.applicationSupportDirectory` (the modern iOS-16+ static property, PR #21 bot review,
+    // Gemini Code Assist) rather than querying `FileManager` and force-indexing the result array.
+    private static var appSupportDirectory: URL {
+        .applicationSupportDirectory
     }
 
     private static func slotDirectory(romTag: UInt64) -> URL {
-        documentsDirectory
+        appSupportDirectory
             .appendingPathComponent("saves", isDirectory: true)
             .appendingPathComponent(String(format: "%016llx", romTag), isDirectory: true)
     }
@@ -62,11 +69,16 @@ enum SaveSlots {
     }
 
     /// Probes `slot`'s current on-disk status for `romTag`.
+    ///
+    /// `url.resourceValues(forKeys:)` (PR #21 bot review, Gemini Code Assist) rather than
+    /// `FileManager.attributesOfItem(atPath:)` -- the modern, `URL`-native way to read a
+    /// modification date without going through the deprecated `URL.path` string bridge.
     static func probe(romTag: UInt64, slot: Int) -> SlotInfo {
         let url = slotFile(romTag: romTag, slot: slot)
-        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
-        guard let attrs else { return SlotInfo(slot: slot, exists: false, modified: nil) }
-        return SlotInfo(slot: slot, exists: true, modified: attrs[.modificationDate] as? Date)
+        guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey]) else {
+            return SlotInfo(slot: slot, exists: false, modified: nil)
+        }
+        return SlotInfo(slot: slot, exists: true, modified: values.contentModificationDate)
     }
 
     /// Probes all `slotCount` slots for `romTag`, in slot order.

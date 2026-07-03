@@ -145,6 +145,17 @@ class MainActivity : AppCompatActivity() {
      * ([SaveSlots.label]). Tapping any slot captures the running emulator's
      * current state (`MobileEmulator.saveState`) and writes it into that
      * slot ([SaveSlots.save]), overwriting whatever was there before.
+     *
+     * The actual save (bridge call + file write) runs on [emuHandler] (PR #21
+     * bot review, Gemini Code Assist): `emulator` is the same instance
+     * [startLoop]'s frame loop mutates continuously on that thread, so
+     * calling `saveState()` from the UI thread wasn't just a UI-jank risk --
+     * it raced the frame loop over the same emulator state. Posting here
+     * serializes with the frame loop instead. The `catch (e: Exception)`
+     * (widened from `MobileException`-only, Copilot) also covers the file
+     * I/O `SaveSlots.save` can throw (`IOException` from `mkdirs`/
+     * `writeBytes`), which previously would have crashed the app instead of
+     * surfacing `save_failed`.
      */
     private fun showSaveStateDialog() {
         val romTag = currentRomTag
@@ -156,12 +167,18 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle(R.string.dialog_save_state_title)
             .setItems(slots.map { it.label() }.toTypedArray()) { _, index ->
-                try {
-                    val bytes = emulator.saveState()
-                    SaveSlots.save(this, romTag, index, bytes)
-                    Toast.makeText(this, getString(R.string.saved_to_slot, index), Toast.LENGTH_SHORT).show()
-                } catch (e: MobileException) {
-                    Toast.makeText(this, getString(R.string.save_failed, e.message), Toast.LENGTH_LONG).show()
+                emuHandler.post {
+                    try {
+                        val bytes = emulator.saveState()
+                        SaveSlots.save(this, romTag, index, bytes)
+                        runOnUiThread {
+                            Toast.makeText(this, getString(R.string.saved_to_slot, index), Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        runOnUiThread {
+                            Toast.makeText(this, getString(R.string.save_failed, e.message), Toast.LENGTH_LONG).show()
+                        }
+                    }
                 }
             }
             .setNegativeButton(android.R.string.cancel, null)
@@ -179,6 +196,9 @@ class MainActivity : AppCompatActivity() {
      * dialog's own per-ROM slot directory keying ([SaveSlots]) means that
      * mismatch can't actually happen in practice, but the bridge check stays
      * as the authoritative guard either way.
+     *
+     * Same [emuHandler] posting + widened `catch (e: Exception)` as
+     * [showSaveStateDialog], for the same reasons (PR #21 bot review).
      */
     private fun showLoadStateDialog() {
         val romTag = currentRomTag
@@ -194,12 +214,18 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle(R.string.dialog_load_state_title)
             .setAdapter(adapter) { _, index ->
-                val bytes = SaveSlots.load(this, romTag, index) ?: return@setAdapter
-                try {
-                    emulator.loadState(bytes)
-                    Toast.makeText(this, getString(R.string.loaded_slot, index), Toast.LENGTH_SHORT).show()
-                } catch (e: MobileException) {
-                    Toast.makeText(this, getString(R.string.load_failed, e.message), Toast.LENGTH_LONG).show()
+                emuHandler.post {
+                    try {
+                        val bytes = SaveSlots.load(this, romTag, index) ?: return@post
+                        emulator.loadState(bytes)
+                        runOnUiThread {
+                            Toast.makeText(this, getString(R.string.loaded_slot, index), Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        runOnUiThread {
+                            Toast.makeText(this, getString(R.string.load_failed, e.message), Toast.LENGTH_LONG).show()
+                        }
+                    }
                 }
             }
             .setNegativeButton(android.R.string.cancel, null)

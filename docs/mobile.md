@@ -347,6 +347,48 @@ not the framebuffer, and are independently covered by 374 passing
 `rusty2600-mobile`); a physical device (see "Physical hardware
 verification" below); Play Store packaging.
 
+**PR #21 bot-review fixes, independently re-verified on the live emulator**
+(Gemini Code Assist flagged that `saveState()`/`loadState()` — a bridge
+call plus synchronous file I/O — ran directly on the UI thread, and that
+`emulator` is the same instance the ~60Hz frame loop mutates on
+`emuHandler`'s background thread, so calling it from the UI thread also
+raced the frame loop, not just risked jank; Copilot separately flagged
+that `SaveSlots.save`/`load`'s file I/O could throw an `IOException` past
+the `catch (e: MobileException)`-only handlers, crashing the app instead
+of surfacing an error). Both dialogs now post the bridge call + file I/O
+onto `emuHandler` and hop back to the UI thread only for the `Toast`,
+widening the catch to `Exception`. Rebuilt clean
+(`./gradlew assembleDebug`) and re-ran directly on the still-running
+`Pixel_8_API_34` emulator from the verification pass above (same install,
+same loaded ROM):
+
+- Saved to a NEW slot (Slot 4) through the now-threaded code path;
+  confirmed via `adb shell run-as ... find` that `slot_4.r26s` was
+  created on disk, and that pre-existing `slot_2.r26s` (saved by the
+  OLD, unthreaded code before this fix) was untouched and still loads
+  with its original timestamp — confirming the `ULong.toString(16)`
+  hex-formatting change (the third Gemini finding, replacing a
+  `Long`-cast `"%016x".format`) produces an identical directory name for
+  a real CRC32 tag, so existing save data isn't orphaned by the change.
+- Reopened both dialogs after the threaded save: Slot 4 correctly showed
+  its live timestamp, confirming `refreshSaveSlots`'s probe reflects the
+  background thread's write once it completes.
+- Tapped Load State -> Slot 4: real `Toast` windows fired (confirmed via
+  `logcat`'s `CoreBackPreview: Window{... Toast}` lines at the expected
+  timestamps).
+- Scanned the full re-verification session's `logcat` for ANY
+  `doublegate`-tagged exception/error/crash (not just `FATAL EXCEPTION`):
+  zero matches.
+
+The iOS-side fixes (switching `SaveSlots.swift` from `.documentDirectory`
+to the genuinely private `.applicationSupportDirectory`, `URL.
+resourceValues(forKeys:)` over the deprecated `attributesOfItem(atPath:)`,
+and backgrounding `EmulatorViewModel`'s three bridge-calling methods via
+`Task.detached`) inherit the same standing unverified-by-compilation
+status as the rest of this file's iOS section — reviewed carefully by
+hand against the real generated binding signatures, but no Mac/Xcode in
+this sandbox to actually build them.
+
 ## Physical hardware verification (`v2.11.0`)
 
 Checked honestly, not assumed: `adb devices -l` showed only the
