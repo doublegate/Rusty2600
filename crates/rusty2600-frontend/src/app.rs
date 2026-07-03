@@ -124,6 +124,12 @@ struct Active {
     /// "entire display flickers" bug).
     #[cfg(feature = "emu-thread")]
     last_frame: Vec<u8>,
+    /// The raw-palette-index companion to [`Self::last_frame`] (`v2.10.0`),
+    /// same caching rationale — [`rusty2600_gfx_shaders::PassKind::NtscComposite`]
+    /// needs a fresh index texture on every render pass, not just the passes
+    /// where the emu-thread actually published a new frame.
+    #[cfg(feature = "emu-thread")]
+    last_index: Vec<u8>,
 
     /// Timestamp of the previous render pass, for the smoothed FPS estimate.
     last_render_at: web_time::Instant,
@@ -392,6 +398,8 @@ impl ApplicationHandler for App {
                 runahead_frames,
                 #[cfg(feature = "emu-thread")]
                 last_frame: vec![0u8; (crate::gfx::VCS_W * crate::gfx::VCS_H_NTSC * 4) as usize],
+                #[cfg(feature = "emu-thread")]
+                last_index: vec![0u8; (crate::gfx::VCS_W * crate::gfx::VCS_H_NTSC) as usize],
                 last_render_at: web_time::Instant::now(),
                 fps_smoothed: 0.0,
                 #[cfg(feature = "retroachievements")]
@@ -771,7 +779,7 @@ impl App {
         }
 
         // --- (1) Step one frame + copy the framebuffer + read-only info under a BRIEF lock. ---
-        let (fb, fb_dims, info) = {
+        let (fb, idx, fb_dims, info) = {
             let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
 
             // Rollback netplay bypasses BOTH the emu-thread background loop
@@ -826,22 +834,28 @@ impl App {
                 // emulator racing ahead of NTSC real time.
             }
 
-            let fb = if netplay_active {
-                emu.framebuffer().to_vec()
+            // `idx` mirrors `fb` exactly (same three sourcing paths, same
+            // caching rationale) — the raw-palette-index companion buffer
+            // `PassKind::NtscComposite`'s decode pass needs (`v2.10.0`). See
+            // `present_buffer::Frame::index`/`EmuCore::index_buffer`'s doc
+            // comments.
+            let (fb, idx) = if netplay_active {
+                (emu.framebuffer().to_vec(), emu.index_buffer().to_vec())
             } else {
                 #[cfg(feature = "emu-thread")]
                 {
                     match active.frame_rx.take() {
                         Some(f) => {
                             active.last_frame = f.pixels;
-                            active.last_frame.clone()
+                            active.last_index = f.index;
+                            (active.last_frame.clone(), active.last_index.clone())
                         }
-                        None => active.last_frame.clone(),
+                        None => (active.last_frame.clone(), active.last_index.clone()),
                     }
                 }
                 #[cfg(not(feature = "emu-thread"))]
                 {
-                    emu.framebuffer().to_vec()
+                    (emu.framebuffer().to_vec(), emu.index_buffer().to_vec())
                 }
             };
 
@@ -929,9 +943,14 @@ impl App {
                 }
                 info.save_slots.clone_from(&active.shell.save_slots_cache);
             }
-            (fb, dims, info)
+            (fb, idx, dims, info)
         };
         active.gfx.upload(&fb, fb_dims.0, fb_dims.1);
+        // Additive (`v2.10.0`): also upload the raw palette-index companion.
+        // Nothing samples this texture unless `PassKind::NtscComposite` is
+        // in the active stack, so this has no effect on the existing RGB
+        // present path — see `Gfx::upload_index`'s doc comment.
+        active.gfx.upload_index(&idx, fb_dims.0, fb_dims.1);
 
         // --- (2) Acquire the surface. ---
         let Some(frame) = active.gfx.acquire() else {
@@ -1145,9 +1164,53 @@ impl App {
                     // frame forever instead of going blank.
                     #[cfg(feature = "emu-thread")]
                     active.last_frame.iter_mut().for_each(|b| *b = 0);
+                    #[cfg(feature = "emu-thread")]
+                    active.last_index.iter_mut().for_each(|b| *b = 0);
                     #[cfg(feature = "retroachievements")]
                     active.cheevos.close_rom();
                     active.shell.status = "ROM closed".into();
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                MenuAction::ImportShaderPreset => {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("RetroArch shader preset", &["slangp", "cgp"])
+                        .pick_file()
+                    {
+                        active.shell.status = match std::fs::read_to_string(&path) {
+                            Ok(text) => match crate::slang_preset::import_preset(&text) {
+                                Ok(result) => {
+                                    let mapped = result.passes.len();
+                                    let unsupported = result.unsupported_count();
+                                    active.config.video.shader_passes = result.passes;
+                                    let _ = active.config.save();
+                                    if unsupported == 0 {
+                                        format!("Imported preset: {mapped} pass(es) mapped")
+                                    } else {
+                                        // Print exactly what the status bar's "(see log)"
+                                        // points to (Copilot, PR #20): an earlier version
+                                        // said "see log" without ever logging anything.
+                                        for entry in &result.unsupported {
+                                            if let crate::slang_preset::ImportedPass::Unsupported {
+                                                path,
+                                                reason,
+                                            } = entry
+                                            {
+                                                eprintln!(
+                                                    "rusty2600: preset import: unsupported pass '{path}' ({reason})"
+                                                );
+                                            }
+                                        }
+                                        format!(
+                                            "Imported preset: {mapped} pass(es) mapped, \
+                                             {unsupported} unsupported (see log)"
+                                        )
+                                    }
+                                }
+                                Err(e) => format!("preset import failed: {e}"),
+                            },
+                            Err(e) => format!("read failed: {e}"),
+                        };
+                    }
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 MenuAction::SaveStateSlot(slot) => {

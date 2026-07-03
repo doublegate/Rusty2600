@@ -41,6 +41,18 @@ pub struct Frame {
     pub height: usize,
     /// `width * height` RGBA8 pixels, row-major.
     pub pixels: Vec<u8>,
+    /// `width * height` raw TIA palette-index bytes (`hue << 3 | luma`,
+    /// exactly `colour7 = colu >> 1`), row-major, parallel to `pixels`.
+    ///
+    /// Additive (`v2.10.0`): populated alongside `pixels` at the SAME call
+    /// site (`put_dot`/`put_index`, always called together — see
+    /// `emu_thread.rs`'s `step_frame`), never instead of it, so the existing
+    /// RGB conversion this crate has always done is completely unchanged.
+    /// Feeds [`crate::gfx::Gfx::upload_index`] for
+    /// [`rusty2600_gfx_shaders::PassKind::NtscComposite`]'s genuine YIQ
+    /// decode pass; unused (but harmlessly populated) when that pass isn't
+    /// in the active shader stack.
+    pub index: Vec<u8>,
 }
 
 impl Frame {
@@ -51,6 +63,7 @@ impl Frame {
             width,
             height,
             pixels: vec![0; width * height * 4],
+            index: vec![0; width * height],
         }
     }
 
@@ -68,6 +81,16 @@ impl Frame {
         self.pixels[i + 1] = ((rgb >> 8) & 0xFF) as u8;
         self.pixels[i + 2] = (rgb & 0xFF) as u8;
         self.pixels[i + 3] = 0xFF;
+    }
+
+    /// Write one beam dot's raw TIA palette-index byte (`colour7 = colu >>
+    /// 1`), parallel to [`Self::put_dot`]. Out-of-range coordinates are
+    /// ignored, matching [`Self::put_dot`].
+    pub fn put_index(&mut self, x: usize, y: usize, colour7: u8) {
+        if x >= self.width || y >= self.height {
+            return;
+        }
+        self.index[y * self.width + x] = colour7;
     }
 }
 
