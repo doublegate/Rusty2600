@@ -1,5 +1,6 @@
 package com.doublegate.rusty2600
 
+import android.app.AlertDialog
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -9,6 +10,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
 import android.view.MotionEvent
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -30,16 +32,19 @@ import uniffi.rusty2600_mobile.MobileSwitches
  * `ENCODING_PCM_FLOAT` mode — no resampling needed on either side, since
  * `AudioTrack` accepts the TIA's native ~31.4kHz rate directly.
  *
- * Deliberately no on-device save/load-state UI, no paddle input, no HD-pack
- * loading — this build's job is proving the `rusty2600-mobile` bridge runs
- * a real ROM on real hardware, not replicating every native-frontend
- * feature; see `docs/mobile.md` for what's in scope for this release.
+ * `v2.11.0` "Field Trip" adds the Save State / Load State slot picker (see
+ * [SaveSlots]) on top of that verification build — no paddle input, no
+ * HD-pack loading yet; see `docs/mobile.md` for what's in scope this
+ * release.
  */
 class MainActivity : AppCompatActivity() {
 
     private val emulator = MobileEmulator()
     private lateinit var emulatorView: EmulatorView
     private lateinit var audioTrack: AudioTrack
+
+    /** The currently-loaded ROM's identity tag (see `crc32Tag`), or `null` before any ROM is loaded. Keys [SaveSlots]. */
+    private var currentRomTag: ULong? = null
 
     private val input =
         MobileInput(
@@ -78,6 +83,8 @@ class MainActivity : AppCompatActivity() {
         audioTrack = buildAudioTrack().apply { play() }
 
         findViewById<Button>(R.id.loadRomButton).setOnClickListener { openRom.launch(arrayOf("*/*")) }
+        findViewById<Button>(R.id.saveStateButton).setOnClickListener { showSaveStateDialog() }
+        findViewById<Button>(R.id.loadStateButton).setOnClickListener { showLoadStateDialog() }
         bindHold(R.id.upButton) { input.joystick0.up = it }
         bindHold(R.id.downButton) { input.joystick0.down = it }
         bindHold(R.id.leftButton) { input.joystick0.left = it }
@@ -124,10 +131,105 @@ class MainActivity : AppCompatActivity() {
         val romTag = crc32Tag(bytes)
         try {
             emulator.loadRom(bytes, romTag)
+            currentRomTag = romTag
             startLoop()
         } catch (e: MobileException) {
             Toast.makeText(this, "Load failed: ${e.message}", Toast.LENGTH_LONG).show()
         }
+    }
+
+    /**
+     * The `v2.11.0` "Field Trip" Save State picker: 8 numbered slots (matching
+     * desktop's [`rusty2600_frontend::config::SAVE_SLOT_COUNT`] convention),
+     * each labeled with its occupied/empty status and timestamp
+     * ([SaveSlots.label]). Tapping any slot captures the running emulator's
+     * current state (`MobileEmulator.saveState`) and writes it into that
+     * slot ([SaveSlots.save]), overwriting whatever was there before.
+     *
+     * The actual save (bridge call + file write) runs on [emuHandler] (PR #21
+     * bot review, Gemini Code Assist): `emulator` is the same instance
+     * [startLoop]'s frame loop mutates continuously on that thread, so
+     * calling `saveState()` from the UI thread wasn't just a UI-jank risk --
+     * it raced the frame loop over the same emulator state. Posting here
+     * serializes with the frame loop instead. The `catch (e: Exception)`
+     * (widened from `MobileException`-only, Copilot) also covers the file
+     * I/O `SaveSlots.save` can throw (`IOException` from `mkdirs`/
+     * `writeBytes`), which previously would have crashed the app instead of
+     * surfacing `save_failed`.
+     */
+    private fun showSaveStateDialog() {
+        val romTag = currentRomTag
+        if (romTag == null) {
+            Toast.makeText(this, R.string.no_rom_loaded, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val slots = SaveSlots.probeAll(this, romTag)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.dialog_save_state_title)
+            .setItems(slots.map { it.label() }.toTypedArray()) { _, index ->
+                emuHandler.post {
+                    try {
+                        val bytes = emulator.saveState()
+                        SaveSlots.save(this, romTag, index, bytes)
+                        runOnUiThread {
+                            Toast.makeText(this, getString(R.string.saved_to_slot, index), Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        runOnUiThread {
+                            Toast.makeText(this, getString(R.string.save_failed, e.message), Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    /**
+     * The Load State counterpart to [showSaveStateDialog]: empty slots are
+     * shown but disabled (greyed out, not clickable) via the custom
+     * [ArrayAdapter.isEnabled] override below, matching desktop's
+     * `add_enabled(slot.exists, ...)` menu-item gating. Restoring a slot
+     * whose embedded ROM tag doesn't match the currently-loaded ROM is
+     * additionally rejected by `MobileEmulator.loadState` itself (the same
+     * bridge-level check desktop's `SaveState::restore` performs) -- this
+     * dialog's own per-ROM slot directory keying ([SaveSlots]) means that
+     * mismatch can't actually happen in practice, but the bridge check stays
+     * as the authoritative guard either way.
+     *
+     * Same [emuHandler] posting + widened `catch (e: Exception)` as
+     * [showSaveStateDialog], for the same reasons (PR #21 bot review).
+     */
+    private fun showLoadStateDialog() {
+        val romTag = currentRomTag
+        if (romTag == null) {
+            Toast.makeText(this, R.string.no_rom_loaded, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val slots = SaveSlots.probeAll(this, romTag)
+        val adapter =
+            object : ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, slots.map { it.label() }) {
+                override fun isEnabled(position: Int) = slots[position].exists
+            }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.dialog_load_state_title)
+            .setAdapter(adapter) { _, index ->
+                emuHandler.post {
+                    try {
+                        val bytes = SaveSlots.load(this, romTag, index) ?: return@post
+                        emulator.loadState(bytes)
+                        runOnUiThread {
+                            Toast.makeText(this, getString(R.string.loaded_slot, index), Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        runOnUiThread {
+                            Toast.makeText(this, getString(R.string.load_failed, e.message), Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun startLoop() {

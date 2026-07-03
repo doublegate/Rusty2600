@@ -1,8 +1,8 @@
 # Mobile bridge (`rusty2600-mobile`) — Rusty2600
 
 References: `docs/adr/0004-determinism-contract.md`; `docs/adr/0007-save-state-versioning.md`;
-`to-dos/ROADMAP.md` (v1.11.0 "Handheld"); `crates/rusty2600-mobile/src/lib.rs`; `android/`.
-This doc is the SPEC, not history — update it in the same PR as the code.
+`to-dos/ROADMAP.md` (v1.11.0 "Handheld", v2.11.0 "Field Trip"); `crates/rusty2600-mobile/src/lib.rs`;
+`android/`; `ios/`. This doc is the SPEC, not history — update it in the same PR as the code.
 
 ## What this crate is
 
@@ -104,10 +104,40 @@ framebuffer via `Bitmap.copyPixelsFromBuffer`, nearest-neighbor scaled) and
 `MainActivity` (loads a ROM via `ActivityResultContracts.OpenDocument`,
 drives `run_frame` at ~60Hz on a background `HandlerThread`, plays audio
 through an `AudioTrack` in `ENCODING_PCM_FLOAT` mode, and wires on-screen
-Up/Down/Left/Right/Fire/Select/Reset buttons to `MobileInput`). No
-save/load-state UI and no paddle input yet — this release's job is proving
-the bridge runs a real ROM on real hardware, not replicating every
-native-frontend feature.
+Up/Down/Left/Right/Fire/Select/Reset buttons to `MobileInput`). Still no
+paddle input (see "Paddle limitation" below).
+
+### Save State / Load State UI (`v2.11.0` "Field Trip")
+
+`SaveSlots.kt` mirrors desktop's own manual save-state slot convention
+(`crates/rusty2600-frontend/src/config.rs`, `v2.4.0` "Save Point") on
+Android's app-private storage: `SLOT_COUNT` (8) numbered slots, one file
+per slot named `slot_<N>.r26s`, all of one ROM's slots kept under a
+directory named after that ROM's identity tag
+(`saves/<rom-tag as 16-hex>/slot_<N>.r26s` under `Context.filesDir`) so two
+different ROMs' slots can never collide. The ROM tag is the same CRC32
+`crc32Tag` `MainActivity` already computed (since `v1.11.0`) to pass to
+`MobileEmulator.loadRom` — reusing it means a slot can never even be
+*written* under the wrong ROM's key, on top of `MobileEmulator.loadState`'s
+own tag check on restore.
+
+`MainActivity` wires two new buttons (`saveStateButton`/`loadStateButton`,
+next to `loadRomButton`) to an `AlertDialog`-based slot picker:
+- **Save State** (`showSaveStateDialog`) — `setItems` over all 8 slots
+  (each labeled via `SaveSlots.SlotInfo.label()`, e.g. `"Slot 3 (empty)"` or
+  `"Slot 3 -- 2026-07-02 14:03:07 UTC"` — the exact wording desktop's
+  `SaveSlotInfo::label` uses); tapping a slot calls
+  `MobileEmulator.saveState()` and writes the blob via `SaveSlots.save`,
+  overwriting whatever was there.
+- **Load State** (`showLoadStateDialog`) — a custom `ArrayAdapter` overrides
+  `isEnabled(position)` so empty slots are shown but greyed out and
+  unclickable (matching desktop's `add_enabled(slot.exists, ...)` menu-item
+  gating exactly); tapping an occupied slot reads it via `SaveSlots.load`
+  and calls `MobileEmulator.loadState(bytes)`.
+
+Both dialogs guard on `currentRomTag == null` (a field `MainActivity` now
+tracks, set in `loadRom`) and show a "No ROM loaded" `Toast` rather than
+doing anything when no ROM is loaded yet.
 
 ## The iOS app (`ios/`)
 
@@ -153,6 +183,30 @@ host. The tree has two parts:
     drift). Modeled as a clamped -150°...+150° arc around the dial's
     center, matching `MobilePaddle.position`'s own "0 fully clockwise ..=
     255 fully counter-clockwise" convention directly.
+  - **`SaveSlots.swift` / `SaveStateSlotPickerView.swift`** (`v2.11.0`
+    "Field Trip") — the iOS counterpart to `android/`'s `SaveSlots.kt`:
+    the same 8-slot, `.r26s`-extension, per-ROM-directory convention, but
+    over `FileManager.default.urls(for: .documentDirectory, ...)` (the
+    iOS-idiomatic per-app document store) instead of `Context.filesDir`.
+    `SaveStateSlotPickerView` is a `NavigationStack` + `List` sheet
+    (presented from `ContentView`'s new Save State / Load State buttons)
+    showing all 8 slots via `SaveSlots.SlotInfo.label` (identical wording to
+    Android/desktop), disabling empty rows in Load mode
+    (`.disabled(mode == .load && !slot.exists)`) — the SwiftUI equivalent of
+    Android's `ArrayAdapter.isEnabled` override. `EmulatorViewModel` gained
+    `currentRomTag`, `saveSlots`, `refreshSaveSlots()`, `saveState(slot:)`,
+    and `loadState(slot:)` to back it.
+  - **ROM-tag fix, same release**: `EmulatorViewModel.loadRom` previously
+    keyed save-states (well, would have, once any existed) with
+    `UInt64(bytes.count) &* 2_654_435_761` — a tag derived ONLY from the
+    ROM's byte count, so two different same-size ROMs would silently
+    collide onto the same tag. Since `v2.11.0` actually builds real
+    per-ROM-tag slot directories on iOS for the first time, this was
+    upgraded to `fnv1aRomTag` (`SaveSlots.swift`), a real FNV-1a 64-bit hash
+    over the ROM's full byte content — matching the spirit of Android's
+    CRC32-based `crc32Tag` (any stable, deterministic, collision-safe-enough
+    hash works; `MobileEmulator.loadState`'s own tag check is the
+    authoritative guard regardless).
 
 ### Paddle limitation (inherited, not introduced here)
 
@@ -200,6 +254,19 @@ Swift Package dependency, add the files under `ios/Rusty2600/Sources/`,
 and then actually build + run on the Simulator (and ideally a physical
 device) before this can be called verified the way the Android build was.
 
+`v2.11.0`'s additions (`SaveSlots.swift`, `SaveStateSlotPickerView.swift`,
+and the `EmulatorViewModel`/`ContentView` changes) inherit this exact same
+honest status: written carefully against the real generated binding's
+actual `saveState()`/`loadState(bytes:)` signatures (verified by reading
+`ios/RustyMobileFFI/Sources/RustyMobileFFI/rusty2600_mobile.swift`, not
+guessed), reviewed line-by-line for Swift syntax correctness (optional
+shorthand binding, `Equatable` conformance on the picker's `Mode` enum,
+`CVarArg` bridging for `String(format:)`, iOS-16-safe API choices like
+`NavigationStack` over the older `NavigationView` to match
+`RustyNES/ios/`'s own convention) -- but still never compiled by
+`swiftc`/Xcode, for the same no-Mac-in-this-sandbox reason as everything
+else in this file.
+
 ## Verification (real, not just "it compiles") — Android
 
 Built and run on the `Pixel_8_API_34` AVD (x86_64 system image, KVM-accelerated):
@@ -219,33 +286,194 @@ Built and run on the `Pixel_8_API_34` AVD (x86_64 system image, KVM-accelerated)
    silently failing.
 5. No `AudioTrack`/native-library-load errors appeared in logcat.
 
-Not verified this release: on-screen visual output from a ROM that
+Not verified in `v1.11.0`: on-screen visual output from a ROM that
 actually writes TIA color registers (the synthetic test ROM used for
 verification never writes `COLUBK`, so a black screen there is correct,
 not a bug); a physical device (only the emulator was available); Play
 Store packaging (explicitly out of scope, see below).
+
+### Save-state UI verification (`v2.11.0` "Field Trip")
+
+Rebuilt (`./gradlew assembleDebug`, clean success) and re-run end-to-end on
+the same `Pixel_8_API_34` AVD, this time with a **real homebrew ROM**
+(`tests/roms/homebrew/2048 2600 (NTSC).a26`, a legitimately-licensed
+homebrew title already vendored in this repo's test-ROM corpus — not a
+commercial ROM) rather than the old synthetic 4K program, via
+`adb push` + the same real Storage Access Framework file-picker flow:
+
+1. `adb uninstall`/`install -r` the freshly-built debug APK; `am start`;
+   confirmed `topResumedActivity` + no `AndroidRuntime`/`FATAL EXCEPTION`.
+2. Tapped **Save State** with no ROM loaded: a real "No ROM loaded" `Toast`
+   fired (confirmed via `logcat`'s `NotificationService: Toast` line), no
+   crash — the guard path works.
+3. Loaded the real ROM through the system file picker (`uiautomator dump`
+   used throughout to get exact, reliable tap coordinates rather than
+   guessing from screenshots); `topResumedActivity` returned to
+   `MainActivity` with no crash, and `top -o PID,%CPU` showed
+   30-90%+ CPU on the app's process, confirming `run_frame` executing
+   continuously against the real ROM (not a silent no-op).
+4. Tapped **Save State -> Slot 2**: dialog showed all 8 slots correctly
+   labeled `"Slot N (empty)"`; after tapping slot 2, re-opening the dialog
+   showed it relabeled to `"Slot 2 -- 2026-07-03 01:54:15 UTC"` — a real,
+   live timestamp, not a placeholder.
+5. **Confirmed the actual on-disk file** via `adb shell run-as
+   com.doublegate.rusty2600 find .../files/saves`: a real file at
+   `saves/00000000e5b96244/slot_2.r26s` (2,288 bytes). Independently computed
+   `zlib.crc32()` over the source `.a26` file's bytes in Python and got
+   `0xe5b96244` — an exact match against the on-device directory name,
+   proving the CRC32 ROM-tag keying is correct end-to-end, not just
+   plausible-looking.
+6. Tapped **Load State**: the dialog showed Slot 2 as the only enabled
+   (non-greyed-out) row; tapping the other, empty slots produced no crash,
+   no `Toast`, and left the dialog open (the `ArrayAdapter.isEnabled`
+   disable actually blocks the tap, verified via a follow-up
+   `uiautomator dump` still showing the dialog's slot list, i.e. it was
+   never dismissed by the disabled-row tap).
+7. Tapped **Load State -> Slot 2**: a screenshot taken ~150ms after the tap
+   caught the real Android `Toast` bubble on-screen reading **"Loaded slot
+   2"** verbatim — direct visual proof of the full save -> disk -> load
+   round trip, not an inferred success.
+8. Full-session `logcat` scan for `FATAL EXCEPTION`/`AndroidRuntime.*
+   com.doublegate` across the entire test run: zero matches.
+
+Not verified this release (same honest gaps as `v1.11.0`, unrelated to
+save-states specifically): on-screen visual framebuffer output — the real
+homebrew ROM's screen stayed black through this session even after RESET
+presses and several seconds of run time, the same open, pre-existing,
+undiagnosed gap `v1.11.0` first flagged for the synthetic ROM (still not a
+save-state bug: `SaveState::capture`/`restore` operate on `System` state,
+not the framebuffer, and are independently covered by 374 passing
+`cargo test --workspace` tests including bridge-level round-trip tests in
+`rusty2600-mobile`); a physical device (see "Physical hardware
+verification" below); Play Store packaging.
+
+**PR #21 bot-review fixes, independently re-verified on the live emulator**
+(Gemini Code Assist flagged that `saveState()`/`loadState()` — a bridge
+call plus synchronous file I/O — ran directly on the UI thread, and that
+`emulator` is the same instance the ~60Hz frame loop mutates on
+`emuHandler`'s background thread, so calling it from the UI thread also
+raced the frame loop, not just risked jank; Copilot separately flagged
+that `SaveSlots.save`/`load`'s file I/O could throw an `IOException` past
+the `catch (e: MobileException)`-only handlers, crashing the app instead
+of surfacing an error). Both dialogs now post the bridge call + file I/O
+onto `emuHandler` and hop back to the UI thread only for the `Toast`,
+widening the catch to `Exception`. Rebuilt clean
+(`./gradlew assembleDebug`) and re-ran directly on the still-running
+`Pixel_8_API_34` emulator from the verification pass above (same install,
+same loaded ROM):
+
+- Saved to a NEW slot (Slot 4) through the now-threaded code path;
+  confirmed via `adb shell run-as ... find` that `slot_4.r26s` was
+  created on disk, and that pre-existing `slot_2.r26s` (saved by the
+  OLD, unthreaded code before this fix) was untouched and still loads
+  with its original timestamp — confirming the `ULong.toString(16)`
+  hex-formatting change (the third Gemini finding, replacing a
+  `Long`-cast `"%016x".format`) produces an identical directory name for
+  a real CRC32 tag, so existing save data isn't orphaned by the change.
+- Reopened both dialogs after the threaded save: Slot 4 correctly showed
+  its live timestamp, confirming `refreshSaveSlots`'s probe reflects the
+  background thread's write once it completes.
+- Tapped Load State -> Slot 4: real `Toast` windows fired (confirmed via
+  `logcat`'s `CoreBackPreview: Window{... Toast}` lines at the expected
+  timestamps).
+- Scanned the full re-verification session's `logcat` for ANY
+  `doublegate`-tagged exception/error/crash (not just `FATAL EXCEPTION`):
+  zero matches.
+
+The iOS-side fixes (switching `SaveSlots.swift` from `.documentDirectory`
+to the genuinely private `.applicationSupportDirectory`, `URL.
+resourceValues(forKeys:)` over the deprecated `attributesOfItem(atPath:)`,
+and backgrounding `EmulatorViewModel`'s three bridge-calling methods via
+`Task.detached`) inherit the same standing unverified-by-compilation
+status as the rest of this file's iOS section — reviewed carefully by
+hand against the real generated binding signatures, but no Mac/Xcode in
+this sandbox to actually build them.
+
+## Physical hardware verification (`v2.11.0`)
+
+Checked honestly, not assumed: `adb devices -l` showed only the
+`Pixel_8_API_34` emulator (`emulator-5554`) both before and during this
+session — no real device connected over ADB, and no cloud device-farm
+credentials or tooling configured in this environment. Physical-hardware
+verification stays exactly the `v1.11.0` posture ("verified on a real
+emulator," not physical hardware) — this was checked for real this
+release (per the roadmap's own "more achievable than it sounds, IF
+hardware becomes available" framing) and the honest answer is: it was not
+available this time either.
+
+## Cloud save-state sync research (`v2.11.0`) — researched, deferred
+
+The roadmap's assumption going in was "a Google-Drive-backed sync path is
+the most plausible option" for Android — that assumption does not survive
+contact with what this project's own sibling, RustyNES, actually built.
+`RustyNES/ios/RustyNES/CloudSaveStateSync.swift` (`v1.9.7`) is a real,
+working CloudKit/iCloud sync (one `CKRecord` per save-state slot, private
+database, last-writer-wins via `savedAt` timestamp, opt-in and
+gracefully degrading when iCloud is unavailable) — confirming the iOS side
+of the assumption. `RustyNES/android/app/src/main/java/com/doublegate/
+rustynes/CloudSave.kt` (`v1.8.8` "Atlas") is the actually-shipped Android
+equivalent, and it is **Google Play Games Services v2 Snapshots**, not
+Google Drive: one `Snapshot` per (ROM-SHA, slot) independently-updatable
+unit, `RESOLUTION_POLICY_MOST_RECENTLY_MODIFIED` auto-resolution with a
+surfaced keep-local/keep-cloud picker on true divergent conflicts, gated
+behind a default-off `BuildConfig.PGS_ENABLED` flag plus a PGS sign-in
+check plus a user-facing toggle.
+
+Both real implementations share a hard prerequisite this sandbox cannot
+meet: a **live backend integration** requiring a real Google Play Console
+project (Play Games Services v2 configuration, OAuth client IDs,
+`google-services.json`) or a real Apple Developer account (CloudKit
+container provisioning, entitlements) — genuinely new external
+dependencies, real sign-in flows, and integration testing against a live
+cloud backend that cannot be exercised, let alone verified, from this
+Linux sandbox with no Google/Apple developer credentials configured. This
+is exactly the "new OAuth flow, new cloud dependency, real backend
+integration testing this sandbox can't do" bar the roadmap itself flagged
+as the honest-defer trigger.
+
+**Decision: deferred, not implemented.** Rusty2600's local-slot save-state
+UI (this release's items 1-2 above) is the real, verified deliverable;
+cloud sync is left as a well-scoped future item rather than force-fit into
+a release with no way to test it. If a future release picks this up on
+Android, `RustyNES/android/.../CloudSave.kt` is the concrete reference
+implementation to port (Play Games Services Snapshots, not Google Drive);
+for iOS, `RustyNES/ios/RustyNES/CloudSaveStateSync.swift` is the CloudKit
+reference — but both need a Mac (iOS) or a configured Play Console project
+(Android) to actually stand up and test, neither of which exists in this
+sandbox today.
 
 ## What's deliberately out of scope this release
 
 - **Play Store submission** — deferred beyond `v2.0.0`, matching
   RustyNES's own `v2.1.0` precedent. This release targets "a working,
   sideloadable emulator verified on real hardware," not a store listing.
-- **Save/load-state UI, HD-pack loading** on either mobile host — the
-  bridge crate supports save-states already; neither app exposes them yet.
+- **HD-pack loading** on either mobile host — save/load-state UI shipped
+  this release (see above); HD-pack loading is still unexposed on mobile.
+- **Cloud save-state sync** — researched this release; see "Cloud
+  save-state sync research" above for the concrete go/no-go reasoning.
 - **Real TIA paddle timing** — see "Paddle limitation" above; a
   `rusty2600-tia` accuracy task, not a mobile-bridge one.
 - **An actual Xcode build/Simulator/device run of the iOS app** — see
-  "iOS Verification" above; deferred to `v1.12.x` on real Apple hardware.
+  "iOS Verification" above; permanently out of scope for this sandbox
+  (needs a real Mac session, whenever that becomes available).
+- **Physical Android hardware verification** — see "Physical hardware
+  verification" above; checked for real this release, none was available.
 - **App Store submission** — deferred beyond `v2.0.0`, same as Play Store.
 
 ## What's next
 
-A `v1.12.x` follow-up needs a real Mac to: build the iOS xcframework,
-wire the checked-in Swift sources into an actual Xcode project, and get a
+A future release on a real Mac needs to: build the iOS xcframework, wire
+the checked-in Swift sources (including `v2.11.0`'s `SaveSlots.swift`/
+`SaveStateSlotPickerView.swift`) into an actual Xcode project, and get a
 first real Simulator/device run (the same bar the Android build already
-cleared). A `v1.11.x`/`v1.12.x` follow-up could also add on-device
-save-state UI and real (non-emulator/non-simulator) hardware verification
-for both mobile hosts once physical test devices are available. Real TIA
-dump-capacitor timing (closing the paddle-limitation gap for every
-platform at once) is tracked as a `rusty2600-tia` accuracy item, not a
-mobile-train item.
+cleared). Real physical Android hardware verification remains open,
+contingent on a real device or device-farm access becoming available in
+this sandbox (checked and genuinely absent as of `v2.11.0`, not assumed
+away). Cloud save-state sync is scoped but deferred (see above) pending
+real Google Play Console / Apple Developer credentials this sandbox
+doesn't have. Real TIA dump-capacitor timing (closing the paddle-limitation
+gap for every platform at once) is tracked as a `rusty2600-tia` accuracy
+item, not a mobile-train item. The still-unresolved black-screen-with-a-
+real-ROM gap on Android (see "Save-state UI verification" above) is worth
+its own investigation, independent of the save-state work this release
+completed.
