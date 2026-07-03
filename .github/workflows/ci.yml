@@ -1,15 +1,33 @@
 name: CI
-on: [push, pull_request]
+# Two tiers, to stop paying full-matrix cost on every intermediate PR
+# iteration (this arc's own release process pushes several commits to each
+# release/vX.Y.Z branch -- initial fork-merge, then one per bot-review
+# fix-up -- and previously every one of those re-ran the full 3-OS + perf
+# matrix via BOTH the `push` and `pull_request` triggers).
+#
+# - `pull_request` (any branch, every push to it): the fast `quick` gate
+#   below -- Ubuntu only, no perf benchmark. Real, meaningful, and cheap:
+#   fmt/clippy/test/test-roms/doc/no_std catch the overwhelming majority of
+#   actual regressions.
+# - `push` to `main` or a version tag (`v*`) -- i.e. an iterative release
+#   actually landing, not an intermediate PR commit -- runs the FULL matrix
+#   (`test` across ubuntu/macos/windows, `no_std`, `perf`).
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request: {}
 jobs:
-  test:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  # Fast per-PR gate. Every push to an open PR's branch re-triggers this
+  # (cheap enough that re-running per bot-fix commit is fine); the full
+  # matrix below does NOT re-run per PR push, only at the release-landing
+  # checkpoints (see the top-level comment).
+  quick:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
         # cpal needs ALSA; winit/egui-winit need xkbcommon + wayland + X11 (the
         # crate enables egui-winit's "wayland" and "x11" features, so both are
         # required, not just whichever the runner's default session uses).
@@ -30,8 +48,38 @@ jobs:
       - run: cargo test --workspace
       - run: cargo test --workspace --features test-roms
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+      - run: cargo build -p rusty2600-core --target thumbv7em-none-eabihf --no-default-features
+
+  # Full 3-OS matrix. Only on push to `main` / a version tag -- see the
+  # top-level comment for why PRs get `quick` instead.
+  test:
+    if: github.event_name == 'push'
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev \
+            libxkbcommon-dev libwayland-dev \
+            libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev
+      - uses: dtolnay/rust-toolchain@1.96
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown, thumbv7em-none-eabihf
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo test --workspace --features test-roms
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
         if: runner.os == 'Linux'
   no_std:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -40,6 +88,7 @@ jobs:
           targets: thumbv7em-none-eabihf
       - run: cargo build -p rusty2600-core --target thumbv7em-none-eabihf --no-default-features
   perf:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
