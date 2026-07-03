@@ -6,6 +6,86 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-07-03 - "Field Trip"
+
+Eighth release of the RustyNES gap-closure arc, shipped through PR #21.
+Wires `rusty2600-mobile`'s already-real `save_state()`/`load_state()`
+UniFFI methods (present since `v1.11.0`, never exposed in either mobile
+UI) into real Android and iOS save-state slot UIs, researches cloud
+save-state sync, and checks physical Android hardware availability.
+Reviewed by GitHub Copilot and Gemini Code Assist — 11 findings, all
+genuine, all fixed, including a real Android thread-safety bug.
+
+### Added
+
+- **Android Save State / Load State UI** — 8 numbered slots (matching
+  desktop's `v2.4.0` convention), keyed by the same CRC32 ROM tag already
+  computed for `loadRom`, stored under app-private storage
+  (`Context.filesDir`). New `SaveSlots.kt` + two new dialogs in
+  `MainActivity.kt`.
+- **iOS Save State / Load State UI** — same convention over
+  `FileManager`'s Application Support directory (a genuinely private,
+  non-user-visible location — see Fixed below). New `SaveSlots.swift` +
+  `SaveStateSlotPickerView.swift`, wired into `EmulatorViewModel`/
+  `ContentView`. Also fixed a latent bug: the ROM tag was previously
+  derived only from byte *count* (two same-size ROMs would collide) —
+  replaced with a real FNV-1a-64 content hash, since this is the first
+  release to actually build per-tag slot directories on iOS.
+
+### Investigated, deferred
+
+- **Cloud save-state sync** — checked the sibling RustyNES project's
+  actual shipped implementations rather than assuming a target: iOS uses
+  CloudKit; Android uses Google Play Games Services v2 Snapshots, not
+  Google Drive as the roadmap assumed. Both need live backend credentials
+  (Play Console project, Apple Developer account) this sandbox has none
+  of — documented as the concrete reference implementations to port
+  later, in `docs/mobile.md`.
+
+### Fixed
+
+- **A real Android thread-safety bug** (Gemini Code Assist) —
+  `saveState()`/`loadState()` ran directly on the UI thread, racing the
+  ~60Hz frame loop that mutates the same `emulator` instance on a
+  background `HandlerThread`. Now posted to that same handler, with the
+  UI update hopping back to the main thread.
+- **File I/O failures could crash the app instead of showing an error**
+  (Copilot) — widened `catch (e: MobileException)` to `catch (e:
+  Exception)` on both Android dialogs, covering the `IOException`
+  `SaveSlots.save`/`load` can throw.
+- **iOS `SaveSlots` used `.documentDirectory`, which is user-visible**
+  (Copilot) — switched to the genuinely private
+  `.applicationSupportDirectory`, matching the module's own stated
+  "private, per-app" intent.
+- **iOS `EmulatorViewModel`'s save/load/probe ran synchronously on the
+  `@MainActor`** (Gemini Code Assist) — offloaded to `Task.detached`.
+- Two smaller Gemini Code Assist findings: `ULong.toString(16)` +
+  `padStart` instead of a `Long`-cast `"%016x".format` (avoids
+  JVM-specific negative-number hex formatting); `url.resourceValues
+  (forKeys:)` instead of the deprecated `FileManager.attributesOfItem
+  (atPath:)`.
+
+All Android fixes independently re-verified end-to-end on the live
+`Pixel_8_API_34` emulator (not just "it compiles"): rebuilt, reinstalled,
+saved to a new slot through the fixed threaded code path, confirmed the
+file on disk, confirmed a pre-existing slot (written by the old code)
+still loads correctly with the new hex formatting, and scanned the full
+re-verification session's logcat for any exception/error/crash: zero.
+
+### Physical hardware verification
+
+Checked for real this release (not assumed): `adb devices -l` showed
+only the emulator, both before and during the session. No device-farm
+tooling configured. Verification stays at the `v1.11.0` "real emulator"
+bar.
+
+### Test count
+
+374 tests passing on default features (378 with `--features test-roms`)
+— unchanged from `v2.10.0`, since this release touches zero Rust code
+(purely Kotlin/Swift/docs). Full CI green — Linux/macOS/Windows, the perf
+regression gate, and the `no_std` gate.
+
 ## [2.10.0] - 2026-07-03 - "Prism"
 
 Seventh release of the RustyNES gap-closure arc, shipped through PR #20.

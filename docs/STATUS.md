@@ -5,54 +5,58 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v2.10.0 "Prism" — the seventh release of the
+**Current release:** v2.11.0 "Field Trip" — the eighth release of the
 RustyNES gap-closure arc (`v2.4.0 -> v3.0.0`, see `to-dos/ROADMAP.md`),
-shipped through PR #20. Grows `rusty2600-gfx-shaders` beyond its prior
-CRT scanline + composite-artifact approximation: a **genuine NTSC
-composite YIQ decode** (`PassKind::NtscComposite`, NTSC-only) adapted
-from the Bisqwit/Mesen technique for the TIA's own 4-bit-hue+3-bit-luma
-color model — models the real chroma/luma bandwidth differential that's
-the actual physical cause of 2600 "artifact colors," verified in pure
-Rust (the forward/inverse YIQ matrix pair is a true inverse for all 128
-real NTSC palette entries); **hqNx/xBRZ upscaling passes**, independently
-re-derived (not ported); a **generalized `ShaderStack`** (arbitrary
-pass-list length, not the prior fixed 2-slot design); and a **constrained
-`.slangp`/`.cgp` preset importer** matching RustyNES's own ADR 0013 scope
-(maps known filename stems to built-ins, reports the rest as explicitly
-unsupported, never attempts real shader translation). PR #20's bot review
-found 6 findings, all fixed — most notably a real `ShaderStack::render`
-bug both Gemini Code Assist and Copilot independently caught: ping-pong
-parity and `is_last` were computed off the original pass-list index even
-though a misplaced position-constrained pass gets defensively skipped,
-which could desync both (a blank frame, or a wrong-texture read). 374
-tests passing on default features (378 with `--features test-roms`, up
-from 349/353).
+shipped through PR #21. Wires `rusty2600-mobile`'s already-real
+`save_state()`/`load_state()` UniFFI methods (present since `v1.11.0`,
+never exposed in either mobile UI) into real Android and iOS save-state
+slot UIs (8 numbered slots, matching desktop's `v2.4.0` convention,
+keyed by a per-platform ROM-content hash). Cloud save-state sync was
+researched — the sibling RustyNES project's own real implementations
+(iOS: CloudKit; Android: Google Play Games Services v2 Snapshots, not
+Google Drive as the roadmap assumed) both need live backend credentials
+this sandbox has none of — deferred with the concrete reference
+implementations documented for later. Physical Android hardware
+verification was checked for real (not assumed): only the emulator was
+available. PR #21's bot review found 11 findings, all fixed, most
+notably a real Android thread-safety bug (Gemini Code Assist):
+`saveState()`/`loadState()` ran on the UI thread, racing the ~60Hz frame
+loop mutating the same `emulator` instance on a background handler — now
+posted to that same handler. All Android fixes independently
+re-verified end-to-end on the live emulator (not just "it compiles"):
+rebuilt, reinstalled, saved to a new slot through the fixed threaded
+path, confirmed the file on disk, confirmed a pre-existing slot still
+loads correctly, zero exceptions in logcat. 374 tests passing on default
+features (378 with `--features test-roms`) — unchanged from `[2.10.0]`,
+since this release touches zero Rust code.
 
-**Previous release:** v2.9.0 "Full Circle" — closed the remaining
+**Previous release:** v2.10.0 "Prism" — grew `rusty2600-gfx-shaders`
+with a genuine NTSC composite YIQ decode (NTSC-only, verified in pure
+Rust), hqNx/xBRZ upscaling, a generalized arbitrary-length shader stack,
+and a constrained RetroArch preset importer. Shipped through PR #20. See
+`[2.10.0]` in `CHANGELOG.md` for full detail.
+
+**Historical**: v2.9.0 "Full Circle" (PR #19) closed the remaining
 `wasm-winit` capability gap: a `?settings=` share-link, a wasm32-safe
-debugger overlay, PWA install, and a real (not re-deferred) investigation
-into in-browser Lua scripting that concluded honestly deferred (`mlua`
-confirmed a hard wall on wasm32; `piccolo` not yet workable). Shipped
-through PR #19. See `[2.9.0]` in `CHANGELOG.md` for full detail.
-
-**Historical**: v2.8.0 "Touchpoint" (PR #18) shipped the first wave of
-`wasm-winit` web parity: an on-screen touch overlay and real
-`localStorage` config persistence. v2.7.0 "True Colors" (PR #17) shipped
-the TIA object-ID mask plus a live HD-pack rendering splice. v2.6.0
-"Rollback Bridge" (PR #15 + PR #16) shipped browser WebRTC netplay
-transport plus a master dependency-upgrade sweep consolidating 12
-Dependabot PRs. v2.5.0 "Web Awakens" (PR #14) shipped real
-`winit`+`wgpu`+`egui` rendering on `wasm32`, a debugger Lua console
-panel, and a Keyboard Controller/Trak-Ball research decision. v2.4.0
-"Save Point" (PR #1) shipped manual save-state slots, a CI-gated
-performance-regression check, a paddle-timing Stella-oracle differential
-test, `.zip` ROM-archive loading, and a GitHub repo hygiene pass. v2.3.0
-"Full Catalogue" closed the cart bankswitch catalogue to **26 of 26
-schemes** (CDF/CDFJ/CDFJ+, the last scheme) and landed DPC+ music-mode
-audio, script overlay compositing, and a live-tested netplay STUN
-client. Full detail for every release lives in `CHANGELOG.md`, which
-this file never duplicates beyond a one-paragraph summary of the two
-most recent releases.
+debugger overlay, PWA install, and a real investigation into in-browser
+Lua scripting that concluded honestly deferred. v2.8.0 "Touchpoint"
+(PR #18) shipped the first wave of `wasm-winit` web parity: an
+on-screen touch overlay and real `localStorage` config persistence.
+v2.7.0 "True Colors" (PR #17) shipped the TIA object-ID mask plus a live
+HD-pack rendering splice. v2.6.0 "Rollback Bridge" (PR #15 + PR #16)
+shipped browser WebRTC netplay transport plus a master dependency-
+upgrade sweep consolidating 12 Dependabot PRs. v2.5.0 "Web Awakens"
+(PR #14) shipped real `winit`+`wgpu`+`egui` rendering on `wasm32`, a
+debugger Lua console panel, and a Keyboard Controller/Trak-Ball research
+decision. v2.4.0 "Save Point" (PR #1) shipped manual save-state slots, a
+CI-gated performance-regression check, a paddle-timing Stella-oracle
+differential test, `.zip` ROM-archive loading, and a GitHub repo hygiene
+pass. v2.3.0 "Full Catalogue" closed the cart bankswitch catalogue to
+**26 of 26 schemes** (CDF/CDFJ/CDFJ+, the last scheme) and landed DPC+
+music-mode audio, script overlay compositing, and a live-tested netplay
+STUN client. Full detail for every release lives in `CHANGELOG.md`,
+which this file never duplicates beyond a one-paragraph summary of the
+two most recent releases.
 
 **Honest verification boundary**: netplay's STUN client (`[2.3.0]`) and
 WebRTC transport (`[2.6.0]`) are each genuinely tested against a real
@@ -70,8 +74,10 @@ NOT live-browser-verified — this sandbox's headless Chromium has no
 working GPU adapter, so `wasm-winit` rendering itself remains
 unconfirmed since `[2.5.0]` (see `docs/frontend.md`). In-browser Lua
 scripting remains unsupported on `wasm32` pending an upstream `piccolo`
-release with real stdlib coverage — not something this project controls
-or can schedule against.
+release with real stdlib coverage. The iOS save-state UI (`[2.11.0]`)
+remains unverified by compilation (no Mac in this sandbox, a permanent,
+accepted limitation) — none of these gaps are something this project
+controls or can schedule against.
 
 Earlier: `v2.1.0 "Follow-Through"` closed three gaps `[2.0.0]` carried
 forward — AR/Supercharger (`BankAr`, a full port of Stella's
