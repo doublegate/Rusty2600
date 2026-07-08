@@ -6,8 +6,9 @@
 //! this suite").
 #![allow(missing_docs)] // criterion_group!/main! expand into undocumented fns.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rusty2600_core::{System, detect};
+use std::hint::black_box;
 
 /// One color clock per line: 228 (NTSC). One frame: 262 lines.
 const COLOR_CLOCKS_PER_LINE: u64 = 228;

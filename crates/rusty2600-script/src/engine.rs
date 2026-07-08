@@ -277,7 +277,7 @@ impl<B: ScriptBus + 'static> ScriptEngine<B> {
             let bus = Rc::clone(bus);
             emu.set(
                 "loadState",
-                lua.create_function_mut(move |_, bytes: mlua::String| {
+                lua.create_function_mut(move |_, bytes: mlua::LuaString| {
                     bus.borrow_mut()
                         .load_state(&bytes.as_bytes())
                         .map_err(mlua::Error::RuntimeError)

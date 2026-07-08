@@ -2,8 +2,9 @@
 //! that is what the one-directional crate graph buys us).
 #![allow(missing_docs)] // criterion_group!/main! expand into undocumented fns.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rusty2600_cart::{Board, detect};
+use std::hint::black_box;
 
 /// F8 (the most common classic Curated scheme) read/write throughput,
 /// including its hotspot bank-switch check on every access.

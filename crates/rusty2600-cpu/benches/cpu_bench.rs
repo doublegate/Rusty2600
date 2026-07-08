@@ -2,8 +2,9 @@
 //! that is what the one-directional crate graph buys us).
 #![allow(missing_docs)] // criterion_group!/main! expand into undocumented fns.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rusty2600_cpu::{Cpu, CpuBus};
+use std::hint::black_box;
 
 /// A flat 8 KiB RAM bus with no timing model — isolates the CPU's own
 /// decode/execute cost from TIA/RIOT/cart overhead, matching the crate's
