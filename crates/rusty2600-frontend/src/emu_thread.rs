@@ -58,6 +58,12 @@ pub struct EmuCore {
     /// The board's accuracy tier label, cached for the status bar (the 2600 `Board`
     /// trait has no name; `Tier::name` is the honesty marker).
     board_tier: Option<&'static str>,
+    /// The board's short scheme code (`"F8"`, `"DPC+"`, ...), cached for the
+    /// debugger's cart-info panel (`[v2.12.0]`).
+    board_scheme: Option<&'static str>,
+    /// The loaded ROM image's byte length, cached for the debugger's
+    /// cart-info panel (`[v2.12.0]`).
+    rom_size: Option<usize>,
     /// The lock-free audio ring producer (pushes samples to the frontend).
     ///
     /// Native-only: `AudioProducer` (`crate::audio`, cpal-backed) has no wasm32 story yet — real
@@ -144,6 +150,8 @@ impl EmuCore {
             framebuffer: vec![0u8; (MAX_W * MAX_H * 4) as usize],
             index_buffer: vec![0u8; (MAX_W * MAX_H) as usize],
             board_tier: None,
+            board_scheme: None,
+            rom_size: None,
             #[cfg(not(target_arch = "wasm32"))]
             audio_tx: None,
             snapshots: std::collections::VecDeque::with_capacity(600),
@@ -175,6 +183,8 @@ impl EmuCore {
         }
         let board = detect(rom).ok_or(EmuError::Unsupported)?;
         self.board_tier = Some(board.tier().name());
+        self.board_scheme = Some(board.scheme_name());
+        self.rom_size = Some(rom.len());
         // Fresh power-on with the board installed (a real reset-vector fetch lands
         // with the CPU model; the skeleton just attaches the board so the Bus routes
         // cart accesses to it).
@@ -203,6 +213,8 @@ impl EmuCore {
         self.frame_count = 0;
         self.rom_loaded = false;
         self.board_tier = None;
+        self.board_scheme = None;
+        self.rom_size = None;
         self.rom_tag = None;
         self.framebuffer.iter_mut().for_each(|b| *b = 0);
         self.index_buffer.iter_mut().for_each(|b| *b = 0);
@@ -226,6 +238,20 @@ impl EmuCore {
     #[must_use]
     pub const fn board_tier(&self) -> Option<&'static str> {
         self.board_tier
+    }
+
+    /// The loaded board's short scheme code, if any (`[v2.12.0]`'s cart-info
+    /// debugger panel).
+    #[must_use]
+    pub const fn board_scheme(&self) -> Option<&'static str> {
+        self.board_scheme
+    }
+
+    /// The loaded ROM image's byte length, if any (`[v2.12.0]`'s cart-info
+    /// debugger panel).
+    #[must_use]
+    pub const fn rom_size(&self) -> Option<usize> {
+        self.rom_size
     }
 
     /// The currently-loaded ROM's identity tag, if any — the value passed to

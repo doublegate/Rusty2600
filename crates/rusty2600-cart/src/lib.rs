@@ -3906,6 +3906,45 @@ pub enum Cartridge {
     BankCdf(BankCdf),
 }
 
+impl Cartridge {
+    /// This cartridge's short bankswitch-scheme code (`"F8"`, `"DPC+"`,
+    /// `"3E"`, ...), matching `docs/cart.md`'s scheme catalogue naming.
+    ///
+    /// A pure discriminant match (no field access), for the debugger's
+    /// cart-info panel — display metadata only, never consulted by any
+    /// bank-decode logic.
+    #[must_use]
+    pub const fn scheme_name(&self) -> &'static str {
+        match self {
+            Self::Rom2K(_) => "2K",
+            Self::Rom4K(_) => "4K",
+            Self::BankF8(_) => "F8",
+            Self::BankF6(_) => "F6",
+            Self::BankF4(_) => "F4",
+            Self::BankCV(_) => "CV",
+            Self::BankFA(_) => "FA",
+            Self::BankDpc(_) => "DPC",
+            Self::BankE7(_) => "E7",
+            Self::BankF0(_) => "F0",
+            Self::BankE0(_) => "E0",
+            Self::Bank3F(_) => "3F",
+            Self::Bank3E(_) => "3E",
+            Self::BankEF(_) => "EF",
+            Self::BankDF(_) => "DF",
+            Self::BankBF(_) => "BF",
+            Self::BankUA(_) => "UA",
+            Self::Bank0840(_) => "0840",
+            Self::BankFe(_) => "FE",
+            Self::BankSb(_) => "SB",
+            Self::BankX07(_) => "X07",
+            Self::Bank4A50(_) => "4A50",
+            Self::BankAr(_) => "AR",
+            Self::BankDpcPlus(_) => "DPC+",
+            Self::BankCdf(_) => "CDF/CDFJ/CDFJ+",
+        }
+    }
+}
+
 impl Board for Cartridge {
     fn cpu_read(&mut self, addr: u16) -> u8 {
         match self {
