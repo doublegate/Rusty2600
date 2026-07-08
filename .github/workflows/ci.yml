@@ -1,38 +1,86 @@
 name: CI
-# Two tiers, to stop paying full-matrix cost on every intermediate PR
-# iteration (this arc's own release process pushes several commits to each
-# release/vX.Y.Z branch -- initial fork-merge, then one per bot-review
-# fix-up -- and previously every one of those re-ran the full 3-OS + perf
-# matrix via BOTH the `push` and `pull_request` triggers).
+
+# Cost/time optimisation (unified with the RustyNES pattern): the expensive
+# legs -- the macOS/Windows matrix, the `test-roms` accuracy battery, and the
+# `perf` frame-time gate -- run only on release-class events and are SKIPPED on
+# ordinary feature PRs, which get just the fast essential gates (fmt/clippy/
+# rustdoc, the ubuntu unit tests, no_std). A regular PR pushes many commits
+# (initial fork-merge, then one per bot-review fix-up), and previously each one
+# re-ran test-roms; moving that off per-PR pushes is the bulk of the saving.
 #
-# - `pull_request` (any branch, every push to it): the fast `quick` gate
-#   below -- Ubuntu only, no perf benchmark. Real, meaningful, and cheap:
-#   fmt/clippy/test/test-roms/doc/no_std catch the overwhelming majority of
-#   actual regressions.
-# - `push` to `main` or a version tag (`v*`) -- i.e. an iterative release
-#   actually landing, not an intermediate PR commit -- runs the FULL matrix
-#   (`test` across ubuntu/macos/windows, `no_std`, `perf`).
+# FULL when: push to `main` or a version tag (`v*`), the merge queue, manual
+# dispatch, the weekly `schedule` drift-net, OR a `release/*` PR (so a release
+# is fully proven before it is cut). LIGHT only on a regular feature PR. See the
+# `setup` job for the decision.
 on:
   push:
     branches: [main]
     tags: ["v*"]
   pull_request: {}
+  workflow_dispatch:
+  merge_group:
+  # Weekly drift safety-net: re-run the FULL suite on `main` so a regression
+  # merged between releases (now that test-roms/perf are off per-PR pushes) is
+  # caught within a week regardless of release cadence.
+  schedule:
+    - cron: "0 7 * * 1"
+
+# Cancel superseded PR-branch runs (rapid pushes); let every other run finish.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
 jobs:
-  # Fast per-PR gate. Every push to an open PR's branch re-triggers this
-  # (cheap enough that re-running per bot-fix commit is fine); the full
-  # matrix below does NOT re-run per PR push, only at the release-landing
-  # checkpoints (see the top-level comment).
-  quick:
-    if: github.event_name == 'pull_request'
+  # Compute one "full-run" flag + the OS matrix. LIGHT (ubuntu-only, no
+  # test-roms/perf) for a regular feature PR; FULL (adds macOS/Windows + the
+  # test-roms battery + the perf gate) for push to main / a tag, the merge
+  # queue, dispatch, the weekly cron, and release/* PRs.
+  setup:
+    name: select matrix
     runs-on: ubuntu-latest
+    outputs:
+      os: ${{ steps.pick.outputs.os }}
+      full: ${{ steps.pick.outputs.full }}
+    steps:
+      - id: pick
+        shell: bash
+        # Pass event/ref via env (NOT ${{ }} interpolation into run:) so a branch
+        # name can't inject shell -- the actions/script-injection pattern CodeQL flags.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ] && [[ "$HEAD_REF" != release/* ]]; then
+            echo 'full=false' >> "$GITHUB_OUTPUT"
+            echo 'os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'full=true' >> "$GITHUB_OUTPUT"
+            echo 'os=["ubuntu-latest", "macos-latest", "windows-latest"]' >> "$GITHUB_OUTPUT"
+          fi
+
+  # Fast per-PR gate + full cross-platform matrix. The OS list comes from
+  # `setup`: ubuntu-only on a regular feature PR (LIGHT), the full
+  # ubuntu+macOS+Windows matrix on push / tag / merge queue / dispatch / weekly
+  # cron / release PRs (FULL). fmt/clippy/test/rustdoc run on every PR (ubuntu),
+  # so obvious breakage is still caught on every push.
+  test:
+    name: test (${{ matrix.os }})
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.setup.outputs.os) }}
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - name: Install Linux system dependencies
         # cpal needs ALSA; winit/egui-winit need xkbcommon + wayland + X11 (the
         # crate enables egui-winit's "wayland" and "x11" features, so both are
         # required, not just whichever the runner's default session uses).
-        # Matches README.md's documented Arch/pacman package list, translated
-        # to apt for the ubuntu-latest CI runner.
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -46,22 +94,20 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
-      - run: cargo test --workspace --features test-roms
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-      - run: cargo build -p rusty2600-core --target thumbv7em-none-eabihf --no-default-features
+        if: runner.os == 'Linux'
 
-  # Full 3-OS matrix. Only on push to `main` / a version tag -- see the
-  # top-level comment for why PRs get `quick` instead.
-  test:
-    if: github.event_name == 'push'
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  test-roms:
+    name: test (test-roms feature)
+    # The heavy accuracy-ROM battery -- FULL-run only (skipped on ordinary
+    # feature PRs; runs on push to main/tag, merge queue, dispatch, weekly cron,
+    # and release PRs). This is the single biggest per-PR time saving.
+    needs: setup
+    if: ${{ needs.setup.outputs.full == 'true' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -72,14 +118,9 @@ jobs:
         with:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown, thumbv7em-none-eabihf
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
       - run: cargo test --workspace --features test-roms
-      - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-        if: runner.os == 'Linux'
+
   no_std:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -87,18 +128,22 @@ jobs:
         with:
           targets: thumbv7em-none-eabihf
       - run: cargo build -p rusty2600-core --target thumbv7em-none-eabihf --no-default-features
+
   perf:
-    if: github.event_name == 'push'
+    name: frame-time regression gate
+    # FULL-run only (like test-roms): the frame-time trip-wire is an absolute
+    # ceiling that only needs to hold at merge / release, not on every PR push.
+    needs: setup
+    if: ${{ needs.setup.outputs.full == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.96
       # `bench_regression_check.sh` runs the whole-system frame bench
-      # (`rusty2600-core`'s `system_full_ntsc_frame`) and fails the job if
-      # the measured mean exceeds a fixed absolute ceiling -- see the
-      # script's own header comment and docs/performance.md for the
-      # baseline/ceiling rationale. ubuntu-latest only (deliberately not the
-      # full 3-OS matrix): bench timing noise across OSes would only add
-      # false-positive risk to a trip-wire that just needs one consistent
-      # runner.
+      # (`rusty2600-core`'s `system_full_ntsc_frame`) and fails the job if the
+      # measured mean exceeds a fixed absolute ceiling -- see the script's own
+      # header comment and docs/performance.md for the baseline/ceiling
+      # rationale. ubuntu-latest only (deliberately not the full 3-OS matrix):
+      # bench timing noise across OSes would only add false-positive risk to a
+      # trip-wire that just needs one consistent runner.
       - run: bash scripts/bench_regression_check.sh
