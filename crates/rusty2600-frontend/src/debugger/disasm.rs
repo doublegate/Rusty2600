@@ -9,8 +9,13 @@
 
 /// The 6502's addressing modes, used only to know the instruction's total
 /// length and how to format its operand.
+///
+/// `pub(super)`: `debugger::assembler` (`[v2.12.0]`) reuses this alongside
+/// [`lookup`] to derive its `(mnemonic, mode) -> opcode` encoding table
+/// directly from this canonical decode table, so the assembler can never
+/// drift from the disassembler's own opcode set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Mode {
+pub(super) enum Mode {
     Implied,
     Accumulator,
     Immediate,
@@ -27,7 +32,7 @@ enum Mode {
 }
 
 impl Mode {
-    const fn operand_len(self) -> u16 {
+    pub(super) const fn operand_len(self) -> u16 {
         match self {
             Self::Implied | Self::Accumulator => 0,
             Self::Immediate
@@ -54,8 +59,11 @@ pub struct Instruction {
 
 /// Look up `(mnemonic, mode)` for an opcode byte. Returns `None` for opcodes
 /// not in the documented NMOS 6502 set (illegal/undocumented opcodes).
+///
+/// `pub(super)`: also the canonical source `debugger::assembler` builds its
+/// encoding table from (see [`Mode`]'s doc comment).
 #[allow(clippy::too_many_lines)]
-const fn lookup(opcode: u8) -> Option<(&'static str, Mode)> {
+pub(super) const fn lookup(opcode: u8) -> Option<(&'static str, Mode)> {
     use Mode::{
         Absolute, AbsoluteX, AbsoluteY, Accumulator, Immediate, Implied, Indirect, IndirectX,
         IndirectY, Relative, ZeroPage, ZeroPageX, ZeroPageY,

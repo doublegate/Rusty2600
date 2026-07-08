@@ -778,6 +778,14 @@ impl App {
             };
         }
 
+        // Perf-monitor panel (`[v2.12.0]`): only record while it's the selected AND
+        // visible debugger panel — an unopened/unselected perf panel costs nothing
+        // beyond the FPS smoothing above, which already runs unconditionally.
+        #[cfg(feature = "debug-hooks")]
+        if active.shell.debugger_visible && active.shell.panel == crate::shell::DebugPanel::Perf {
+            crate::debugger::perf_panel::record_frame(&mut active.shell.debugger.perf, dt * 1000.0);
+        }
+
         // --- (1) Step one frame + copy the framebuffer + read-only info under a BRIEF lock. ---
         let (fb, idx, fb_dims, info) = {
             let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
@@ -904,6 +912,8 @@ impl App {
             #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
             let mut info = ShellInfo {
                 board_tier: emu.board_tier().map(str::to_string),
+                scheme_name: emu.board_scheme().map(str::to_string),
+                rom_size: emu.rom_size(),
                 region: emu.region,
                 fps: active.fps_smoothed,
                 rom_loaded: emu.rom_loaded,
@@ -1312,12 +1322,36 @@ impl App {
                     // safe to keep the call stack accurate on every Step.
                     let pc_before = emu.system.cpu.pc;
                     let opcode = emu.system.bus.peek(pc_before);
+                    let (a_before, x_before, y_before, s_before) = (
+                        emu.system.cpu.a,
+                        emu.system.cpu.x,
+                        emu.system.cpu.y,
+                        emu.system.cpu.s,
+                    );
                     emu.system.step_instruction();
                     crate::debugger::callstack::track_instruction(
                         &mut active.shell.debugger.call_stack,
                         opcode,
                         pc_before,
                     );
+                    // Same "cheap here, would multiply badly in Continue's tight
+                    // loop" reasoning as the call-stack tracking above.
+                    if active.shell.debugger.trace.enabled {
+                        let text = crate::debugger::disasm::disassemble_one(
+                            |addr| emu.system.bus.peek(addr),
+                            pc_before,
+                        )
+                        .text;
+                        crate::debugger::trace_panel::track_instruction(
+                            &mut active.shell.debugger.trace,
+                            pc_before,
+                            a_before,
+                            x_before,
+                            y_before,
+                            s_before,
+                            text,
+                        );
+                    }
                 }
                 #[cfg(feature = "debug-hooks")]
                 MenuAction::DebugContinue => {
@@ -1327,11 +1361,13 @@ impl App {
                     emu.paused = true;
                     active.shell.paused = true;
                     for _ in 0..MAX_STEPS {
-                        // NOTE: the call stack is deliberately NOT tracked here —
-                        // `Bus::peek`'s full-clone cost (TIA's video/audio
-                        // buffers included) would multiply across up to
-                        // MAX_STEPS iterations. Only `DebugStep` (one call per
-                        // click, never a loop) keeps it accurate.
+                        // NOTE: neither the call stack NOR the trace logger
+                        // (`[v2.12.0]`) is tracked here — `Bus::peek`'s full-clone
+                        // cost (TIA's video/audio buffers included), needed for
+                        // both the JSR/RTS opcode check and trace disassembly,
+                        // would multiply across up to MAX_STEPS iterations. Only
+                        // `DebugStep` (one call per click, never a loop) keeps
+                        // either accurate.
                         emu.system.step_instruction();
                         if active
                             .shell
@@ -1359,6 +1395,17 @@ impl App {
                         if active.shell.debugger.any_breakpoint_watch_triggered(&ctx) {
                             break;
                         }
+                    }
+                }
+                // Assembler panel (`[v2.12.0]`): apply the assembled writes through
+                // the SAME `system.bus.cpu_write` path `crate::scripting`'s
+                // `emu.poke` already uses, under the same brief emu lock every
+                // other debugger action here takes.
+                #[cfg(feature = "debug-hooks")]
+                MenuAction::DebugPoke(writes) => {
+                    let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                    for (addr, val) in writes {
+                        emu.system.bus.cpu_write(addr, val);
                     }
                 }
                 #[cfg(feature = "debug-hooks")]

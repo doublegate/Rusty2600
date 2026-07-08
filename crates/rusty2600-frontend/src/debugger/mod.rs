@@ -7,7 +7,9 @@
 //! functions here.
 
 pub mod access_counter;
+pub mod assembler;
 pub mod callstack;
+pub mod cart_info_panel;
 #[cfg(all(not(target_arch = "wasm32"), feature = "retroachievements"))]
 pub mod cheevos_panel;
 pub mod disasm;
@@ -16,8 +18,10 @@ pub mod expr;
 #[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))]
 pub mod lua_console_panel;
 pub mod memory_compare_panel;
+pub mod perf_panel;
 pub mod pmb_panel;
 pub mod tastudio_panel;
+pub mod trace_panel;
 pub mod watch_panel;
 
 use std::collections::BTreeSet;
@@ -60,6 +64,15 @@ pub struct DebuggerState {
     pub tastudio: tastudio_panel::TastudioState,
     /// `memory_compare_panel`'s captured baseline snapshot, if any.
     pub memory_compare_baseline: Option<Vec<u8>>,
+    /// The trace logger's Record toggle + captured ring (`trace_panel`,
+    /// `[v2.12.0]`).
+    pub trace: trace_panel::TraceState,
+    /// The inline assembler's target-address/source inputs + last status
+    /// (`assembler`, `[v2.12.0]`).
+    pub assembler: assembler::AssemblerState,
+    /// The perf monitor's rolling frame-interval history (`perf_panel`,
+    /// `[v2.12.0]`).
+    pub perf: perf_panel::PerfState,
 }
 
 impl DebuggerState {
@@ -211,12 +224,16 @@ pub struct RiotSnapshot {
 /// An action requested from a debugger panel — mirrors
 /// [`crate::shell::MenuAction`]'s "return it, dispatch it after the egui
 /// pass" pattern so the panels never touch the emu lock either.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DebugAction {
     /// Execute exactly one CPU instruction.
     Step,
     /// Run until a breakpoint is hit or a safety step-cap is reached.
     Continue,
+    /// Write `(address, byte)` pairs through the SAME gated post-frame poke
+    /// path `crate::scripting`'s `emu.poke` already uses (`[v2.12.0]`'s
+    /// inline assembler panel — see `assembler`'s module doc).
+    Poke(Vec<(u16, u8)>),
 }
 
 /// Render the CPU panel: register grid, formatted flags, step/continue
