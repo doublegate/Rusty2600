@@ -58,13 +58,25 @@ simulation path.
 
 ### Verification
 
-387 tests passing on default features (391 with `--features test-roms`),
-up from 374/378 in `[2.11.0]` (the assembler's 7 unit tests plus minor
+389 tests passing on default features (393 with `--features test-roms`),
+up from 374/378 in `[2.11.0]` (the assembler's 9 unit tests plus minor
 disassembler-visibility changes). `cargo clippy --target
 wasm32-unknown-unknown --features wasm-winit,debug-hooks` and `cargo check
 --target wasm32-unknown-unknown --features wasm-canvas` both re-verified
 clean, independently of `ci-gate.sh` (which does not cover the wasm32
 target).
+
+`cargo audit` (not yet CI-gated — see `v3.0.0` `rc.1` in `to-dos/ROADMAP.md`)
+found `crossbeam-epoch` 0.9.18 (a `criterion`/`rayon` dev-dependency, never
+in a shipped binary) affected by RUSTSEC-2026-0204; bumped to 0.9.20, the
+advisory's own fix. `quick-xml` 0.39.4's two high-severity DoS advisories
+(RUSTSEC-2026-0194/0195) remain: transitively pinned by `wayland-scanner`
+0.31.10 (itself pinned by `smithay-client-toolkit` 0.19.2, by `winit`
+0.30.13) — used only as a build-time codegen tool parsing this project's
+own vendored Wayland protocol XML, never attacker-controlled input at
+runtime, so the practical exposure is minimal despite the advisory's own
+severity score. Blocked on an upstream `winit`/`smithay-client-toolkit`
+bump; tracked for `v3.0.0`'s `rc.1` dependency-audit pass.
 
 ## [2.11.0] - 2026-07-03 - "Field Trip"
 

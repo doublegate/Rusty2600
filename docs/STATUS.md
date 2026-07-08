@@ -30,7 +30,7 @@ parsing, since 2600 carts have no header), and a perf-monitor panel
 (rolling frame-interval history + sparkline, gated on that panel being
 the one currently selected and visible). All four feature-gated and
 off-by-default so the byte-identical-core-when-off invariant holds.
-387 tests passing on default features (391 with
+389 tests passing on default features (393 with
 `--features test-roms`), up from 374/378 in `[2.11.0]`.
 
 **Previous release:** v2.11.0 "Field Trip" — wired `rusty2600-mobile`'s
