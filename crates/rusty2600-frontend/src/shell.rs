@@ -59,6 +59,11 @@ pub enum MenuAction {
     /// Debugger -> run until a breakpoint is hit or a safety step-cap fires.
     #[cfg(feature = "debug-hooks")]
     DebugContinue,
+    /// Debugger -> Assembler panel: write assembled `(address, byte)` pairs
+    /// through the same gated poke path `crate::scripting`'s `emu.poke`
+    /// uses (`[v2.12.0]`, `crate::debugger::assembler`).
+    #[cfg(feature = "debug-hooks")]
+    DebugPoke(Vec<(u16, u8)>),
     /// TAStudio -> jump playback to this recorded frame index, via the
     /// existing rewind ring (`crate::debugger::tastudio_panel`).
     #[cfg(feature = "debug-hooks")]
@@ -264,6 +269,14 @@ pub enum DebugPanel {
     /// (`lua_console_panel`, `[2.5.0]`).
     #[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))]
     LuaConsole,
+    /// The instruction-execution trace logger (`trace_panel`, `[v2.12.0]`).
+    Trace,
+    /// The inline 6507 assembler (`assembler`, `[v2.12.0]`).
+    Assembler,
+    /// Cartridge/bankswitch metadata (`cart_info_panel`, `[v2.12.0]`).
+    CartInfo,
+    /// The performance monitor (`perf_panel`, `[v2.12.0]`).
+    Perf,
 }
 
 /// Persistent shell UI toggles (which panels are open, theme, status). Separate from the emulator
@@ -355,6 +368,11 @@ pub struct ShellInfo {
     /// The loaded board's tier label, if any (the 2600 `Board` trait has no name; `Tier::name`
     /// is the honesty marker shown here).
     pub board_tier: Option<String>,
+    /// The loaded board's short scheme code, if any (`"F8"`, `"DPC+"`, ...
+    /// — `crate::debugger::cart_info_panel`, `[v2.12.0]`).
+    pub scheme_name: Option<String>,
+    /// The loaded ROM image's byte length, if any (`[v2.12.0]`).
+    pub rom_size: Option<usize>,
     /// The current region.
     pub region: Region,
     /// The measured frames-per-second (the pacer's smoothed estimate).
@@ -1097,6 +1115,10 @@ impl ShellState {
                     ui.selectable_value(&mut self.panel, DebugPanel::Cheevos, "Cheevos");
                     #[cfg(all(not(target_arch = "wasm32"), feature = "scripting"))]
                     ui.selectable_value(&mut self.panel, DebugPanel::LuaConsole, "Lua Console");
+                    ui.selectable_value(&mut self.panel, DebugPanel::Trace, "Trace");
+                    ui.selectable_value(&mut self.panel, DebugPanel::Assembler, "Assembler");
+                    ui.selectable_value(&mut self.panel, DebugPanel::CartInfo, "Cart Info");
+                    ui.selectable_value(&mut self.panel, DebugPanel::Perf, "Perf");
                 });
                 ui.separator();
 
@@ -1188,11 +1210,43 @@ impl ShellState {
                                 ui, script,
                             );
                         }
+                        DebugPanel::Trace => {
+                            crate::debugger::trace_panel::render_trace_panel(
+                                ui,
+                                &mut self.debugger.trace,
+                            );
+                        }
+                        DebugPanel::Assembler => {
+                            if let Some(writes) = crate::debugger::assembler::render_assembler_panel(
+                                ui,
+                                &mut self.debugger.assembler,
+                            ) {
+                                debug_actions.push(crate::debugger::DebugAction::Poke(writes));
+                            }
+                        }
+                        DebugPanel::CartInfo => {
+                            crate::debugger::cart_info_panel::render_cart_info_panel(
+                                ui,
+                                info.scheme_name.as_deref(),
+                                info.board_tier.as_deref(),
+                                info.rom_size,
+                            );
+                        }
+                        DebugPanel::Perf => {
+                            crate::debugger::perf_panel::render_perf_panel(
+                                ui,
+                                info.fps,
+                                &self.debugger.perf,
+                            );
+                        }
                     }
                     for action in debug_actions {
                         actions.push(match action {
                             crate::debugger::DebugAction::Step => MenuAction::DebugStep,
                             crate::debugger::DebugAction::Continue => MenuAction::DebugContinue,
+                            crate::debugger::DebugAction::Poke(writes) => {
+                                MenuAction::DebugPoke(writes)
+                            }
                         });
                     }
                 }

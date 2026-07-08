@@ -10,7 +10,7 @@
 <p align="center">
   <a href="https://github.com/doublegate/Rusty2600/actions"><img src="https://github.com/doublegate/Rusty2600/workflows/CI/badge.svg" alt="Build Status"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="License: MIT OR Apache-2.0"></a>
-  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v2.11.0-blue.svg" alt="Version"></a>
+  <a href="https://github.com/doublegate/Rusty2600/releases"><img src="https://img.shields.io/badge/version-v2.12.0-blue.svg" alt="Version"></a>
   <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/rust-1.96-orange.svg" alt="Rust: 1.96"></a>
   <br>
   <a href="#compatibility-and-accuracy"><img src="https://img.shields.io/badge/accuracy%20battery-100%25%20(2%2F2)-brightgreen.svg" alt="Accuracy battery"></a>
@@ -89,6 +89,7 @@ look different, they visibly break.
 | **All 26 of 26 Bankswitch Schemes** | 2K/4K/F8/F6/F4/CV/FA/Superchip/DPC/E7 (all 8 Curated-tier) + F0/E0/3F/3E/EF/DF/BF/UA/0840/FE/SB/X07/4A50/AR-Supercharger/DPC+/CDF-CDFJ-CDFJ+ (all 16 BestEffort) — classified behind a CI-enforced Core/Curated/BestEffort honesty gate (ADR 0003) |
 | **Real Debugger** | Live 6507/TIA/RIOT/memory panels, breakpoints/step/continue, a side-effect-free memory peek, a standalone disassembler — default-on |
 | **Debugger Depth** *(v1.3.0)* | A watch/conditional-breakpoint expression engine, a live JSR/RTS call stack, a per-scanline TIA write-scatter viewer, and a player/missile/ball position panel |
+| **Debugger Depth II** *(v2.12.0)* | A capped instruction-trace ring buffer with export; an inline 6507 assembler (opcode table derived at runtime from the CPU panel's own canonical disassembly table, so the two can never drift apart) queuing writes through the same `cpu_write` path Lua's `emu.poke` uses; a cart-info panel (scheme/tier/ROM size — no iNES-style header, since 2600 carts have none); and a perf-monitor panel (rolling frame-interval history + sparkline) |
 | **RetroAchievements** | Native `rcheevos` integration: login, a live achievement list, leaderboards, rich presence, per-frame achievement tracking, hardcore mode, and a recent-unlocks toast list (off by default) |
 | **Save-States + Rewind** *(v1.1.0)* | A versioned binary snapshot format (ADR 0007) reusing the core's own `serde` derives; a rewind ring built on the same format |
 | **Run-Ahead** *(v1.2.0)* | Speculatively simulates a few frames ahead to hide a game's internal input lag, built on the save-state snapshot primitives — off by default, `0..=4` frames, adjustable live from Settings |

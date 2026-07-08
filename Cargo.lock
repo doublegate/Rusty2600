@@ -3702,7 +3702,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rusty2600-cart"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "bitflags 2.13.0",
  "criterion",
@@ -3712,7 +3712,7 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-cheevos"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "cc",
  "ureq",
@@ -3720,7 +3720,7 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-core"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "criterion",
  "postcard",
@@ -3733,7 +3733,7 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-cpu"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "bitflags 2.13.0",
  "criterion",
@@ -3743,7 +3743,7 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-frontend"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "anstyle",
  "bytemuck",
@@ -3783,14 +3783,14 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-gfx-shaders"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "rusty2600-mobile"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "rusty2600-cart",
  "rusty2600-core",
@@ -3800,7 +3800,7 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-netplay"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "bincode",
  "bytecodec",
@@ -3818,7 +3818,7 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-riot"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "bitflags 2.13.0",
  "criterion",
@@ -3827,14 +3827,14 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-script"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "mlua",
 ]
 
 [[package]]
 name = "rusty2600-test-harness"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "insta",
  "rusty2600-core",
@@ -3843,14 +3843,14 @@ dependencies = [
 
 [[package]]
 name = "rusty2600-thumb"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "bitflags 2.13.0",
 ]
 
 [[package]]
 name = "rusty2600-tia"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "bitflags 2.13.0",
  "criterion",

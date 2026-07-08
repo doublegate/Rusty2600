@@ -6,6 +6,66 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-07-08 - "Open Book"
+
+Ninth release of the RustyNES gap-closure arc. A genuinely different kind
+of release from the rest of this arc: its primary content is real authored
+technical writing (the GitHub Wiki), not code, plus a bundle of debugger
+panels deferred out of earlier releases as lower-priority riders.
+
+### Added
+
+- **GitHub Wiki** — 18 real, cross-referenced technical pages plus
+  `_Footer`/`_Sidebar` nav helpers, published at
+  `https://github.com/doublegate/Rusty2600/wiki`, adapting the sibling
+  RustyNES project's own 21-page wiki structure to Rusty2600's genuinely
+  different architecture. Notably: a single combined `TIA` page (video AND
+  audio, since the TIA chip owns both, unlike NES's separate PPU/APU-Mixer),
+  a new `RIOT` page with no NES analog (the 2600's only RAM plus I/O ports
+  and interval timer), and `Cart-Catalogue` framed as a closed, complete
+  26/26-scheme list rather than NES's open-ended mapper numbering. Every
+  technical claim is grounded in this repo's own `docs/`, `docs/adr/`, and
+  source — cross-checked against `docs/STATUS.md` as the authoritative
+  source where other docs had drifted stale.
+- **Trace logger debugger panel** — a capped instruction-execution ring
+  buffer (PC, registers, disassembled text) with export, capturing only
+  from the `DebugStep` single-step path (never `DebugContinue`'s tight
+  loop, where the cost would multiply badly) and only while the panel's
+  own "Record" checkbox is on — off by default, and independent of which
+  debugger panel is currently selected, so a recording session survives
+  switching to another panel to watch registers mid-capture.
+- **Inline 6507 assembler debugger panel** — assembles typed 6502/6507
+  assembly to bytes and queues them as writes through the same
+  `system.bus.cpu_write` path the Lua scripting `emu.poke` binding already
+  uses. Its opcode encoding table is derived at runtime from the CPU
+  panel's own canonical disassembly table, so the two can never drift
+  apart.
+- **Cart-info debugger panel** — displays the loaded cartridge's
+  bankswitch-scheme name, `Tier` (ADR 0003), and ROM size. Deliberately
+  not an iNES-style header editor — 2600 cartridges have no header format
+  to parse.
+- **Perf-monitor debugger panel** — a rolling frame-interval history with
+  a manual sparkline, fed by the existing FPS-smoothing measurement
+  already computed every frame.
+
+All four debugger panels are wired into the existing `DebugPanel`
+selector/dispatch pattern, feature-gated behind `debug-hooks`. Each is
+off-by-default and only samples when explicitly engaged (the trace
+logger's own "Record" checkbox; the perf monitor's panel-visibility
+check) — the byte-identical-core-when-off invariant this project has
+held since `v1.1.0` is unaffected; no panel touches the deterministic
+simulation path.
+
+### Verification
+
+387 tests passing on default features (391 with `--features test-roms`),
+up from 374/378 in `[2.11.0]` (the assembler's 7 unit tests plus minor
+disassembler-visibility changes). `cargo clippy --target
+wasm32-unknown-unknown --features wasm-winit,debug-hooks` and `cargo check
+--target wasm32-unknown-unknown --features wasm-canvas` both re-verified
+clean, independently of `ci-gate.sh` (which does not cover the wasm32
+target).
+
 ## [2.11.0] - 2026-07-03 - "Field Trip"
 
 Eighth release of the RustyNES gap-closure arc, shipped through PR #21.
