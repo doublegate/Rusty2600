@@ -19,15 +19,18 @@ actually is. Every claim is grounded in this repo's own docs/ADRs/source,
 cross-checked against this file as the authoritative source where other
 docs had drifted stale. Also bundled four debugger-panel riders deferred
 out of earlier releases as lower priority: a trace logger (capped
-instruction ring buffer, gated to the single-step path only), an inline
-6507 assembler (encoding table derived at runtime from the CPU panel's
-own canonical disassembly table, so the two can never drift apart;
-writes queue through the same `system.bus.cpu_write` path Lua's
-`emu.poke` already uses), a cart-info panel (scheme/tier/size — no
-iNES-style header parsing, since 2600 carts have no header), and a
-perf-monitor panel (rolling frame-interval history + sparkline). All
-four feature- and visibility-gated so the byte-identical-core-when-off
-invariant holds. 387 tests passing on default features (391 with
+instruction ring buffer, captured only from the single-step path, never
+`DebugContinue`'s tight loop, and only while its own "Record" checkbox is
+on — independent of which panel is currently selected), an inline 6507
+assembler (encoding table derived at runtime from the CPU panel's own
+canonical disassembly table, so the two can never drift apart; writes
+queue through the same `system.bus.cpu_write` path Lua's `emu.poke`
+already uses), a cart-info panel (scheme/tier/size — no iNES-style header
+parsing, since 2600 carts have no header), and a perf-monitor panel
+(rolling frame-interval history + sparkline, gated on that panel being
+the one currently selected and visible). All four feature-gated and
+off-by-default so the byte-identical-core-when-off invariant holds.
+387 tests passing on default features (391 with
 `--features test-roms`), up from 374/378 in `[2.11.0]`.
 
 **Previous release:** v2.11.0 "Field Trip" — wired `rusty2600-mobile`'s

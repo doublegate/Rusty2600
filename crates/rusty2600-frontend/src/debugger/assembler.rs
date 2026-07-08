@@ -216,6 +216,12 @@ pub fn assemble_line(line: &str, pc: u16) -> Result<Vec<u8>, String> {
             bytes.push((disp as i8).cast_unsigned());
         }
         m if m.operand_len() == 1 => {
+            if parsed.value > 0xFF {
+                return Err(format!(
+                    "operand ${:04X} out of range for a single-byte addressing mode",
+                    parsed.value
+                ));
+            }
             #[allow(clippy::cast_possible_truncation)]
             bytes.push(parsed.value as u8);
         }
@@ -303,9 +309,8 @@ pub fn render_assembler_panel(
     let mut result = None;
     ui.horizontal(|ui| {
         if ui.button("Assemble & Write").clicked() {
-            let addr_text = state.target_input.trim_start_matches('$');
-            match u16::from_str_radix(addr_text, 16) {
-                Ok(target) => match assemble_program(&state.source, target) {
+            match parse_num(&state.target_input) {
+                Some(target) => match assemble_program(&state.source, target) {
                     Ok(writes) => {
                         state.status =
                             Some(format!("wrote {} byte(s) at ${target:04X}", writes.len()));
@@ -313,7 +318,7 @@ pub fn render_assembler_panel(
                     }
                     Err(e) => state.status = Some(format!("assemble failed: {e}")),
                 },
-                Err(_) => state.status = Some("bad target address".to_string()),
+                None => state.status = Some("bad target address".to_string()),
             }
         }
         if ui.button("Clear").clicked() {
@@ -372,6 +377,26 @@ mod tests {
     fn rejects_garbage() {
         assert!(assemble_line("FOO #$01", 0).is_err());
         assert!(assemble_line("", 0).is_err());
+    }
+
+    #[test]
+    fn rejects_out_of_range_single_byte_operands() {
+        // A 16-bit value handed to a single-byte addressing mode must error,
+        // never silently truncate (e.g. `LDA #$100` must NOT assemble as
+        // the very different `LDA #$00`).
+        assert!(assemble_line("LDA #$100", 0).is_err());
+        assert!(assemble_line("LDA ($1234,X)", 0).is_err());
+        // The in-range boundary still assembles normally.
+        assert_eq!(assemble_line("LDA #$FF", 0).unwrap(), vec![0xA9, 0xFF]);
+    }
+
+    #[test]
+    fn parse_num_accepts_dollar_0x_and_decimal() {
+        assert_eq!(parse_num("$1000"), Some(0x1000));
+        assert_eq!(parse_num("0x1000"), Some(0x1000));
+        assert_eq!(parse_num("0X1000"), Some(0x1000));
+        assert_eq!(parse_num("4096"), Some(4096));
+        assert_eq!(parse_num("not a number"), None);
     }
 
     #[test]

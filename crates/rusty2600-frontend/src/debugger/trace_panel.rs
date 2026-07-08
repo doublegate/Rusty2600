@@ -122,15 +122,8 @@ pub fn render_trace_panel(ui: &mut egui::Ui, state: &mut TraceState) {
             if state.ring.is_empty() {
                 ui.weak("(no records — enable Record and Step/Continue)");
             }
-            for r in state
-                .ring
-                .iter()
-                .rev()
-                .take(TAIL_ROWS)
-                .collect::<Vec<_>>()
-                .iter()
-                .rev()
-            {
+            let skip = state.ring.len().saturating_sub(TAIL_ROWS);
+            for r in state.ring.iter().skip(skip) {
                 ui.monospace(fmt_rec(r));
             }
         });

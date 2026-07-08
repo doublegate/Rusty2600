@@ -28,9 +28,12 @@ panels deferred out of earlier releases as lower-priority riders.
   source — cross-checked against `docs/STATUS.md` as the authoritative
   source where other docs had drifted stale.
 - **Trace logger debugger panel** — a capped instruction-execution ring
-  buffer (PC, registers, disassembled text) with export, gated to the
-  `DebugStep` single-step path (never `DebugContinue`'s tight loop) so it
-  costs nothing when unopened or during a run.
+  buffer (PC, registers, disassembled text) with export, capturing only
+  from the `DebugStep` single-step path (never `DebugContinue`'s tight
+  loop, where the cost would multiply badly) and only while the panel's
+  own "Record" checkbox is on — off by default, and independent of which
+  debugger panel is currently selected, so a recording session survives
+  switching to another panel to watch registers mid-capture.
 - **Inline 6507 assembler debugger panel** — assembles typed 6502/6507
   assembly to bytes and queues them as writes through the same
   `system.bus.cpu_write` path the Lua scripting `emu.poke` binding already
@@ -46,9 +49,10 @@ panels deferred out of earlier releases as lower-priority riders.
   already computed every frame.
 
 All four debugger panels are wired into the existing `DebugPanel`
-selector/dispatch pattern, feature-gated behind `debug-hooks`, and
-sampling-gated behind "this panel is the one currently selected and
-visible" — the byte-identical-core-when-off invariant this project has
+selector/dispatch pattern, feature-gated behind `debug-hooks`. Each is
+off-by-default and only samples when explicitly engaged (the trace
+logger's own "Record" checkbox; the perf monitor's panel-visibility
+check) — the byte-identical-core-when-off invariant this project has
 held since `v1.1.0` is unaffected; no panel touches the deterministic
 simulation path.
 
