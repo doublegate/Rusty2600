@@ -2,8 +2,9 @@
 //! that is what the one-directional crate graph buys us).
 #![allow(missing_docs)] // criterion_group!/main! expand into undocumented fns.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rusty2600_riot::Riot;
+use std::hint::black_box;
 
 /// One CPU cycle's worth of RIOT work (the interval timer's prescale
 /// countdown, called once per CPU cycle from the scheduler).

@@ -2,8 +2,9 @@
 //! that is what the one-directional crate graph buys us).
 #![allow(missing_docs)] // criterion_group!/main! expand into undocumented fns.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rusty2600_tia::Tia;
+use std::hint::black_box;
 
 /// One color clock, the TIA's own per-tick unit of work (beam-raced video +
 /// audio poly-counter advance).
