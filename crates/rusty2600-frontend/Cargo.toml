@@ -145,7 +145,7 @@ toml = "1.1"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
 # Already transitive deps of wgpu; direct here is free.
-pollster = "0.4"
+pollster = "1.0"
 bytemuck = "1"
 web-time = "1.1"
 
