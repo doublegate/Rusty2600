@@ -1723,6 +1723,19 @@ fn draw_script_overlay(
             color32_from_packed(p.color),
         );
     }
+    for l in &overlay.lines {
+        // `[2.13.0]` — the fourth HUD primitive. Stroke width scales with
+        // the same screen/framebuffer ratio as the rect/pixel primitives
+        // above (never thinner than 1 device pixel), so a line stays
+        // visible at any window size instead of vanishing at high scale.
+        let p1 = egui::pos2(l.x1 as f32 * scale_x, l.y1 as f32 * scale_y);
+        let p2 = egui::pos2(l.x2 as f32 * scale_x, l.y2 as f32 * scale_y);
+        let width = scale_x.min(scale_y).max(1.0);
+        painter.line_segment(
+            [p1, p2],
+            egui::Stroke::new(width, color32_from_packed(l.color)),
+        );
+    }
     for t in &overlay.texts {
         let pos = egui::pos2(t.x as f32 * scale_x, t.y as f32 * scale_y);
         // `emu.drawText(x, y, text)` has no color parameter (see
@@ -1809,6 +1822,13 @@ mod tests {
                     y: 1,
                     color: 0xFF_00_00,
                 }],
+                lines: vec![rusty2600_script::LinePrimitive {
+                    x1: 0,
+                    y1: 0,
+                    x2: 10,
+                    y2: 10,
+                    color: 0x00_00_FF,
+                }],
             };
 
             let ctx = egui::Context::default();
@@ -1818,9 +1838,10 @@ mod tests {
 
             // One rect shape for the `RectPrimitive`, one for the `PixelPrimitive`
             // (drawn as a scaled filled rect, see `draw_script_overlay`'s doc), and
-            // at least one text-bearing shape for the `TextPrimitive` — confirms all
-            // three primitive kinds actually produced paintable output, not just that
-            // the function ran without panicking.
+            // at least one text-bearing shape for the `TextPrimitive`, plus one
+            // line-segment shape for the `LinePrimitive` (`[2.13.0]`) — confirms
+            // all four primitive kinds actually produced paintable output, not
+            // just that the function ran without panicking.
             let rect_count = full_output
                 .shapes
                 .iter()
@@ -1830,6 +1851,13 @@ mod tests {
                 rect_count, 2,
                 "expected one rect shape + one pixel-as-rect shape"
             );
+
+            let line_count = full_output
+                .shapes
+                .iter()
+                .filter(|cs| matches!(cs.shape, egui::Shape::LineSegment { .. }))
+                .count();
+            assert_eq!(line_count, 1, "expected one line-segment shape");
 
             let has_text = full_output
                 .shapes

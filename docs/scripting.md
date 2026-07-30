@@ -113,9 +113,10 @@ controls or can schedule against.
   feature. The right time to add them is the same change that gives those
   subsystems a real lock to fold in.
 - **`overlay.rs`** — `Overlay`/`TextPrimitive`/`RectPrimitive`/
-  `PixelPrimitive`: accumulates `emu.drawText`/`drawRect`/`drawPixel`
-  calls into a per-frame buffer a host can consume. `[2.3.0]` wires this
-  into the frontend's render pipeline — see "Overlay compositing" below.
+  `PixelPrimitive`/`LinePrimitive`: accumulates `emu.drawText`/`drawRect`/
+  `drawPixel`/`drawLine` calls into a per-frame buffer a host can consume.
+  `[2.3.0]` wires this into the frontend's render pipeline; `[2.13.0]` adds
+  `drawLine` as the fourth primitive — see "Overlay compositing" below.
 - **`engine.rs`** — `ScriptEngine<B: ScriptBus>`: owns the Lua VM and
   installs the full `emu` table via `Rc<RefCell<_>>`-shared closures over
   the host's `ScriptBus` implementation.
@@ -130,7 +131,7 @@ controls or can schedule against.
 | `emu.onFrame(fn)` | No | registers a callback the host invokes once per frame |
 | `emu.setJoystick(port, direction, pressed)` | Yes | `ScriptBus::set_joystick` |
 | `emu.setConsoleSwitch(name, value)` | Yes | `ScriptBus::set_console_switch` (unrecognized `name` → Lua error, not a silent no-op) |
-| `emu.drawText(x, y, text)` / `drawRect(x, y, w, h, color)` / `drawPixel(x, y, color)` | No | `Overlay` primitives |
+| `emu.drawText(x, y, text)` / `drawRect(x, y, w, h, color)` / `drawPixel(x, y, color)` / `drawLine(x1, y1, x2, y2, color)` | No | `Overlay` primitives |
 | `emu.pause()` | No | `ScriptBus::pause` |
 | `emu.saveState()` / `emu.loadState(bytes)` | No | `ScriptBus::save_state`/`load_state`, wrapping the existing `[1.1.0]` `SaveState` |
 

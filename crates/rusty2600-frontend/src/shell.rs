@@ -302,6 +302,10 @@ pub struct ShellState {
     pub status: String,
     /// Whether emulation is paused (mirrored from the app for the menu checkmark).
     pub paused: bool,
+    /// Whether the always-on `Tools -> ROM Info` window is open (`[2.13.0]`
+    /// — unlike the cart-info debugger panel, NOT gated behind
+    /// `debug-hooks`, so a non-debugging player can see it too).
+    pub rom_info_open: bool,
     /// Which debugger panels are open (per-chip toggles).
     pub panels: PanelVisibility,
     /// Breakpoints, the memory-viewer cursor, and other persistent debugger
@@ -596,6 +600,17 @@ impl ShellState {
 
                 ui.menu_button("Tools", |ui| {
                     // TODO(impl-phase): TIA audio scope, cheat editor, ROM-DB editor, TAStudio.
+                    // `[2.13.0]` — the always-on, read-only ROM Info window (NOT gated behind
+                    // `debug-hooks`, unlike the debugger's own cart-info panel): needs a loaded
+                    // ROM to describe, same "needs a loaded ROM" convention every other
+                    // ROM-dependent Tools entry in this menu already follows.
+                    if ui
+                        .add_enabled(info.rom_loaded, egui::Button::new("ROM Info..."))
+                        .clicked()
+                    {
+                        self.rom_info_open = true;
+                        ui.close();
+                    }
                     #[cfg(feature = "scripting")]
                     {
                         if info.script_loaded {
@@ -637,12 +652,9 @@ impl ShellState {
                             ui.close();
                         }
                     }
-                    #[cfg(not(any(
-                        feature = "scripting",
-                        feature = "netplay",
-                        feature = "av-record"
-                    )))]
-                    ui.label("(tools — TODO)");
+                    // No `(tools — TODO)` fallback needed any more: "ROM Info..."
+                    // above is unconditional, so this menu is never empty
+                    // regardless of which optional features are compiled in.
                 });
 
                 ui.menu_button("View", |ui| {
@@ -717,8 +729,64 @@ impl ShellState {
         if self.touch_overlay_visible {
             self.render_touch_overlay(&ctx, &mut actions);
         }
+        if self.rom_info_open {
+            self.render_rom_info(&ctx, info);
+        }
 
         actions
+    }
+
+    /// The always-on, read-only `Tools -> ROM Info` window (`[2.13.0]`).
+    ///
+    /// Unlike `crate::debugger::cart_info_panel` (gated behind
+    /// `debug-hooks`, buried inside the debugger's panel selector), this
+    /// surfaces the same already-computed [`ShellInfo`] fields
+    /// (`scheme_name`/`board_tier`/`rom_size`/`region`) to a non-debugging
+    /// player from an always-available Tools menu entry, with no
+    /// `debug-hooks` dependency — a purely observational window that never
+    /// touches the emu lock beyond what [`ShellInfo`] already carries.
+    fn render_rom_info(&mut self, ctx: &egui::Context, info: &ShellInfo) {
+        let mut open = self.rom_info_open;
+        egui::Window::new("ROM Info")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                if !info.rom_loaded {
+                    ui.label("(no ROM loaded)");
+                    return;
+                }
+                egui::Grid::new("rom_info_grid")
+                    .num_columns(2)
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.label("Scheme:");
+                        ui.monospace(info.scheme_name.as_deref().unwrap_or("(unknown)"));
+                        ui.end_row();
+
+                        ui.label("Accuracy tier:");
+                        ui.monospace(info.board_tier.as_deref().unwrap_or("(unknown)"));
+                        ui.end_row();
+
+                        ui.label("ROM size:");
+                        #[allow(clippy::cast_precision_loss)]
+                        ui.monospace(info.rom_size.map_or_else(
+                            || "(unknown)".to_string(),
+                            |n| format!("{n} bytes ({:.1} KiB)", n as f64 / 1024.0),
+                        ));
+                        ui.end_row();
+
+                        ui.label("Region:");
+                        ui.monospace(info.region.label());
+                        ui.end_row();
+                    });
+                ui.separator();
+                ui.weak(
+                    "Read-only. The Atari 2600 cartridge format has no header \
+                     (unlike NES .nes images) — this shows bankswitch-catalogue \
+                     metadata only.",
+                );
+            });
+        self.rom_info_open = open;
     }
 
     /// The Host/Join Netplay dialog (`Tools -> Netplay...`).
