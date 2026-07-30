@@ -6,6 +6,103 @@ All notable changes to Rusty2600 are documented here. The format is based on
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-07-30 - "On Air"
+
+A follow-up release inserted before `v3.0.0`, per a fresh RustyNES-vs-
+Rusty2600 frontend-GUI gap analysis: RustyNES has shipped ~15 releases
+since the original `v2.4.0` gap-closure arc's own analysis, and picked up
+real, portable frontend capability Rusty2600 hadn't closed yet. Scoped to
+4 concrete, small-to-medium, non-accuracy-critical items; one gap found
+(a live palette-generation preview swatch) was dropped as having no real
+2600 analog (the TIA's 128-color palette is a fixed, hardware-measured
+table, not parametrically generated), and one (netplay lobby/matchmaking)
+was explicitly deferred since it bundles server-side signaling
+infrastructure this project doesn't run.
+
+### Added
+
+- **3 named CRT shader presets** — CRT-Royale (soft wide electron-beam
+  look: aperture-grille phosphor mask, smooth row-darkening falloff,
+  gentle barrel curvature, gamma-aware blend), CRT Guest Advanced
+  (crisper power-shaped beam profile, a slot-mask phosphor, a 5-tap
+  halation glow), and Sony Megatron (per-subpixel phosphor emphasis
+  pushed into a headroom budget, tone-mapped back with a Reinhard curve
+  for this crate's SDR `wgpu` swapchain). Each is an independent
+  re-derivation of its named public technique's characteristic look —
+  not a port of RustyNES's own separately-authored WGSL — and ships with
+  sensible fixed-default parameters, matching every existing pass but
+  `NtscComposite`'s "no per-pass uniform buffer" convention; live
+  Settings-slider tuning is documented as an explicit, deferred follow-up.
+  Wired into the `ShaderStack`, the Settings checkbox list, and the
+  RetroArch `.slangp`/`.cgp` preset importer's stem-mapping table.
+- **A/V recording** (`av-record` feature, off by default, native-only) —
+  a read-only frontend tap that never advances the emulator or alters
+  per-frame production, so the determinism contract is unaffected.
+  Adapted from RustyNES's own ffmpeg-mux-at-stop design: raw video
+  frames and mono `f32le` audio append to two temp files during
+  recording (no child process alive, so no pipe-deadlock/read-before-
+  write race), then at stop both are flushed and `ffmpeg` is spawned
+  ONCE to mux an `.mp4`/`.mkv`, with `ffmpeg` availability probed at
+  start so arming fails fast and gracefully when absent. Zero new Rust
+  dependencies. `v1` scope: MP4/MKV only, one fixed quality preset (H.264
+  CRF 18 veryfast, AAC 192k) — no GIF/WAV export or an in-Settings codec
+  picker yet, an explicit documented follow-up. Added to the `full`
+  feature's aggregated list.
+- **Always-on "Tools -> ROM Info" panel** — a standalone, always-visible
+  window (unlike `[2.12.0]`'s cart-info debugger panel, this is NOT
+  gated behind `debug-hooks`) showing the loaded cartridge's bankswitch
+  scheme, `Tier` (ADR 0003), ROM size, and region, reusing the same
+  `EmuCore`/`Cartridge` accessors the debugger panel already built.
+- **Lua `emu.drawLine(x1, y1, x2, y2, color)`** — the fourth HUD
+  primitive alongside `drawText`/`drawRect`/`drawPixel`, matching the
+  sibling RustyNES project's own `drawLine` at parity. Determinism-
+  neutral like the other three: only accumulates into the `Overlay`,
+  never touches `System`/`Bus` state.
+- **`cargo full-build` / `cargo full-run`** cargo aliases (added ahead of
+  this release's own item work, same session) — adapted from RustyNES's
+  own `.cargo/config.toml`, one command builds/runs the most
+  fully-featured native binary via a new `full` feature aggregating
+  `retroachievements` + `scripting` + `hd-pack` + `netplay` + `av-record`
+  additively on top of the always-on default set.
+
+### Fixed
+
+- `rusty2600-script/src/overlay.rs`'s module doc comment still claimed
+  "compositing is not wired in this release" — true when originally
+  written, false since `[2.3.0]` wired `app.rs::draw_script_overlay`.
+  Corrected in the same change that added `drawLine`, per this project's
+  docs-as-spec discipline.
+
+### Security
+
+`cargo update -p crossbeam-epoch --precise 0.9.20` (landed as a small
+direct-to-main fix ahead of this release, same session) resolved
+RUSTSEC-2026-0204. `quick-xml`'s two high-severity DoS advisories
+(RUSTSEC-2026-0194/0195) remain blocked, unchanged from `[2.12.0]`,
+still tracked for `v3.0.0`'s `rc.1` dependency-audit pass.
+
+### Verification
+
+393 tests passing on default features (397 with `--features test-roms`),
+up from 389/393 in `[2.12.0]`. Full `ci-gate.sh` pass, plus independent
+re-verification beyond it: `cargo full-build` compiles a complete
+release binary with every native feature active simultaneously;
+`--features av-record,scripting` clippy-clean; `wasm32-unknown-unknown`
+clippy/check clean for both `wasm-winit,debug-hooks` and `wasm-canvas`
+(unaffected, since every new item here is native-only except the CRT
+presets, which are pure output-stage WGSL); the A/V recorder's real
+`ffmpeg` mux path was smoke-tested end-to-end (armed a recording, pushed
+real frames + audio, stopped, confirmed a genuine non-empty `.mp4` that
+`ffmpeg` itself could re-read as a valid container) rather than trusted
+from "it compiles." All 3 items were built by independent forks and
+independently re-verified (diffs read in full, gates re-run from a
+clean state) before merging, per this project's standing practice of
+never trusting a fork's self-report — one fork's first self-report
+claimed a live-tunable multi-uniform CRT implementation that the actual
+code did not match (it shipped fixed-default parameters); the
+discrepancy was caught by reading the diff directly, not by trusting
+the report.
+
 ## [2.12.0] - 2026-07-08 - "Open Book"
 
 Ninth release of the RustyNES gap-closure arc. A genuinely different kind
