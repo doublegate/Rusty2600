@@ -361,25 +361,34 @@ impl AvRecorder {
         }
 
         let args = ffmpeg_args(&self.params, &self.video_path, &self.audio_path);
+        // Capture stderr (rather than silencing it) so a failure's `AvError::Encode`
+        // carries ffmpeg's own diagnostic -- e.g. a missing codec or a bad
+        // parameter -- instead of just an exit code. stdout stays discarded;
+        // ffmpeg's progress output goes to stderr, not stdout.
         let result = Command::new("ffmpeg")
             .args(&args)
             .stdin(Stdio::null())
-            // ffmpeg is chatty on stderr; silence it (errors surface via the
-            // exit status).
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+            .stderr(Stdio::piped())
+            .output();
 
         // Best-effort temp cleanup regardless of the encode outcome.
         let _ = std::fs::remove_file(&self.video_path);
         let _ = std::fs::remove_file(&self.audio_path);
 
         match result {
-            Ok(status) if status.success() => Ok(self.params.out_path.clone()),
-            Ok(status) => Err(AvError::Encode(format!(
-                "ffmpeg exited with {status} ({} frames, {} samples)",
-                self.frames, self.samples
-            ))),
+            Ok(out) if out.status.success() => Ok(self.params.out_path.clone()),
+            Ok(out) => {
+                let stderr_tail = String::from_utf8_lossy(&out.stderr);
+                let stderr_tail = stderr_tail.lines().rev().take(3).collect::<Vec<_>>();
+                Err(AvError::Encode(format!(
+                    "ffmpeg exited with {} ({} frames, {} samples): {}",
+                    out.status,
+                    self.frames,
+                    self.samples,
+                    stderr_tail.join(" | ")
+                )))
+            }
             Err(e) => Err(AvError::Encode(format!("ffmpeg spawn failed: {e}"))),
         }
     }
