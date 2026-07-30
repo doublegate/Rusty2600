@@ -1,15 +1,14 @@
 //! [`Overlay`] — the accumulated draw primitives from `emu.drawText`/
-//! `drawRect`/`drawPixel`, for a host to composite over the emulated frame.
+//! `drawRect`/`drawPixel`/`drawLine`, for a host to composite over the
+//! emulated frame.
 //!
-//! **Compositing is not wired in this release.** `ScriptEngine` accumulates
-//! primitives into an `Overlay` and hands it to the host via
-//! [`crate::ScriptEngine::take_overlay`] every frame, but no
-//! `rusty2600-frontend` render-path code consumes it yet — the actual wgpu
-//! blend-over-the-emulated-frame step is a real, separate integration task
-//! (touching `gfx.rs`/`shader_pass.rs`), deliberately left for a follow-up
-//! rather than rushed here, the same honest-partial-landing call this
-//! project already made for `[1.4.0]`'s sprite-pack render splice and
-//! `[1.7.0]`'s live movie-recording wiring.
+//! **Compositing is wired** (`[2.3.0]`, extended `[2.13.0]` with
+//! `drawLine`). `ScriptEngine` accumulates primitives into an `Overlay` and
+//! hands it to the host via [`crate::ScriptEngine::take_overlay`] every
+//! frame; `rusty2600-frontend`'s `app.rs::draw_script_overlay` composites
+//! every primitive over the displayed framebuffer via an egui foreground
+//! layer painter (a scripting-feature-gated overlay pass, piggybacked on
+//! the frontend's existing egui pass rather than a new wgpu blend step).
 
 /// One `emu.drawText(x, y, text)` call.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +47,23 @@ pub struct PixelPrimitive {
     pub color: u32,
 }
 
+/// One `emu.drawLine(x1, y1, x2, y2, color)` call. `color` is packed
+/// `0xRRGGBB`. `[2.13.0]` — the fourth HUD primitive, matching the sibling
+/// `RustyNES` project's own `emu.drawLine` at parity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinePrimitive {
+    /// X position of the line's start point.
+    pub x1: i32,
+    /// Y position of the line's start point.
+    pub y1: i32,
+    /// X position of the line's end point.
+    pub x2: i32,
+    /// Y position of the line's end point.
+    pub y2: i32,
+    /// Packed `0xRRGGBB` color.
+    pub color: u32,
+}
+
 /// The primitives a script drew during the current frame, in call order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Overlay {
@@ -57,6 +73,8 @@ pub struct Overlay {
     pub rects: Vec<RectPrimitive>,
     /// Every `emu.drawPixel` call this frame, in order.
     pub pixels: Vec<PixelPrimitive>,
+    /// Every `emu.drawLine` call this frame, in order (`[2.13.0]`).
+    pub lines: Vec<LinePrimitive>,
 }
 
 impl Overlay {
@@ -66,12 +84,16 @@ impl Overlay {
         self.texts.clear();
         self.rects.clear();
         self.pixels.clear();
+        self.lines.clear();
     }
 
     /// Whether no primitives were drawn this frame.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.texts.is_empty() && self.rects.is_empty() && self.pixels.is_empty()
+        self.texts.is_empty()
+            && self.rects.is_empty()
+            && self.pixels.is_empty()
+            && self.lines.is_empty()
     }
 }
 
@@ -85,7 +107,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_empties_all_three_lists() {
+    fn clear_empties_all_four_lists() {
         let mut overlay = Overlay {
             texts: vec![TextPrimitive {
                 x: 0,
@@ -102,6 +124,13 @@ mod tests {
             pixels: vec![PixelPrimitive {
                 x: 0,
                 y: 0,
+                color: 0,
+            }],
+            lines: vec![LinePrimitive {
+                x1: 0,
+                y1: 0,
+                x2: 1,
+                y2: 1,
                 color: 0,
             }],
         };

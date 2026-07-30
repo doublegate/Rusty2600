@@ -9,7 +9,7 @@ use mlua::Lua;
 use crate::bus::{JoyDirection, ScriptBus};
 use crate::lock::WritesLocked;
 use crate::log::{LogLine, ScriptLog};
-use crate::overlay::{Overlay, PixelPrimitive, RectPrimitive, TextPrimitive};
+use crate::overlay::{LinePrimitive, Overlay, PixelPrimitive, RectPrimitive, TextPrimitive};
 
 /// A loaded Lua script bound to a [`ScriptBus`] host.
 ///
@@ -190,6 +190,24 @@ impl<B: ScriptBus + 'static> ScriptEngine<B> {
                         .push(PixelPrimitive { x, y, color });
                     Ok(())
                 })?,
+            )?;
+        }
+        {
+            let overlay = Rc::clone(overlay);
+            emu.set(
+                "drawLine",
+                lua.create_function_mut(
+                    move |_, (x1, y1, x2, y2, color): (i32, i32, i32, i32, u32)| {
+                        overlay.borrow_mut().lines.push(LinePrimitive {
+                            x1,
+                            y1,
+                            x2,
+                            y2,
+                            color,
+                        });
+                        Ok(())
+                    },
+                )?,
             )
         }
     }
@@ -608,6 +626,7 @@ mod tests {
                 emu.drawText(1, 2, "hi")
                 emu.drawRect(0, 0, 10, 10, 0xFF0000)
                 emu.drawPixel(5, 5, 0x00FF00)
+                emu.drawLine(1, 2, 30, 40, 0x0000FF)
                 "#,
             )
             .unwrap();
@@ -615,8 +634,19 @@ mod tests {
         assert_eq!(overlay.texts.len(), 1);
         assert_eq!(overlay.rects.len(), 1);
         assert_eq!(overlay.pixels.len(), 1);
+        assert_eq!(overlay.lines.len(), 1);
         assert_eq!(overlay.texts[0].text, "hi");
         assert_eq!(overlay.rects[0].color, 0x00FF_0000);
+        assert_eq!(
+            (
+                overlay.lines[0].x1,
+                overlay.lines[0].y1,
+                overlay.lines[0].x2,
+                overlay.lines[0].y2,
+                overlay.lines[0].color
+            ),
+            (1, 2, 30, 40, 0x0000_00FF)
+        );
 
         // Taking the overlay clears it for the next frame.
         let overlay2 = engine.take_overlay();
