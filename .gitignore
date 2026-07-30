@@ -50,3 +50,6 @@ Cargo.lock.bak
 /tests/roms/test_suite/Pac-Man 4K (NTSC).a26
 /tests/roms/test_suite/Crazy Balloon (NTSC).a26
 /tests/roms/test_suite/Lady Bug (NTSC).a26
+
+# Antigravity PR reviewer: large-diff on-disk handoff (transient, removed by the script).
+/.agy-review-work/
