@@ -5,42 +5,45 @@ version policy. Everything else defers to it. References:
 `ref-docs/research-report.md` §11; `docs/testing-strategy.md`; `docs/cart.md`;
 `docs/adr/0003`.
 
-**Current release:** v2.12.0 "Open Book" — the ninth release of the
-RustyNES gap-closure arc (`v2.4.0 -> v3.0.0`, see `to-dos/ROADMAP.md`).
-A genuinely different kind of release: its primary content is real
-authored technical writing, not code. Populated the GitHub Wiki
-(`https://github.com/doublegate/Rusty2600/wiki`) with 18 cross-referenced
-pages plus nav helpers, adapting the sibling RustyNES project's own
-21-page wiki structure to Rusty2600's different architecture — a
-combined `TIA` page (video AND audio, since the TIA chip owns both,
-unlike NES's separate PPU/APU-Mixer), a `RIOT` page with no NES analog,
-and `Cart-Catalogue` framed as the closed, complete 26/26-scheme list it
-actually is. Every claim is grounded in this repo's own docs/ADRs/source,
-cross-checked against this file as the authoritative source where other
-docs had drifted stale. Also bundled four debugger-panel riders deferred
-out of earlier releases as lower priority: a trace logger (capped
-instruction ring buffer, captured only from the single-step path, never
-`DebugContinue`'s tight loop, and only while its own "Record" checkbox is
-on — independent of which panel is currently selected), an inline 6507
-assembler (encoding table derived at runtime from the CPU panel's own
-canonical disassembly table, so the two can never drift apart; writes
-queue through the same `system.bus.cpu_write` path Lua's `emu.poke`
-already uses), a cart-info panel (scheme/tier/size — no iNES-style header
-parsing, since 2600 carts have no header), and a perf-monitor panel
-(rolling frame-interval history + sparkline, gated on that panel being
-the one currently selected and visible). All four feature-gated and
-off-by-default so the byte-identical-core-when-off invariant holds.
-389 tests passing on default features (393 with
-`--features test-roms`), up from 374/378 in `[2.11.0]`.
+**Current release:** v2.13.0 "On Air" — inserted before `v3.0.0` per a
+FRESH RustyNES-vs-Rusty2600 frontend-GUI gap analysis (RustyNES has
+shipped ~15 releases since the original `v2.4.0` arc's own analysis).
+Not part of the original nine-release numbering (`v2.4.0`-`v2.12.0`);
+`v3.0.0` "Convergence" (see `to-dos/ROADMAP.md`) remains the arc's
+culmination, now starting from `v2.13.0` instead of `v2.12.0`. Scoped to
+4 concrete items: 3 named CRT shader presets (CRT-Royale, CRT Guest
+Advanced, Sony Megatron — independent re-derivations of each technique's
+characteristic look, fixed-default parameters, live slider tuning
+explicitly deferred), A/V recording (`av-record` feature, ffmpeg-mux-
+at-stop, zero new Rust deps, real-`ffmpeg`-smoke-tested end-to-end), an
+always-on Tools -> ROM Info panel (unlike `[2.12.0]`'s debugger-only
+cart-info panel), and Lua `emu.drawLine` (the fourth HUD primitive, at
+parity with RustyNES). One gap found (a live palette-generation preview
+swatch) was dropped as having no real 2600 analog — the TIA's palette is
+a fixed, hardware-measured table, not parametrically generated — and one
+(netplay lobby/matchmaking) was explicitly deferred since it bundles
+server-side signaling infrastructure this project doesn't run. Also
+landed same-session, ahead of this release's own items: `cargo
+full-build`/`full-run` aliases (a `full` feature aggregating every native
+capability), and a `crossbeam-epoch` RUSTSEC-2026-0204 fix. 393 tests
+passing on default features (397 with `--features test-roms`), up from
+389/393 in `[2.12.0]`.
 
-**Previous release:** v2.11.0 "Field Trip" — wired `rusty2600-mobile`'s
+**Previous release:** v2.12.0 "Open Book" — the ninth release of the
+RustyNES gap-closure arc. Populated the GitHub Wiki with 18
+cross-referenced pages plus nav helpers, adapting the sibling RustyNES
+project's own 21-page wiki structure to Rusty2600's different
+architecture, and bundled four debugger-panel riders (trace logger,
+inline 6507 assembler, cart-info panel, perf-monitor panel). Shipped
+through PR #27. See `[2.12.0]` in `CHANGELOG.md` for full detail.
+
+**Historical**: v2.11.0 "Field Trip" (PR #21) wired `rusty2600-mobile`'s
 already-real `save_state()`/`load_state()` UniFFI methods into real
 Android and iOS save-state slot UIs, researched cloud save-state sync
 (deferred, concrete reference implementations documented), and checked
-physical Android hardware availability (emulator-only). Shipped through
-PR #21. See `[2.11.0]` in `CHANGELOG.md` for full detail.
+physical Android hardware availability (emulator-only).
 
-**Historical**: v2.10.0 "Prism" (PR #20) grew `rusty2600-gfx-shaders`
+v2.10.0 "Prism" (PR #20) grew `rusty2600-gfx-shaders`
 with a genuine NTSC composite YIQ decode, hqNx/xBRZ upscaling, a
 generalized arbitrary-length shader stack, and a constrained RetroArch
 preset importer. v2.9.0 "Full Circle" (PR #19) closed the remaining

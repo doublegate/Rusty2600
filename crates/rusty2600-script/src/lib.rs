@@ -94,4 +94,4 @@ pub use bus::{CpuSnapshot, JoyDirection, ScriptBus};
 pub use engine::ScriptEngine;
 pub use lock::WritesLocked;
 pub use log::{LogLine, ScriptLog};
-pub use overlay::{Overlay, PixelPrimitive, RectPrimitive, TextPrimitive};
+pub use overlay::{LinePrimitive, Overlay, PixelPrimitive, RectPrimitive, TextPrimitive};

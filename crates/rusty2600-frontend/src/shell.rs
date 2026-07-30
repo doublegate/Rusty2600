@@ -117,6 +117,13 @@ pub enum MenuAction {
     /// Tools -> Disconnect Netplay.
     #[cfg(feature = "netplay")]
     NetplayDisconnect,
+    /// Tools -> Start/Stop Recording (`av-record`, `[v2.13.0]`). One toggle
+    /// action for both directions — `app.rs`'s dispatch checks whether a
+    /// session is already active (mirroring how `NetplayConnect`/
+    /// `NetplayDisconnect` are two separate variants, but a record toggle is
+    /// simpler: there's no address/params to collect for "stop").
+    #[cfg(all(feature = "av-record", not(target_arch = "wasm32")))]
+    AvRecordToggle,
     /// View -> toggle fullscreen.
     ToggleFullscreen,
     /// File -> open the Settings window.
@@ -295,6 +302,10 @@ pub struct ShellState {
     pub status: String,
     /// Whether emulation is paused (mirrored from the app for the menu checkmark).
     pub paused: bool,
+    /// Whether the always-on `Tools -> ROM Info` window is open (`[2.13.0]`
+    /// — unlike the cart-info debugger panel, NOT gated behind
+    /// `debug-hooks`, so a non-debugging player can see it too).
+    pub rom_info_open: bool,
     /// Which debugger panels are open (per-chip toggles).
     pub panels: PanelVisibility,
     /// Breakpoints, the memory-viewer cursor, and other persistent debugger
@@ -416,6 +427,12 @@ pub struct ShellInfo {
     /// Native-only.
     #[cfg(not(target_arch = "wasm32"))]
     pub save_slots: Vec<SaveSlotInfo>,
+    /// The active A/V recording session's frame count, if any (`av-record`,
+    /// `[v2.13.0]`) — `None` when not recording, shown as a status-bar
+    /// indicator (elapsed time is derived from `frames / region.frame_rate()`
+    /// by the render side, so this struct only carries the raw count).
+    #[cfg(all(feature = "av-record", not(target_arch = "wasm32")))]
+    pub av_recording_frames: Option<u64>,
 }
 
 /// Which debugger panels are currently shown.
@@ -583,6 +600,17 @@ impl ShellState {
 
                 ui.menu_button("Tools", |ui| {
                     // TODO(impl-phase): TIA audio scope, cheat editor, ROM-DB editor, TAStudio.
+                    // `[2.13.0]` — the always-on, read-only ROM Info window (NOT gated behind
+                    // `debug-hooks`, unlike the debugger's own cart-info panel): needs a loaded
+                    // ROM to describe, same "needs a loaded ROM" convention every other
+                    // ROM-dependent Tools entry in this menu already follows.
+                    if ui
+                        .add_enabled(info.rom_loaded, egui::Button::new("ROM Info..."))
+                        .clicked()
+                    {
+                        self.rom_info_open = true;
+                        ui.close();
+                    }
                     #[cfg(feature = "scripting")]
                     {
                         if info.script_loaded {
@@ -607,8 +635,26 @@ impl ShellState {
                             ui.close();
                         }
                     }
-                    #[cfg(not(any(feature = "scripting", feature = "netplay")))]
-                    ui.label("(tools — TODO)");
+                    #[cfg(all(feature = "av-record", not(target_arch = "wasm32")))]
+                    {
+                        if let Some(frames) = info.av_recording_frames {
+                            // A frame count staying under 2^52 (~2900 years at
+                            // 60fps) is not a real-world concern for a status
+                            // display.
+                            #[allow(clippy::cast_precision_loss)]
+                            let secs = frames as f64 / info.region.frame_rate();
+                            if ui.button(format!("Stop Recording ({secs:.0}s)")).clicked() {
+                                actions.push(MenuAction::AvRecordToggle);
+                                ui.close();
+                            }
+                        } else if ui.button("Start Recording...").clicked() {
+                            actions.push(MenuAction::AvRecordToggle);
+                            ui.close();
+                        }
+                    }
+                    // No `(tools — TODO)` fallback needed any more: "ROM Info..."
+                    // above is unconditional, so this menu is never empty
+                    // regardless of which optional features are compiled in.
                 });
 
                 ui.menu_button("View", |ui| {
@@ -683,8 +729,64 @@ impl ShellState {
         if self.touch_overlay_visible {
             self.render_touch_overlay(&ctx, &mut actions);
         }
+        if self.rom_info_open {
+            self.render_rom_info(&ctx, info);
+        }
 
         actions
+    }
+
+    /// The always-on, read-only `Tools -> ROM Info` window (`[2.13.0]`).
+    ///
+    /// Unlike `crate::debugger::cart_info_panel` (gated behind
+    /// `debug-hooks`, buried inside the debugger's panel selector), this
+    /// surfaces the same already-computed [`ShellInfo`] fields
+    /// (`scheme_name`/`board_tier`/`rom_size`/`region`) to a non-debugging
+    /// player from an always-available Tools menu entry, with no
+    /// `debug-hooks` dependency — a purely observational window that never
+    /// touches the emu lock beyond what [`ShellInfo`] already carries.
+    fn render_rom_info(&mut self, ctx: &egui::Context, info: &ShellInfo) {
+        let mut open = self.rom_info_open;
+        egui::Window::new("ROM Info")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                if !info.rom_loaded {
+                    ui.label("(no ROM loaded)");
+                    return;
+                }
+                egui::Grid::new("rom_info_grid")
+                    .num_columns(2)
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.label("Scheme:");
+                        ui.monospace(info.scheme_name.as_deref().unwrap_or("(unknown)"));
+                        ui.end_row();
+
+                        ui.label("Accuracy tier:");
+                        ui.monospace(info.board_tier.as_deref().unwrap_or("(unknown)"));
+                        ui.end_row();
+
+                        ui.label("ROM size:");
+                        #[allow(clippy::cast_precision_loss)]
+                        ui.monospace(info.rom_size.map_or_else(
+                            || "(unknown)".to_string(),
+                            |n| format!("{n} bytes ({:.1} KiB)", n as f64 / 1024.0),
+                        ));
+                        ui.end_row();
+
+                        ui.label("Region:");
+                        ui.monospace(info.region.label());
+                        ui.end_row();
+                    });
+                ui.separator();
+                ui.weak(
+                    "Read-only. The Atari 2600 cartridge format has no header \
+                     (unlike NES .nes images) — this shows bankswitch-catalogue \
+                     metadata only.",
+                );
+            });
+        self.rom_info_open = open;
     }
 
     /// The Host/Join Netplay dialog (`Tools -> Netplay...`).
@@ -943,6 +1045,14 @@ impl ShellState {
                             rusty2600_gfx_shaders::PassKind::NtscComposite,
                             rusty2600_gfx_shaders::PassKind::HqNx,
                             rusty2600_gfx_shaders::PassKind::Xbrz,
+                            // `[v2.13.0]` — 3 named CRT presets closing a gap
+                            // flagged by a fresh RustyNES-vs-Rusty2600
+                            // frontend-GUI comparison; see each WGSL
+                            // constant's own doc comment in
+                            // `rusty2600-gfx-shaders` for scope notes.
+                            rusty2600_gfx_shaders::PassKind::CrtRoyale,
+                            rusty2600_gfx_shaders::PassKind::CrtGuest,
+                            rusty2600_gfx_shaders::PassKind::Megatron,
                         ] {
                             // `NtscComposite` only does anything under the NTSC region
                             // (see its own doc comment — PAL/SECAM use a different or

@@ -929,6 +929,11 @@ impl App {
                 overlay: script_overlay,
                 #[cfg(feature = "netplay")]
                 netplay_active: active.netplay.is_some(),
+                #[cfg(all(feature = "av-record", not(target_arch = "wasm32")))]
+                av_recording_frames: emu
+                    .av_recorder
+                    .as_ref()
+                    .map(crate::av_record::AvRecorder::frames),
                 #[cfg(not(target_arch = "wasm32"))]
                 save_slots: Vec::new(),
             };
@@ -1579,6 +1584,67 @@ impl App {
                         .paused = false;
                     active.shell.status = "Netplay disconnected".into();
                 }
+                // A/V recording (`[v2.13.0]`): one toggle action for both
+                // directions — stop if a session is active, else prompt for an
+                // output path and arm a new one. See `av_record.rs`'s own
+                // module doc for why this is a read-only tap that never
+                // touches determinism.
+                #[cfg(all(feature = "av-record", not(target_arch = "wasm32")))]
+                MenuAction::AvRecordToggle => {
+                    // Take the recorder (if any) under a BRIEF lock, dropped
+                    // before the blocking native save dialog below -- holding
+                    // the emu lock across a modal dialog the user could leave
+                    // open indefinitely would freeze `emu_thread`'s stepping
+                    // for that whole duration.
+                    let recorder = {
+                        let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                        emu.av_recorder.take()
+                    };
+                    if let Some(rec) = recorder {
+                        active.shell.status = match rec.stop() {
+                            Ok(path) => format!("Recording saved to {}", path.display()),
+                            Err(e) => format!("Recording failed: {e}"),
+                        };
+                    } else if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("MP4 video", &["mp4"])
+                        .add_filter("Matroska video", &["mkv"])
+                        .set_file_name("rusty2600-recording.mp4")
+                        .save_file()
+                    {
+                        let ((width, height), frame_rate) = {
+                            let emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                            (emu.fb_dims(), emu.region.frame_rate())
+                        };
+                        let sample_rate =
+                            active.audio_out.as_ref().map_or(48_000, |a| a.sample_rate);
+                        // `frame_rate()` is ~50-60 (NTSC/PAL); scaled by 1e6 this
+                        // is at most ~6.1e7, nowhere near u32::MAX, and never
+                        // negative — the cast is exact for every real region.
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        let fps_num = (frame_rate * 1_000_000.0).round() as u32;
+                        let params = crate::av_record::AvParams {
+                            out_path: path,
+                            width,
+                            height,
+                            sample_rate,
+                            fps_num,
+                            fps_den: 1_000_000,
+                        };
+                        match crate::av_record::AvRecorder::start(params) {
+                            Ok(rec) => {
+                                active
+                                    .core
+                                    .lock()
+                                    .unwrap_or_else(PoisonError::into_inner)
+                                    .av_recorder = Some(rec);
+                                active.shell.status = "Recording started".into();
+                            }
+                            Err(e) => {
+                                active.shell.status = format!("Recording unavailable: {e}");
+                            }
+                        }
+                    }
+                }
                 // TODO(impl-phase): Reset / PowerCycle / OpenDocs wire to the core / Docs pane.
                 MenuAction::Reset | MenuAction::PowerCycle | MenuAction::OpenDocs => {
                     active.shell.status = format!("{action:?}: TODO");
@@ -1663,6 +1729,19 @@ fn draw_script_overlay(
             egui::Rect::from_min_size(min, size),
             0,
             color32_from_packed(p.color),
+        );
+    }
+    for l in &overlay.lines {
+        // `[2.13.0]` — the fourth HUD primitive. Stroke width scales with
+        // the same screen/framebuffer ratio as the rect/pixel primitives
+        // above (never thinner than 1 device pixel), so a line stays
+        // visible at any window size instead of vanishing at high scale.
+        let p1 = egui::pos2(l.x1 as f32 * scale_x, l.y1 as f32 * scale_y);
+        let p2 = egui::pos2(l.x2 as f32 * scale_x, l.y2 as f32 * scale_y);
+        let width = scale_x.min(scale_y).max(1.0);
+        painter.line_segment(
+            [p1, p2],
+            egui::Stroke::new(width, color32_from_packed(l.color)),
         );
     }
     for t in &overlay.texts {
@@ -1751,6 +1830,13 @@ mod tests {
                     y: 1,
                     color: 0xFF_00_00,
                 }],
+                lines: vec![rusty2600_script::LinePrimitive {
+                    x1: 0,
+                    y1: 0,
+                    x2: 10,
+                    y2: 10,
+                    color: 0x00_00_FF,
+                }],
             };
 
             let ctx = egui::Context::default();
@@ -1760,9 +1846,10 @@ mod tests {
 
             // One rect shape for the `RectPrimitive`, one for the `PixelPrimitive`
             // (drawn as a scaled filled rect, see `draw_script_overlay`'s doc), and
-            // at least one text-bearing shape for the `TextPrimitive` — confirms all
-            // three primitive kinds actually produced paintable output, not just that
-            // the function ran without panicking.
+            // at least one text-bearing shape for the `TextPrimitive`, plus one
+            // line-segment shape for the `LinePrimitive` (`[2.13.0]`) — confirms
+            // all four primitive kinds actually produced paintable output, not
+            // just that the function ran without panicking.
             let rect_count = full_output
                 .shapes
                 .iter()
@@ -1772,6 +1859,13 @@ mod tests {
                 rect_count, 2,
                 "expected one rect shape + one pixel-as-rect shape"
             );
+
+            let line_count = full_output
+                .shapes
+                .iter()
+                .filter(|cs| matches!(cs.shape, egui::Shape::LineSegment { .. }))
+                .count();
+            assert_eq!(line_count, 1, "expected one line-segment shape");
 
             let has_text = full_output
                 .shapes

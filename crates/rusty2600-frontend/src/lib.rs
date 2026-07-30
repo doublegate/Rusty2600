@@ -160,6 +160,16 @@ pub mod scripting;
 #[cfg(all(not(target_arch = "wasm32"), feature = "netplay"))]
 pub mod netplay_session;
 
+/// A/V (video + synchronized audio) recording (`[v2.13.0]`), adapted from the
+/// sibling RustyNES project's own `av_record.rs`.
+///
+/// A read-only tap on [`emu_thread::EmuCore`]'s already-produced framebuffer
+/// + audio, muxed via an external `ffmpeg` process — native-only, behind the
+/// off-by-default `av-record` feature. See the module's own doc comment for
+/// why this never touches the determinism contract.
+#[cfg(all(not(target_arch = "wasm32"), feature = "av-record"))]
+pub mod av_record;
+
 // Native CLI (clap 4) + the structured help-topic registry + the ratatui help TUI. Native-only: a
 // browser tab has no terminal.
 #[cfg(not(target_arch = "wasm32"))]

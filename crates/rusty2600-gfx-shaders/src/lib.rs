@@ -1,12 +1,16 @@
 //! WGSL post-process shader sources for Rusty2600's composable shader stack.
 //!
-//! Each pass is a plain full-screen-triangle fragment shader. Four of the five
-//! (`CompositeArtifact`, `CrtScanline`, `HqNx`, `Xbrz`) sample one
-//! `texture_2d<f32>` + one `sampler` (binding 0/1 — the same shape
-//! `rusty2600-frontend::gfx`'s existing blit pipeline already uses), so they can
-//! chain in any order/position without per-pass uniform buffers: each derives
-//! everything it needs (texel size, screen row) from `textureDimensions()` and
-//! `@builtin(position)` directly in WGSL.
+//! Each pass is a plain full-screen-triangle fragment shader. Seven of the
+//! eight (`CompositeArtifact`, `CrtScanline`, `HqNx`, `Xbrz`, `CrtRoyale`,
+//! `CrtGuest`, `Megatron`) sample one `texture_2d<f32>` + one `sampler`
+//! (binding 0/1 — the same shape `rusty2600-frontend::gfx`'s existing blit
+//! pipeline already uses), so they can chain in any order/position without
+//! per-pass uniform buffers: each derives everything it needs (texel size,
+//! screen row, output-pixel column) from `textureDimensions()` and
+//! `@builtin(position)` directly in WGSL — the 3 `[v2.13.0]` CRT presets
+//! bake their tunable parameters (scanline/mask strength, curvature) in as
+//! WGSL constants rather than a uniform buffer for exactly this reason (see
+//! [`CRT_ROYALE_WGSL`]'s doc comment for the full scope note).
 //!
 //! [`PassKind::NtscComposite`] is special-cased (`rusty2600-frontend::shader_pass`'s
 //! module doc explains why): it samples the raw TIA palette-index byte, not
@@ -59,6 +63,16 @@ pub enum PassKind {
     /// independent WGSL adaptation of the published xBR/xBRZ algorithm
     /// (Hyllian / Zenju), not a port of any existing implementation.
     Xbrz,
+    /// A soft, wide-beam CRT look (aperture-grille mask, smooth scanline
+    /// falloff, gentle curvature) — `[v2.13.0]`, see [`CRT_ROYALE_WGSL`]'s
+    /// doc comment for the full rationale/scope note.
+    CrtRoyale,
+    /// A crisper CRT look with halation glow (slot-mask, steeper scanline
+    /// falloff) — `[v2.13.0]`, see [`CRT_GUEST_WGSL`]'s doc comment.
+    CrtGuest,
+    /// A per-subpixel phosphor-emphasis CRT look with an HDR-style headroom
+    /// tone-map — `[v2.13.0]`, see [`MEGATRON_WGSL`]'s doc comment.
+    Megatron,
 }
 
 impl PassKind {
@@ -71,6 +85,9 @@ impl PassKind {
             Self::NtscComposite => NTSC_COMPOSITE_WGSL,
             Self::HqNx => HQX_WGSL,
             Self::Xbrz => XBRZ_WGSL,
+            Self::CrtRoyale => CRT_ROYALE_WGSL,
+            Self::CrtGuest => CRT_GUEST_WGSL,
+            Self::Megatron => MEGATRON_WGSL,
         }
     }
 
@@ -83,6 +100,9 @@ impl PassKind {
             Self::NtscComposite => "NTSC composite (YIQ decode, NTSC only)",
             Self::HqNx => "hqNx smoothing",
             Self::Xbrz => "xBRZ smoothing",
+            Self::CrtRoyale => "CRT-Royale",
+            Self::CrtGuest => "CRT Guest Advanced",
+            Self::Megatron => "Sony Megatron",
         }
     }
 
@@ -485,5 +505,268 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         outc = mix(c, chosen, corner);
     }
     return vec4<f32>(outc, 1.0);
+}
+";
+
+/// CRT-Royale — a soft, wide electron-beam look: an aperture-grille phosphor
+/// mask, a smooth (non-binary) row-darkening falloff, gentle barrel
+/// curvature, and a gamma-aware blend.
+///
+/// `[v2.13.0]`, closing a gap flagged by a fresh `RustyNES`-vs-Rusty2600
+/// frontend-GUI comparison.
+///
+/// The sibling `RustyNES` project ports 3 named CRT
+/// presets (CRT-Royale, CRT Guest Advanced, Sony Megatron) as a MULTI-uniform
+/// stack operating in source-row space (its own `rect`/`crop`/`params`/`aux`
+/// 64-byte uniform block, letting sliders re-tune scanline width/mask
+/// strength/curvature live). This is an INDEPENDENT re-derivation of
+/// `TroggleMonkey`'s published CRT-Royale libretro/slang shader's characteristic
+/// LOOK — not a port of `RustyNES`'s own separately-authored WGSL, and
+/// deliberately adapted to THIS crate's own established convention instead:
+/// every existing pass but `NtscComposite` (`CompositeArtifact`,
+/// `CrtScanline`, `HqNx`, `Xbrz`) operates on the SAME plain
+/// `texture_2d<f32>` + `sampler` bind group (no per-pass uniform buffer),
+/// deriving everything from `@builtin(position)`/`textureDimensions()` in
+/// OUTPUT-PIXEL space (the already-letterboxed ping-pong texture), not
+/// source-TIA-row space. Adding a second bind-group-layout family (like
+/// `NtscComposite`'s index-texture one) purely to carry live-tunable sliders
+/// would be real, separable follow-on scope; this first cut ships each
+/// preset's LOOK with sensible fixed parameters baked in, matching every
+/// sibling pass's own "no per-pass uniform" shape, and documents live slider
+/// tuning as an explicit, deferred v2.
+pub const CRT_ROYALE_WGSL: &str = r"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+struct VsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
+    var out: VsOut;
+    let x = f32((vi << 1u) & 2u) * 2.0 - 1.0;
+    let y = f32(vi & 2u) * 2.0 - 1.0;
+    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+
+const ROYALE_MASK_STRENGTH: f32 = 0.28;
+const ROYALE_SCAN_STRENGTH: f32 = 0.35;
+const ROYALE_CURVATURE: f32 = 0.06;
+const ROYALE_GAMMA: f32 = 2.2;
+
+// Barrel-distort a centred UV by curvature amount `k` (0 = flat).
+fn royale_curve(uv: vec2<f32>, k: f32) -> vec2<f32> {
+    let cc = uv - vec2<f32>(0.5, 0.5);
+    let dist = dot(cc, cc) * k;
+    return uv + cc * (1.0 + dist) * dist;
+}
+
+// Aperture-grille phosphor mask: one lit channel per output-pixel column.
+fn royale_mask(px: vec2<f32>, strength: f32) -> vec3<f32> {
+    let dim = 1.0 - strength;
+    var m = vec3<f32>(dim, dim, dim);
+    let col = i32(floor(px.x)) % 3;
+    if (col == 0) { m.r = 1.0; } else if (col == 1) { m.g = 1.0; } else { m.b = 1.0; }
+    return m;
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    var uv = in.uv;
+    if (ROYALE_CURVATURE > 0.001) {
+        uv = royale_curve(uv, ROYALE_CURVATURE);
+    }
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    var rgb = textureSample(tex, samp, uv).rgb;
+    rgb = pow(rgb, vec3<f32>(ROYALE_GAMMA)); // to linear
+
+    // A smooth (smoothstep, not on/off) row-darkening falloff — softer than
+    // `CrtScanline`'s hard alternating rows, approximating Royale's wide
+    // Gaussian beam without a multi-tap source-row sample.
+    // `in.pos.y` is a pixel-CENTER coordinate (row 0 -> 0.5, row 1 -> 1.5, ...),
+    // not the integer row index -- `floor` recovers the row index first, so
+    // consecutive rows alternate between phase 0.0 and 0.5 as intended, rather
+    // than both landing on the same distance from 0.5 (0.25 vs 0.75, which are
+    // equidistant and produced IDENTICAL brightness -- no real alternation).
+    let row_frac = fract(floor(in.pos.y) * 0.5);
+    let beam = 1.0 - ROYALE_SCAN_STRENGTH * smoothstep(0.0, 0.5, abs(row_frac - 0.5) * 2.0);
+    rgb = rgb * beam;
+
+    let mask = royale_mask(in.pos.xy, ROYALE_MASK_STRENGTH);
+    rgb = rgb * mask * (1.0 + 0.5 * (ROYALE_SCAN_STRENGTH + ROYALE_MASK_STRENGTH));
+    rgb = pow(clamp(rgb, vec3<f32>(0.0), vec3<f32>(4.0)), vec3<f32>(1.0 / ROYALE_GAMMA));
+
+    if (ROYALE_CURVATURE > 0.001) {
+        let e = uv - vec2<f32>(0.5, 0.5);
+        let v = 1.0 - dot(e, e) * ROYALE_CURVATURE * 0.6;
+        rgb = rgb * clamp(v, 0.0, 1.0);
+    }
+    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+}
+";
+
+/// CRT Guest Advanced — a crisper beam profile than [`CRT_ROYALE_WGSL`].
+///
+/// Plus halation glow: a slot-mask phosphor, a steeper (power-shaped, not
+/// Gaussian) scanline falloff, and a cheap 5-tap neighbourhood bloom mixed
+/// back in linear light.
+///
+/// Independently re-derived from `guest.r`'s published crt-guest-advanced /
+/// guest-dr-venom shader FAMILY's characteristic look (sharp beam + glow),
+/// adapted to this crate's fixed-constant, no-per-pass-uniform, output-pixel-
+/// space convention — see [`CRT_ROYALE_WGSL`]'s doc comment for the full
+/// rationale, which applies identically here.
+pub const CRT_GUEST_WGSL: &str = r"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+struct VsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
+    var out: VsOut;
+    let x = f32((vi << 1u) & 2u) * 2.0 - 1.0;
+    let y = f32(vi & 2u) * 2.0 - 1.0;
+    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+
+const GUEST_MASK_STRENGTH: f32 = 0.3;
+const GUEST_SCAN_STRENGTH: f32 = 0.45;
+const GUEST_GLOW: f32 = 0.18;
+const GUEST_GAMMA: f32 = 2.2;
+
+// Slot-mask phosphor: an aperture grille offset every other row-pair.
+fn guest_mask(px: vec2<f32>, strength: f32) -> vec3<f32> {
+    let dim = 1.0 - strength;
+    var m = vec3<f32>(dim, dim, dim);
+    let col = i32(floor(px.x)) % 3;
+    let rowpair = i32(floor(px.y / 2.0)) % 2;
+    let ccol = (col + rowpair) % 3;
+    if (ccol == 0) { m.r = 1.0; } else if (ccol == 1) { m.g = 1.0; } else { m.b = 1.0; }
+    return m;
+}
+
+// A power-shaped beam: steeper falloff than a Gaussian, giving guest's
+// crisper scanline edges. `d` is the fractional row distance (-0.5..0.5).
+fn guest_beam(d: f32) -> f32 {
+    let x = clamp(abs(d) * 2.0, 0.0, 1.0);
+    return clamp(1.0 - pow(x, 3.0), 0.0, 1.0);
+}
+
+// A cheap 4-tap halation glow around `uv`, mixed additively in linear light.
+fn guest_glow(uv: vec2<f32>) -> vec3<f32> {
+    let dims = vec2<f32>(textureDimensions(tex));
+    let t = 2.0 / dims;
+    var acc = textureSample(tex, samp, uv).rgb * 0.4;
+    acc = acc + textureSample(tex, samp, uv + vec2<f32>(t.x, 0.0)).rgb * 0.15;
+    acc = acc + textureSample(tex, samp, uv - vec2<f32>(t.x, 0.0)).rgb * 0.15;
+    acc = acc + textureSample(tex, samp, uv + vec2<f32>(0.0, t.y)).rgb * 0.15;
+    acc = acc + textureSample(tex, samp, uv - vec2<f32>(0.0, t.y)).rgb * 0.15;
+    return acc;
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    var rgb = textureSample(tex, samp, in.uv).rgb;
+    rgb = pow(rgb, vec3<f32>(GUEST_GAMMA));
+
+    // See CRT_ROYALE_WGSL's own comment on this same pattern: `floor` recovers
+    // the integer row index from the pixel-center `in.pos.y` first, so
+    // consecutive rows actually alternate phase instead of landing on
+    // equidistant-from-0.5 values that produce identical output.
+    let d = fract(floor(in.pos.y) * 0.5) - 0.5;
+    let beam = guest_beam(d);
+    rgb = rgb * mix(1.0, beam, GUEST_SCAN_STRENGTH);
+
+    let g = pow(guest_glow(in.uv), vec3<f32>(GUEST_GAMMA));
+    rgb = rgb + g * GUEST_GLOW * 0.5;
+
+    let mask = guest_mask(in.pos.xy, GUEST_MASK_STRENGTH);
+    rgb = rgb * mask * (1.0 + 0.4 * (GUEST_SCAN_STRENGTH + GUEST_MASK_STRENGTH));
+    rgb = pow(clamp(rgb, vec3<f32>(0.0), vec3<f32>(4.0)), vec3<f32>(1.0 / GUEST_GAMMA));
+    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+}
+";
+
+/// Sony Megatron — a per-subpixel phosphor emphasis look.
+///
+/// Each output-pixel
+/// column lights only its own RGB channel (unlit channels stay dark, rather
+/// than every existing mask's dim-not-dark blend), pushed into a headroom
+/// budget and tone-mapped back with a Reinhard curve for an SDR swapchain.
+///
+/// Independently re-derived from `MajorPainInTheCactus`'s published "Sony
+/// Megatron Colour Video Monitor" shader's DEFINING idea — physically-scaled
+/// per-subpixel phosphor lighting for an HDR-style peak-brightness look —
+/// adapted to this crate's fixed-constant, output-pixel-space convention;
+/// see [`CRT_ROYALE_WGSL`]'s doc comment for the shared rationale. This crate
+/// targets an SDR `wgpu` swapchain, so (matching `RustyNES`'s own SDR fallback
+/// path) the headroom is always tone-mapped back into `[0, 1]` rather than
+/// exposing a real HDR output path.
+pub const MEGATRON_WGSL: &str = r"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+struct VsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
+    var out: VsOut;
+    let x = f32((vi << 1u) & 2u) * 2.0 - 1.0;
+    let y = f32(vi & 2u) * 2.0 - 1.0;
+    out.pos = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+
+const MEGATRON_MASK_STRENGTH: f32 = 0.55;
+const MEGATRON_SCAN_STRENGTH: f32 = 0.3;
+const MEGATRON_HEADROOM: f32 = 2.0;
+const MEGATRON_GAMMA: f32 = 2.4;
+
+// Per-subpixel phosphor: the lit channel for this output-pixel column
+// (aperture-grille layout — the layout Megatron's own reference uses).
+fn megatron_subpixel(px: vec2<f32>) -> vec3<f32> {
+    let col = i32(floor(px.x)) % 3;
+    if (col == 0) { return vec3<f32>(1.0, 0.0, 0.0); }
+    if (col == 1) { return vec3<f32>(0.0, 1.0, 0.0); }
+    return vec3<f32>(0.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    var rgb = textureSample(tex, samp, in.uv).rgb;
+    rgb = pow(rgb, vec3<f32>(MEGATRON_GAMMA));
+
+    // See CRT_ROYALE_WGSL's own comment on this same pattern: `floor` recovers
+    // the integer row index from the pixel-center `in.pos.y` first, so
+    // consecutive rows actually alternate phase instead of landing on
+    // equidistant-from-0.5 values that produce identical output.
+    let d = fract(floor(in.pos.y) * 0.5) - 0.5;
+    let beam = clamp(1.0 - abs(d) * 2.0, 0.0, 1.0);
+    rgb = rgb * mix(1.0, beam, MEGATRON_SCAN_STRENGTH);
+
+    // Concentrate energy into the lit subpixel (up to the headroom budget),
+    // then Reinhard-tonemap back to SDR.
+    let sp = megatron_subpixel(in.pos.xy);
+    let lit = mix(vec3<f32>(1.0), sp, MEGATRON_MASK_STRENGTH);
+    rgb = rgb * lit * mix(1.0, MEGATRON_HEADROOM, MEGATRON_MASK_STRENGTH);
+    rgb = rgb / (rgb + vec3<f32>(1.0)) * (1.0 + 1.0 / MEGATRON_HEADROOM);
+    rgb = pow(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / MEGATRON_GAMMA));
+    return vec4<f32>(rgb, 1.0);
 }
 ";
