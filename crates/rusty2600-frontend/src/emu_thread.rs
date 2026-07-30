@@ -119,6 +119,13 @@ pub struct EmuCore {
     /// entry's bitmap instead of the flat resolved TIA color.
     #[cfg(all(not(target_arch = "wasm32"), feature = "hd-pack"))]
     pub sprite_pack: Option<crate::sprite_pack::SpritePack>,
+    /// The active A/V recording session, if any (`av-record` feature,
+    /// `[v2.13.0]`). `run_frame`/`extract_frame` push this frame's
+    /// framebuffer + audio into it when present; a push error (e.g. disk
+    /// full) drops the session so a broken recording doesn't spam errors
+    /// every frame.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "av-record"))]
+    pub av_recorder: Option<crate::av_record::AvRecorder>,
 }
 
 /// A 64-bit FNV-1a hash of `bytes` — a fast, allocation-free, dependency-free
@@ -163,6 +170,8 @@ impl EmuCore {
             rom_tag: None,
             #[cfg(all(not(target_arch = "wasm32"), feature = "hd-pack"))]
             sprite_pack: None,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "av-record"))]
+            av_recorder: None,
         }
     }
 
@@ -384,6 +393,19 @@ impl EmuCore {
             if let Some(tx) = &mut self.audio_tx {
                 tx.push_samples(&out);
             }
+            // A/V recording (`[v2.13.0]`): tap the SAME DC-blocked, normalized
+            // samples just pushed to the audio device — a read-only copy, not
+            // a second drain (the ring's samples were already `mem::take`n
+            // above). A push error (e.g. disk full) drops the session rather
+            // than erroring every frame; the caller's status line already
+            // told the user recording started, so silently degrading to "no
+            // longer recording" is the least-surprising failure mode.
+            #[cfg(all(not(target_arch = "wasm32"), feature = "av-record"))]
+            if let Some(rec) = self.av_recorder.as_mut()
+                && rec.push_audio(&out).is_err()
+            {
+                self.av_recorder = None;
+            }
         }
 
         // Crop the TIA's accumulated video buffer down to the active window
@@ -411,6 +433,24 @@ impl EmuCore {
                 if idx_off < self.index_buffer.len() {
                     self.index_buffer[idx_off] = color_idx >> 1;
                 }
+            }
+        }
+
+        // A/V recording (`[v2.13.0]`): tap the just-cropped framebuffer —
+        // exactly the slice `Self::framebuffer` exposes to the present path.
+        #[cfg(all(not(target_arch = "wasm32"), feature = "av-record"))]
+        {
+            // Read-only field access ONLY (no `self.fb_dims()` method call,
+            // which would borrow all of `self` and conflict with
+            // `self.av_recorder`'s exclusive borrow below): `region` is
+            // `Copy`, so this is the same computation `fb_dims` does,
+            // disjoint from the `av_recorder`/`framebuffer` fields.
+            let (w, h) = (crate::gfx::VCS_W, self.region.active_height());
+            let len = ((w * h * 4) as usize).min(self.framebuffer.len());
+            if let Some(rec) = self.av_recorder.as_mut()
+                && rec.push_video(&self.framebuffer[..len]).is_err()
+            {
+                self.av_recorder = None;
             }
         }
 
@@ -458,6 +498,13 @@ impl EmuCore {
             if let Some(tx) = &mut self.audio_tx {
                 tx.push_samples(&out);
             }
+            // See `run_frame`'s identical companion tap — additive, `[v2.13.0]`.
+            #[cfg(all(not(target_arch = "wasm32"), feature = "av-record"))]
+            if let Some(rec) = self.av_recorder.as_mut()
+                && rec.push_audio(&out).is_err()
+            {
+                self.av_recorder = None;
+            }
         }
 
         let video = &self.system.bus.tia.video_buffer;
@@ -480,6 +527,23 @@ impl EmuCore {
                 if idx_off < self.index_buffer.len() {
                     self.index_buffer[idx_off] = color_idx >> 1;
                 }
+            }
+        }
+
+        // See `run_frame`'s identical companion tap — additive, `[v2.13.0]`.
+        #[cfg(all(not(target_arch = "wasm32"), feature = "av-record"))]
+        {
+            // Read-only field access ONLY (no `self.fb_dims()` method call,
+            // which would borrow all of `self` and conflict with
+            // `self.av_recorder`'s exclusive borrow below): `region` is
+            // `Copy`, so this is the same computation `fb_dims` does,
+            // disjoint from the `av_recorder`/`framebuffer` fields.
+            let (w, h) = (crate::gfx::VCS_W, self.region.active_height());
+            let len = ((w * h * 4) as usize).min(self.framebuffer.len());
+            if let Some(rec) = self.av_recorder.as_mut()
+                && rec.push_video(&self.framebuffer[..len]).is_err()
+            {
+                self.av_recorder = None;
             }
         }
 

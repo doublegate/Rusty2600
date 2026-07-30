@@ -117,6 +117,13 @@ pub enum MenuAction {
     /// Tools -> Disconnect Netplay.
     #[cfg(feature = "netplay")]
     NetplayDisconnect,
+    /// Tools -> Start/Stop Recording (`av-record`, `[v2.13.0]`). One toggle
+    /// action for both directions — `app.rs`'s dispatch checks whether a
+    /// session is already active (mirroring how `NetplayConnect`/
+    /// `NetplayDisconnect` are two separate variants, but a record toggle is
+    /// simpler: there's no address/params to collect for "stop").
+    #[cfg(all(feature = "av-record", not(target_arch = "wasm32")))]
+    AvRecordToggle,
     /// View -> toggle fullscreen.
     ToggleFullscreen,
     /// File -> open the Settings window.
@@ -416,6 +423,12 @@ pub struct ShellInfo {
     /// Native-only.
     #[cfg(not(target_arch = "wasm32"))]
     pub save_slots: Vec<SaveSlotInfo>,
+    /// The active A/V recording session's frame count, if any (`av-record`,
+    /// `[v2.13.0]`) — `None` when not recording, shown as a status-bar
+    /// indicator (elapsed time is derived from `frames / region.frame_rate()`
+    /// by the render side, so this struct only carries the raw count).
+    #[cfg(all(feature = "av-record", not(target_arch = "wasm32")))]
+    pub av_recording_frames: Option<u64>,
 }
 
 /// Which debugger panels are currently shown.
@@ -607,7 +620,28 @@ impl ShellState {
                             ui.close();
                         }
                     }
-                    #[cfg(not(any(feature = "scripting", feature = "netplay")))]
+                    #[cfg(all(feature = "av-record", not(target_arch = "wasm32")))]
+                    {
+                        if let Some(frames) = info.av_recording_frames {
+                            // A frame count staying under 2^52 (~2900 years at
+                            // 60fps) is not a real-world concern for a status
+                            // display.
+                            #[allow(clippy::cast_precision_loss)]
+                            let secs = frames as f64 / info.region.frame_rate();
+                            if ui.button(format!("Stop Recording ({secs:.0}s)")).clicked() {
+                                actions.push(MenuAction::AvRecordToggle);
+                                ui.close();
+                            }
+                        } else if ui.button("Start Recording...").clicked() {
+                            actions.push(MenuAction::AvRecordToggle);
+                            ui.close();
+                        }
+                    }
+                    #[cfg(not(any(
+                        feature = "scripting",
+                        feature = "netplay",
+                        feature = "av-record"
+                    )))]
                     ui.label("(tools — TODO)");
                 });
 

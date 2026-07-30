@@ -105,6 +105,17 @@ scripting = ["dep:rusty2600-script", "dep:mlua"]
 # Pulls in `rusty2600-netplay` (wraps `ggrs`). Off by default; native-only
 # for the same reason as `scripting` (UDP sockets have no wasm32 story yet).
 netplay = ["dep:rusty2600-netplay"]
+# A/V recording (`[v2.13.0]`, adapted from the sibling RustyNES project's own
+# `av-record` feature). Adds the `av_record` frontend module: a read-only tap
+# that pipes the already-produced framebuffer + drained audio to an external
+# `ffmpeg` process (rawvideo over a temp file + a mono f32le audio sidecar,
+# muxed once at stop — see `av_record.rs`'s own module doc) to mux an
+# `.mp4`/`.mkv`. Pulls NO extra Rust deps (only the system `ffmpeg` binary at
+# run time, with a graceful "ffmpeg not found" status message otherwise), so
+# it is inert when off and the wasm builds are unchanged. The recorder never
+# advances the emulator or alters the per-frame output, so the determinism
+# contract is unaffected. Native-only, same rationale as `scripting`/`netplay`.
+av-record = []
 
 # `[v2.13.0]` — the `full` maximal-NATIVE-feature build, adapted from the
 # sibling RustyNES project's own `v1.7.0` "Forge" #54. One opt-in feature
@@ -126,7 +137,7 @@ netplay = ["dep:rusty2600-netplay"]
 # to a native build (there is no `script-wasm`/`browser-cheevos`-style
 # mutually-exclusive wasm feature in this crate the way RustyNES has, so
 # `full`'s exclusion list is shorter than RustyNES's own).
-full = ["retroachievements", "scripting", "hd-pack", "netplay"]
+full = ["retroachievements", "scripting", "hd-pack", "netplay", "av-record"]
 
 [dependencies]
 rusty2600-core = { path = "../rusty2600-core", version = "2.3.0" }

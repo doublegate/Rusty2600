@@ -929,6 +929,11 @@ impl App {
                 overlay: script_overlay,
                 #[cfg(feature = "netplay")]
                 netplay_active: active.netplay.is_some(),
+                #[cfg(all(feature = "av-record", not(target_arch = "wasm32")))]
+                av_recording_frames: emu
+                    .av_recorder
+                    .as_ref()
+                    .map(crate::av_record::AvRecorder::frames),
                 #[cfg(not(target_arch = "wasm32"))]
                 save_slots: Vec::new(),
             };
@@ -1578,6 +1583,59 @@ impl App {
                         .unwrap_or_else(PoisonError::into_inner)
                         .paused = false;
                     active.shell.status = "Netplay disconnected".into();
+                }
+                // A/V recording (`[v2.13.0]`): one toggle action for both
+                // directions — stop if a session is active, else prompt for an
+                // output path and arm a new one. See `av_record.rs`'s own
+                // module doc for why this is a read-only tap that never
+                // touches determinism.
+                #[cfg(all(feature = "av-record", not(target_arch = "wasm32")))]
+                MenuAction::AvRecordToggle => {
+                    let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                    if let Some(rec) = emu.av_recorder.take() {
+                        drop(emu);
+                        active.shell.status = match rec.stop() {
+                            Ok(path) => format!("Recording saved to {}", path.display()),
+                            Err(e) => format!("Recording failed: {e}"),
+                        };
+                    } else if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("MP4 video", &["mp4"])
+                        .add_filter("Matroska video", &["mkv"])
+                        .set_file_name("rusty2600-recording.mp4")
+                        .save_file()
+                    {
+                        let (width, height) = emu.fb_dims();
+                        let frame_rate = emu.region.frame_rate();
+                        drop(emu);
+                        let sample_rate =
+                            active.audio_out.as_ref().map_or(48_000, |a| a.sample_rate);
+                        // `frame_rate()` is ~50-60 (NTSC/PAL); scaled by 1e6 this
+                        // is at most ~6.1e7, nowhere near u32::MAX, and never
+                        // negative — the cast is exact for every real region.
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        let fps_num = (frame_rate * 1_000_000.0).round() as u32;
+                        let params = crate::av_record::AvParams {
+                            out_path: path,
+                            width,
+                            height,
+                            sample_rate,
+                            fps_num,
+                            fps_den: 1_000_000,
+                        };
+                        match crate::av_record::AvRecorder::start(params) {
+                            Ok(rec) => {
+                                active
+                                    .core
+                                    .lock()
+                                    .unwrap_or_else(PoisonError::into_inner)
+                                    .av_recorder = Some(rec);
+                                active.shell.status = "Recording started".into();
+                            }
+                            Err(e) => {
+                                active.shell.status = format!("Recording unavailable: {e}");
+                            }
+                        }
+                    }
                 }
                 // TODO(impl-phase): Reset / PowerCycle / OpenDocs wire to the core / Docs pane.
                 MenuAction::Reset | MenuAction::PowerCycle | MenuAction::OpenDocs => {
