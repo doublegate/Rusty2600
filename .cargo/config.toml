@@ -1,0 +1,14 @@
+# The "cargo --full equivalent" (adapted from the sibling RustyNES project's
+# own `.cargo/config.toml`, `v1.7.0` "Forge" #54). One command builds/runs the
+# most fully-featured NATIVE binary by activating the frontend's `full`
+# feature (see `crates/rusty2600-frontend/Cargo.toml`'s `full` feature doc
+# comment for exactly which features that aggregates and why). `cargo
+# full-run path/to/rom.a26` Just Works: the `full-run` alias ends in `--`, so
+# EVERY arg placed after the alias (the ROM path, and flags like `--fullscreen`
+# whose leading dash would otherwise be eaten by `cargo run`) is forwarded to
+# the emulator binary, not to Cargo. `full-build` takes no binary args, so it
+# has no trailing `--`. These names do not collide with any built-in cargo
+# subcommand.
+[alias]
+full-run = "run --release -p rusty2600-frontend --features full --"
+full-build = "build --release -p rusty2600-frontend --features full"

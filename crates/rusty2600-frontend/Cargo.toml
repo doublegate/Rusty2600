@@ -106,6 +106,28 @@ scripting = ["dep:rusty2600-script", "dep:mlua"]
 # for the same reason as `scripting` (UDP sockets have no wasm32 story yet).
 netplay = ["dep:rusty2600-netplay"]
 
+# `[v2.13.0]` — the `full` maximal-NATIVE-feature build, adapted from the
+# sibling RustyNES project's own `v1.7.0` "Forge" #54. One opt-in feature
+# aggregating every native feature so a single command (the `cargo full-run`
+# / `cargo full-build` aliases in `.cargo/config.toml`) builds the most
+# fully-featured desktop binary. PURELY OPT-IN: the shipped/default build is
+# unchanged and the core is untouched (every member here only forwards to an
+# existing off-by-default core/crate feature, already proven byte-identical
+# when off), so the determinism contract is unaffected.
+#
+# `full` is ADDITIVE ON TOP OF `default` (`wasm-winit`, `help-tui`,
+# `emu-thread`, `debug-hooks`) — it does NOT re-list those, which `cargo`
+# keeps active alongside `--features full` (the flag adds to the default set
+# unless `--no-default-features` is passed). On native, `wasm-winit` (the
+# only wasm-flavoured default member) is an inert empty marker, so it costs
+# nothing here.
+#
+# `wasm-canvas` is DELIBERATELY EXCLUDED — it is wasm-only and cannot belong
+# to a native build (there is no `script-wasm`/`browser-cheevos`-style
+# mutually-exclusive wasm feature in this crate the way RustyNES has, so
+# `full`'s exclusion list is shorter than RustyNES's own).
+full = ["retroachievements", "scripting", "hd-pack", "netplay"]
+
 [dependencies]
 rusty2600-core = { path = "../rusty2600-core", version = "2.3.0" }
 rusty2600-cart = { path = "../rusty2600-cart", version = "2.3.0" }

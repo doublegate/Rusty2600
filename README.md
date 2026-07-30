@@ -263,6 +263,12 @@ cargo run --release -p rusty2600-frontend -- path/to/rom.a26
 # Optional: build with RetroAchievements (needs a C compiler for vendored rcheevos)
 cargo build --release -p rusty2600-frontend --features retroachievements
 
+# Optional: the "cargo --full equivalent" -- one command for the most
+# fully-featured native binary (retroachievements + scripting + hd-pack +
+# netplay, on top of the always-on default set). Needs a C compiler.
+cargo full-build
+cargo full-run path/to/rom.a26
+
 # The no_std embedded-target gate (confirms the core stays no_std + alloc)
 cargo build -p rusty2600-core --target thumbv7em-none-eabihf --no-default-features
 ```
