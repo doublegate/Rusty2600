@@ -12,7 +12,11 @@
 //!    value` parameter format shared by both `.slangp` and `.cgp`).
 //! 2. **Map** each referenced pass onto a built-in
 //!    [`rusty2600_gfx_shaders::PassKind`] by recognizing well-known shader
-//!    filename *stems* (a `crt-*`/`*scanline*`/`*aperture*`/`*geom*` pass ->
+//!    filename *stems*, most specific first: a `royale` stem ->
+//!    [`rusty2600_gfx_shaders::PassKind::CrtRoyale`]; a `guest`/`venom` stem ->
+//!    [`rusty2600_gfx_shaders::PassKind::CrtGuest`]; a `megatron` stem ->
+//!    [`rusty2600_gfx_shaders::PassKind::Megatron`] (all three `[v2.13.0]`);
+//!    THEN the generic `crt-*`/`*scanline*`/`*aperture*`/`*geom*` fallback ->
 //!    [`rusty2600_gfx_shaders::PassKind::CrtScanline`]; an `ntsc`/`composite`
 //!    pass -> [`rusty2600_gfx_shaders::PassKind::CompositeArtifact`] —
 //!    deliberately NOT [`rusty2600_gfx_shaders::PassKind::NtscComposite`],
@@ -147,6 +151,15 @@ fn map_stem_to_builtin(stem: &str) -> StemMap {
         // `NtscComposite` (which is position-constrained — see this
         // module's own doc comment for why).
         StemMap::Builtin(PassKind::CompositeArtifact)
+    } else if stem.contains("royale") {
+        // `[v2.13.0]`: checked before the generic `crt`-family fallback
+        // below so `crt-royale.slangp` resolves to the named preset, not
+        // the generic scanline pass.
+        StemMap::Builtin(PassKind::CrtRoyale)
+    } else if stem.contains("guest") || stem.contains("venom") {
+        StemMap::Builtin(PassKind::CrtGuest)
+    } else if stem.contains("megatron") {
+        StemMap::Builtin(PassKind::Megatron)
     } else if stem.contains("crt")
         || stem.contains("scanline")
         || stem.contains("aperture")
@@ -268,9 +281,13 @@ mod tests {
 
     #[test]
     fn reports_unsupported_honestly() {
+        // `crt-easymode`, not `crt-royale` (which now maps to the named
+        // `[v2.13.0]` `CrtRoyale` preset, see `maps_named_crt_presets`
+        // below) — this test is about the honest-unsupported-reporting
+        // path for the SECOND pass, so any generic CRT stem covers it.
         let text = "\
             shaders = 2\n\
-            shader0 = shaders/crt/crt-royale.slang\n\
+            shader0 = shaders/crt/crt-easymode.slang\n\
             shader1 = shaders/anti-aliasing/advanced-aa.slang\n";
         let r = import_preset(text).unwrap();
         assert_eq!(r.passes, vec![PassKind::CrtScanline]);
@@ -279,6 +296,23 @@ mod tests {
             ImportedPass::Unsupported { path, .. } => assert!(path.contains("advanced-aa")),
             ImportedPass::Mapped(_) => panic!("expected unsupported"),
         }
+    }
+
+    #[test]
+    fn maps_named_crt_presets() {
+        // `[v2.13.0]`: specific-stem checks (royale/guest/venom/megatron)
+        // must win over the generic crt/scanline/aperture/geom fallback.
+        let text = "\
+            shaders = 3\n\
+            shader0 = shaders/crt/crt-royale.slangp\n\
+            shader1 = shaders/crt/guest-dr-venom.slangp\n\
+            shader2 = shaders/crt/sony-megatron.slangp\n";
+        let r = import_preset(text).unwrap();
+        assert_eq!(
+            r.passes,
+            vec![PassKind::CrtRoyale, PassKind::CrtGuest, PassKind::Megatron]
+        );
+        assert_eq!(r.unsupported_count(), 0);
     }
 
     #[test]
