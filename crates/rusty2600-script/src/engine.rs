@@ -387,8 +387,8 @@ impl<B: ScriptBus + 'static> ScriptEngine<B> {
     }
 
     /// Takes this frame's accumulated draw primitives, clearing the
-    /// internal buffer for the next frame. See [`Overlay`]'s module doc for why
-    /// compositing this into the presented frame isn't wired yet.
+    /// internal buffer for the next frame. See [`Overlay`]'s module doc for
+    /// how the host composites this into the presented frame.
     #[must_use]
     pub fn take_overlay(&self) -> Overlay {
         let mut overlay = self.overlay.borrow_mut();

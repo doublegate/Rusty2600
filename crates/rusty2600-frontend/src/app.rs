@@ -1591,9 +1591,16 @@ impl App {
                 // touches determinism.
                 #[cfg(all(feature = "av-record", not(target_arch = "wasm32")))]
                 MenuAction::AvRecordToggle => {
-                    let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
-                    if let Some(rec) = emu.av_recorder.take() {
-                        drop(emu);
+                    // Take the recorder (if any) under a BRIEF lock, dropped
+                    // before the blocking native save dialog below -- holding
+                    // the emu lock across a modal dialog the user could leave
+                    // open indefinitely would freeze `emu_thread`'s stepping
+                    // for that whole duration.
+                    let recorder = {
+                        let mut emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                        emu.av_recorder.take()
+                    };
+                    if let Some(rec) = recorder {
                         active.shell.status = match rec.stop() {
                             Ok(path) => format!("Recording saved to {}", path.display()),
                             Err(e) => format!("Recording failed: {e}"),
@@ -1604,9 +1611,10 @@ impl App {
                         .set_file_name("rusty2600-recording.mp4")
                         .save_file()
                     {
-                        let (width, height) = emu.fb_dims();
-                        let frame_rate = emu.region.frame_rate();
-                        drop(emu);
+                        let ((width, height), frame_rate) = {
+                            let emu = active.core.lock().unwrap_or_else(PoisonError::into_inner);
+                            (emu.fb_dims(), emu.region.frame_rate())
+                        };
                         let sample_rate =
                             active.audio_out.as_ref().map_or(48_000, |a| a.sample_rate);
                         // `frame_rate()` is ~50-60 (NTSC/PAL); scaled by 1e6 this

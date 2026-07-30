@@ -244,12 +244,27 @@ impl AvRecorder {
         let video_path = capture_path(&params.out_path, ".video.rusty2600-avtmp");
         let audio_path = capture_path(&params.out_path, ".audio.rusty2600-avtmp");
 
-        let video_file = std::fs::File::create(&video_path).map_err(AvError::Sidecar)?;
-        let audio_file = std::fs::File::create(&audio_path).map_err(|e| {
-            // Don't leak the video temp if the audio temp create fails.
-            let _ = std::fs::remove_file(&video_path);
-            AvError::Sidecar(e)
-        })?;
+        // `create_new` (O_CREAT|O_EXCL), not `File::create` (O_CREAT|O_TRUNC):
+        // the temp path is predictable (derived from the user-chosen output
+        // filename), so on a shared/multi-user filesystem another local user
+        // could pre-place a symlink at this exact path pointing at a victim
+        // file. `File::create` would follow it and truncate the target;
+        // `create_new` fails atomically instead if anything (file or symlink)
+        // already exists there.
+        let video_file = std::fs::File::options()
+            .write(true)
+            .create_new(true)
+            .open(&video_path)
+            .map_err(AvError::Sidecar)?;
+        let audio_file = std::fs::File::options()
+            .write(true)
+            .create_new(true)
+            .open(&audio_path)
+            .map_err(|e| {
+                // Don't leak the video temp if the audio temp create fails.
+                let _ = std::fs::remove_file(&video_path);
+                AvError::Sidecar(e)
+            })?;
 
         Ok(Self {
             params,
@@ -280,12 +295,14 @@ impl AvRecorder {
     /// Append one produced video frame (RGBA8, `params.width x params.height`)
     /// to the video temp file.
     ///
-    /// A short / mis-sized framebuffer is silently ignored (defensive: never
-    /// feed `ffmpeg` a frame of the wrong stride, e.g. mid-region-switch); a
-    /// write failure returns an error so the caller can stop.
+    /// A mis-sized framebuffer (e.g. mid-region-switch) returns an error
+    /// rather than being silently dropped, so the caller's existing
+    /// `is_err() => stop recording` handling takes over instead of letting
+    /// audio drift ahead of video for the rest of the session.
     ///
     /// # Errors
-    /// Returns [`AvError::Sidecar`] if the video temp file write fails.
+    /// Returns [`AvError::Sidecar`] if the framebuffer size doesn't match the
+    /// recording's fixed dimensions, or if the video temp file write fails.
     pub fn push_video(&mut self, framebuffer: &[u8]) -> Result<(), AvError> {
         // A silent no-op here would let `push_audio` (called independently at
         // every call site) keep appending for a frame whose video half never

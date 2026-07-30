@@ -41,7 +41,9 @@ through PR #27. See `[2.12.0]` in `CHANGELOG.md` for full detail.
 already-real `save_state()`/`load_state()` UniFFI methods into real
 Android and iOS save-state slot UIs, researched cloud save-state sync
 (deferred, concrete reference implementations documented), and checked
-physical Android hardware availability (emulator-only). v2.10.0 "Prism" (PR #20) grew `rusty2600-gfx-shaders`
+physical Android hardware availability (emulator-only).
+
+v2.10.0 "Prism" (PR #20) grew `rusty2600-gfx-shaders`
 with a genuine NTSC composite YIQ decode, hqNx/xBRZ upscaling, a
 generalized arbitrary-length shader stack, and a constrained RetroArch
 preset importer. v2.9.0 "Full Circle" (PR #19) closed the remaining

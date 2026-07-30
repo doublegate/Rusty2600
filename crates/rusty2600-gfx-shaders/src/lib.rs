@@ -589,7 +589,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // A smooth (smoothstep, not on/off) row-darkening falloff — softer than
     // `CrtScanline`'s hard alternating rows, approximating Royale's wide
     // Gaussian beam without a multi-tap source-row sample.
-    let row_frac = fract(in.pos.y * 0.5);
+    // `in.pos.y` is a pixel-CENTER coordinate (row 0 -> 0.5, row 1 -> 1.5, ...),
+    // not the integer row index -- `floor` recovers the row index first, so
+    // consecutive rows alternate between phase 0.0 and 0.5 as intended, rather
+    // than both landing on the same distance from 0.5 (0.25 vs 0.75, which are
+    // equidistant and produced IDENTICAL brightness -- no real alternation).
+    let row_frac = fract(floor(in.pos.y) * 0.5);
     let beam = 1.0 - ROYALE_SCAN_STRENGTH * smoothstep(0.0, 0.5, abs(row_frac - 0.5) * 2.0);
     rgb = rgb * beam;
 
@@ -676,7 +681,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var rgb = textureSample(tex, samp, in.uv).rgb;
     rgb = pow(rgb, vec3<f32>(GUEST_GAMMA));
 
-    let d = fract(in.pos.y * 0.5) - 0.5;
+    // See CRT_ROYALE_WGSL's own comment on this same pattern: `floor` recovers
+    // the integer row index from the pixel-center `in.pos.y` first, so
+    // consecutive rows actually alternate phase instead of landing on
+    // equidistant-from-0.5 values that produce identical output.
+    let d = fract(floor(in.pos.y) * 0.5) - 0.5;
     let beam = guest_beam(d);
     rgb = rgb * mix(1.0, beam, GUEST_SCAN_STRENGTH);
 
@@ -743,7 +752,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var rgb = textureSample(tex, samp, in.uv).rgb;
     rgb = pow(rgb, vec3<f32>(MEGATRON_GAMMA));
 
-    let d = fract(in.pos.y * 0.5) - 0.5;
+    // See CRT_ROYALE_WGSL's own comment on this same pattern: `floor` recovers
+    // the integer row index from the pixel-center `in.pos.y` first, so
+    // consecutive rows actually alternate phase instead of landing on
+    // equidistant-from-0.5 values that produce identical output.
+    let d = fract(floor(in.pos.y) * 0.5) - 0.5;
     let beam = clamp(1.0 - abs(d) * 2.0, 0.0, 1.0);
     rgb = rgb * mix(1.0, beam, MEGATRON_SCAN_STRENGTH);
 

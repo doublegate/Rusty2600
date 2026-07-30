@@ -65,3 +65,29 @@ fn records_a_few_frames_to_a_real_mp4() {
 
     let _ = std::fs::remove_file(&final_path);
 }
+
+/// Regression test for the `AvError::Sidecar` size-mismatch fix: a frame
+/// whose byte length doesn't match `width * height * 4` must be rejected,
+/// never silently dropped (which would let `push_audio` keep accumulating
+/// for a video frame that never wrote, drifting the two streams apart).
+#[test]
+#[ignore = "requires ffmpeg on PATH; run manually with --ignored"]
+fn push_video_rejects_mismatched_framebuffer_size() {
+    let dir = std::env::temp_dir().join("rusty2600-av-record-smoke");
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let out_path = dir.join("smoke-mismatch.mp4");
+    let _ = std::fs::remove_file(&out_path);
+
+    let params = AvParams {
+        out_path,
+        width: 160,
+        height: 192,
+        sample_rate: 48_000,
+        fps_num: 60_098_814,
+        fps_den: 1_000_000,
+    };
+    let mut recorder = AvRecorder::start(params).expect("ffmpeg must be on PATH for this test");
+
+    let wrong_sized = vec![0x40u8; 10]; // not width*height*4
+    assert!(recorder.push_video(&wrong_sized).is_err());
+}
