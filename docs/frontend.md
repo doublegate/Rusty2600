@@ -44,7 +44,7 @@ the default**, and an empty stack skips `ShaderStack` entirely —
 so the byte-identical-default invariant holds by construction (the same
 guarantee `[1.1.0]`'s `uv_scale` landed with).
 
-### The five built-in passes
+### The eight built-in passes
 
 | Pass | What it is | Position constraint |
 |---|---|---|
@@ -53,6 +53,9 @@ guarantee `[1.1.0]`'s `uv_scale` landed with).
 | `NtscComposite` (`v2.10.0`) | A genuine YIQ-domain composite decode — see below. | **Must be first.** |
 | `HqNx` (`v2.10.0`) | Edge-directed pixel-art smoothing (an independent WGSL adaptation of the published hqx technique). | None. |
 | `Xbrz` (`v2.10.0`) | Edge-directed pixel-art smoothing with the xBR diagonal-dominance rule (an independent WGSL adaptation, characteristically rounder corners than `HqNx`). | None. |
+| `CrtRoyale` (`v2.13.0`) | A soft, wide-beam CRT look — aperture-grille mask, smooth scanline falloff, gentle curvature. Independently re-derived from TroggleMonkey's published CRT-Royale shader's characteristic look, with fixed (not live-tunable) parameters — see the WGSL constant's own doc comment for the scope note. | None. |
+| `CrtGuest` (`v2.13.0`) | A crisper CRT look with halation glow — slot-mask, steeper scanline falloff. Independently re-derived from guest.r's crt-guest-advanced/guest-dr-venom shader family's characteristic look. | None. |
+| `Megatron` (`v2.13.0`) | A per-subpixel phosphor-emphasis CRT look with an HDR-style headroom tone-map back to SDR. Independently re-derived from MajorPainInTheCactus's Sony Megatron shader's defining idea. | None. |
 
 ### Arbitrary-length ping-pong (corrected from the original fixed 2-slot design)
 

@@ -78,6 +78,9 @@ pub struct ShaderStack {
     crt_scanline: Pass,
     hqx: Pass,
     xbrz: Pass,
+    crt_royale: Pass,
+    crt_guest: Pass,
+    megatron: Pass,
     ntsc_composite: Pass,
     tex_a: wgpu::Texture,
     tex_b: wgpu::Texture,
@@ -274,6 +277,33 @@ impl ShaderStack {
                 "rusty2600-xbrz",
             ),
         };
+        let crt_royale = Pass {
+            pipeline: make_pipeline(
+                device,
+                &layout,
+                format,
+                PassKind::CrtRoyale.wgsl(),
+                "rusty2600-crt-royale",
+            ),
+        };
+        let crt_guest = Pass {
+            pipeline: make_pipeline(
+                device,
+                &layout,
+                format,
+                PassKind::CrtGuest.wgsl(),
+                "rusty2600-crt-guest",
+            ),
+        };
+        let megatron = Pass {
+            pipeline: make_pipeline(
+                device,
+                &layout,
+                format,
+                PassKind::Megatron.wgsl(),
+                "rusty2600-megatron",
+            ),
+        };
         let tex_a = make_intermediate(device, format, width, height);
         let tex_b = make_intermediate(device, format, width, height);
         let bind_group_a = make_bind_group(device, &bind_group_layout, &sampler, &tex_a);
@@ -366,6 +396,9 @@ impl ShaderStack {
             crt_scanline,
             hqx,
             xbrz,
+            crt_royale,
+            crt_guest,
+            megatron,
             ntsc_composite,
             tex_a,
             tex_b,
@@ -459,6 +492,9 @@ impl ShaderStack {
             PassKind::NtscComposite => &self.ntsc_composite,
             PassKind::HqNx => &self.hqx,
             PassKind::Xbrz => &self.xbrz,
+            PassKind::CrtRoyale => &self.crt_royale,
+            PassKind::CrtGuest => &self.crt_guest,
+            PassKind::Megatron => &self.megatron,
         }
     }
 
@@ -596,6 +632,21 @@ mod tests {
     }
 
     #[test]
+    fn crt_royale_wgsl_validates() {
+        validate(PassKind::CrtRoyale.wgsl(), "crt-royale");
+    }
+
+    #[test]
+    fn crt_guest_wgsl_validates() {
+        validate(PassKind::CrtGuest.wgsl(), "crt-guest");
+    }
+
+    #[test]
+    fn megatron_wgsl_validates() {
+        validate(PassKind::Megatron.wgsl(), "megatron");
+    }
+
+    #[test]
     fn only_ntsc_composite_requires_first_position() {
         assert!(PassKind::NtscComposite.requires_first_position());
         for kind in [
@@ -603,6 +654,9 @@ mod tests {
             PassKind::CrtScanline,
             PassKind::HqNx,
             PassKind::Xbrz,
+            PassKind::CrtRoyale,
+            PassKind::CrtGuest,
+            PassKind::Megatron,
         ] {
             assert!(!kind.requires_first_position());
         }

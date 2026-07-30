@@ -943,6 +943,14 @@ impl ShellState {
                             rusty2600_gfx_shaders::PassKind::NtscComposite,
                             rusty2600_gfx_shaders::PassKind::HqNx,
                             rusty2600_gfx_shaders::PassKind::Xbrz,
+                            // `[v2.13.0]` — 3 named CRT presets closing a gap
+                            // flagged by a fresh RustyNES-vs-Rusty2600
+                            // frontend-GUI comparison; see each WGSL
+                            // constant's own doc comment in
+                            // `rusty2600-gfx-shaders` for scope notes.
+                            rusty2600_gfx_shaders::PassKind::CrtRoyale,
+                            rusty2600_gfx_shaders::PassKind::CrtGuest,
+                            rusty2600_gfx_shaders::PassKind::Megatron,
                         ] {
                             // `NtscComposite` only does anything under the NTSC region
                             // (see its own doc comment — PAL/SECAM use a different or
