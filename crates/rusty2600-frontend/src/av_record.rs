@@ -287,8 +287,17 @@ impl AvRecorder {
     /// # Errors
     /// Returns [`AvError::Sidecar`] if the video temp file write fails.
     pub fn push_video(&mut self, framebuffer: &[u8]) -> Result<(), AvError> {
+        // A silent no-op here would let `push_audio` (called independently at
+        // every call site) keep appending for a frame whose video half never
+        // wrote, permanently drifting the audio stream ahead of the video
+        // stream for the rest of the recording. Erroring lets the caller's
+        // existing `is_err() => stop recording` handling take over instead,
+        // matching every other failure mode this recorder already has.
         if framebuffer.len() != frame_bytes(self.params.width, self.params.height) {
-            return Ok(());
+            return Err(AvError::Sidecar(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "framebuffer size does not match the recording's fixed dimensions",
+            )));
         }
         let Some(video) = self.video.as_mut() else {
             return Err(AvError::Sidecar(io::Error::new(
