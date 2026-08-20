@@ -100,6 +100,32 @@ AGY_RETRIES="${AGY_RETRIES:-3}"            # attempts to get a usable agy respon
 AGY_RETRY_DELAY="${AGY_RETRY_DELAY:-15}"   # base backoff seconds between retries (grows per attempt)
 MARKER="<!-- antigravity-pr-review -->"
 
+# The comment body's format -- sentinels plus the split/trim helpers -- lives in a sourceable
+# file so `agy-review-selftest.sh` can test the REAL implementation rather than a copy of it.
+# This script does its work at top level and so cannot itself be sourced.
+# shellcheck source=scripts/_agy_comment_body.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/_agy_comment_body.sh"
+
+MAX_BODY_BYTES="${MAX_BODY_BYTES:-60000}"
+
+# The jq program that finds THIS bot's existing review comment on the PR, so it can be edited
+# rather than replaced. Named, and exercised directly by `scripts/agy-review-selftest.sh`,
+# because its predecessor (which selected comments to DELETE) was wrong twice in ways nothing
+# observed: first the just-posted comment was not excluded, so a run deleted its own review;
+# then jq's `--arg` was handed to `gh api`, which has no such flag, so the step died silently.
+# Both were invisible from the outside — the review still posted.
+#
+# The AUTHOR filter is load-bearing, not cosmetic: without it, any user could put the marker
+# (an HTML comment, invisible when rendered) in a PR comment and have this bot edit it. Only
+# ever touch our own bot's comments. `first` picks the OLDEST match, so if duplicates exist
+# from an older version of this script, the canonical thread is the one that keeps growing.
+SELECT_OURS_JQ='[ .[]
+  | select(.user.type == "Bot" and .user.login == "github-actions[bot]")
+  | select(.body | contains($marker)) ]
+  | first
+  | .id // empty'
+readonly SELECT_OURS_JQ
+
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY not set}"
 
 # --- resolve the PR number from the triggering event --------------------------
@@ -159,7 +185,7 @@ trap cleanup EXIT
 # but is NOT harmless now that isCrossRepository gates whether an untrusted diff
 # reaches agy: a lookup failure must never be indistinguishable from "same-repo".
 diff_file="$(mktemp)"; meta_file="$(mktemp)"; diff_err="$(mktemp)"
-gh pr view "$PR" --repo "$REPO" --json title,isCrossRepository,baseRefName > "$meta_file" \
+gh pr view "$PR" --repo "$REPO" --json title,isCrossRepository,baseRefName,headRefOid > "$meta_file" \
   || { log "gh pr view failed; refusing to review without knowing the PR's head repo"; exit 1; }
 
 # THE FORK GATE (see the trust model at the agy invocation below). The workflow `if:`
@@ -205,13 +231,28 @@ esac
 # ($diff_err was allocated alongside $diff_file / $meta_file above, so the cleanup
 # trap never references it before it exists.)
 if ! gh pr diff "$PR" --repo "$REPO" > "$diff_file" 2>"$diff_err"; then
-  if grep -qi 'diff exceeded the maximum number of lines' "$diff_err"; then
+  # GitHub refuses an oversized diff TWO ways, with different wording: over
+  # 20,000 lines, and over 300 FILES. Both are HTTP 406 and both mean the same
+  # thing here -- the PR is too big for the API, not that anything went wrong --
+  # so both must reach the local fallback. Matching only the `lines` variant made
+  # a wide-but-shallow PR -- hundreds of files, well under the line limit, as a
+  # bulk regeneration of test baselines produces -- fail the review outright
+  # instead of falling back.
+  if grep -qiE 'diff exceeded the maximum number of (lines|files)' "$diff_err"; then
     base_ref="$(jq -r '.baseRefName // empty' "$meta_file")"
     if [ -z "$base_ref" ] || [ "$base_ref" = "null" ]; then
       log "diff exceeds the API limit and the base branch is unknown; cannot fall back"
       exit 1
     fi
-    log "diff exceeds GitHub's 20,000-line API limit; falling back to a local git diff"
+    # Name the limit that actually fired. Reporting "20,000-line" for a
+    # file-count refusal is the same class of misleading triage signal that
+    # made this bug look like a runner auth failure in the first place.
+    if grep -qi 'maximum number of files' "$diff_err"; then
+      hit="300-file"
+    else
+      hit="20,000-line"
+    fi
+    log "diff exceeds GitHub's ${hit} API limit; falling back to a local git diff"
     pr_ref="refs/agy/pr-${PR}"
     base_local="refs/agy/base-${PR}"
     agy_refs_created=1
@@ -229,8 +270,39 @@ if ! gh pr diff "$PR" --repo "$REPO" > "$diff_file" 2>"$diff_err"; then
       log "could not fetch PR #${PR} refs for the local diff fallback"
       exit 1
     fi
-    merge_base="$(git merge-base "$base_local" "$pr_ref")" || {
-      log "could not compute the merge base for PR #${PR}"; exit 1; }
+    # The workflow clones with `fetch-depth: 1`, so the two refs above arrive as
+    # DISCONNECTED shallow histories -- there is no common ancestor for
+    # `git merge-base` to find, and it fails even though both refs fetched fine.
+    # (A full local clone hides this completely, which is how it got missed.)
+    #
+    # Ask the API for the merge base and fetch that one commit, rather than
+    # unshallowing: a repo with a large history would pay a full clone on a path
+    # that only exists because the PR is already unusually big. Diffing two
+    # commits needs both trees, not the history between them, so a shallow fetch
+    # of the merge base is enough.
+    merge_base="$(git merge-base "$base_local" "$pr_ref" 2>/dev/null || true)"
+    if [ -z "$merge_base" ]; then
+      head_sha="$(jq -r '.headRefOid // empty' "$meta_file")"
+      # Percent-encode the branch name for the URL path. NOT for the `/` in a
+      # `<type>/<short-desc>` branch -- GitHub's compare endpoint accepts those
+      # raw, verified against a real slashed branch, returning the same SHA
+      # either way. It is for `%` and `#`, which git permits in a ref name and
+      # which a URL does not survive: `%` starts an escape and `#` truncates the
+      # path at the fragment. Both would fail silently into the `|| true`.
+      base_enc="$(jq -rn --arg v "$base_ref" '$v|@uri')"
+      api_base="$(gh api "repos/${REPO}/compare/${base_enc}...${head_sha}" \
+                    --jq '.merge_base_commit.sha' 2>/dev/null || true)"
+      if [ -n "$api_base" ] && [ "$api_base" != "null" ]; then
+        if git fetch --no-tags --quiet origin "$api_base" 2>/dev/null \
+           || git fetch --no-tags --quiet --deepen=250 origin "${fetch_refspecs[@]}" 2>/dev/null; then
+          merge_base="$(git merge-base "$base_local" "$pr_ref" 2>/dev/null || echo "$api_base")"
+          log "shallow clone: merge base ${merge_base} resolved via the compare API"
+        fi
+      fi
+    fi
+    if [ -z "$merge_base" ]; then
+      log "could not compute the merge base for PR #${PR}"; exit 1
+    fi
     git diff "$merge_base" "$pr_ref" > "$diff_file" || {
       log "local git diff failed for PR #${PR}"; exit 1; }
     log "local diff: $(wc -l < "$diff_file") lines, $(wc -c < "$diff_file") bytes"
@@ -422,6 +494,13 @@ command -v flock >/dev/null 2>&1 || {
 # Create the lock dir first: a failed `exec 9>` redirection is a FATAL shell error (it aborts
 # before the `|| log` fallback can run), so ensure the parent exists on a fresh runner. `>>` opens
 # for append rather than truncating the lockfile — flock uses the fd, not the contents.
+# Validated before use: an empty `AGY_LOCK` (an env override set to "") would make `dirname`
+# yield "." and the redirection below fail with an obscure shell error, at the one point where a
+# clear message matters -- this is the guard that keeps two agy runs off each other.
+if [ -z "$AGY_LOCK" ]; then
+  log "AGY_LOCK is empty; refusing to run unserialized"
+  exit 1
+fi
 mkdir -p "$(dirname "$AGY_LOCK")"
 exec 9>>"$AGY_LOCK"
 flock -w "$AGY_LOCK_WAIT" 9 || {
@@ -531,27 +610,94 @@ if oauth_url_present "$body_file"; then
   exit 1
 fi
 
-# --- post fresh, THEN replace any prior review comment --------------------------
-# Publish-before-delete, deliberately: if this ordering were reversed and posting failed
-# afterward (a transient gh/API error), the PR would be left with NO review comment at all
-# instead of the still-valid prior one. Posting first means a failure here can only ever
-# leave a harmless duplicate, never a silent loss of the last review.
-gh pr comment "$PR" --repo "$REPO" --body-file "$body_file"
-log "posted review to ${REPO}#${PR}"
+# --- edit our existing comment, appending the previous round to its archive ------
+# One comment per PR, edited in place: newest round on top, earlier rounds folded into a
+# collapsed `<details>` below. NOTHING IS DELETED. The previous design posted fresh and
+# deleted the prior comment, which kept the PR tidy at the cost of destroying any round
+# nobody had read yet — and left no evidence a round had happened at all.
+#
+# Fail-closed in the direction that matters: every step below falls back to a plain POST of
+# the new review. A duplicate comment is noise; failing to publish a review, or losing one, is
+# not. The lookup happens BEFORE the post so a PATCH is possible at all, but a failed lookup
+# costs only the archive, never the review.
+prior_id=""
+prior_body_file="$(mktemp)"
+if prior_json="$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate 2>/dev/null)"; then
+  prior_id="$(printf '%s' "$prior_json" | jq -r --arg marker "$MARKER" "$SELECT_OURS_JQ" 2>/dev/null || true)"
+  if [ -n "$prior_id" ] && [ "$prior_id" != "null" ]; then
+    printf '%s' "$prior_json" \
+      | jq -r --argjson id "$prior_id" '.[] | select(.id == $id) | .body' > "$prior_body_file" 2>/dev/null \
+      || : > "$prior_body_file"
+  else
+    prior_id=""
+  fi
+else
+  log "warning: could not list PR comments; posting a fresh review without the archive"
+fi
 
-# A failed delete is logged, not swallowed: silently ignoring it would let a transient API/perms
-# error leave the old comment in place alongside the new one, so runs accumulate duplicates.
-# The author filter is load-bearing, not cosmetic: without it, ANY user could put the
-# marker (an HTML comment) in a PR comment and have this bot delete arbitrary comments on
-# the next run. Only ever delete OUR OWN bot's prior review comments -- and only ones from
-# BEFORE this run (the just-posted comment's own id is excluded so it can never delete itself).
-new_comment_id="$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
-    --jq '[.[] | select(.user.type == "Bot" and .user.login == "github-actions[bot]") | select(.body | contains("'"${MARKER}"'"))] | last | .id' 2>/dev/null)"
-gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
-    --jq ".[] | select(.user.type == \"Bot\" and .user.login == \"github-actions[bot]\") | select(.body | contains(\"${MARKER}\")) | select(.id != ${new_comment_id:-0}) | .id" 2>/dev/null \
-  | while read -r cid; do
-      [ -n "$cid" ] || continue
-      if ! gh api -X DELETE "repos/${REPO}/issues/comments/${cid}" >/dev/null 2>&1; then
-        log "warning: could not delete prior review comment ${cid}; a duplicate may result"
-      fi
-    done
+if [ -n "$prior_id" ] && [ -s "$prior_body_file" ]; then
+  # Split the prior body into its newest round (everything after the marker, before the
+  # archive) and the archive's existing inner rounds. `awk` rather than `sed`, because the
+  # sentinels must match whole lines and a review body legitimately contains regex
+  # metacharacters, backslashes and HTML.
+  prior_head="$(agy_body_head "$MARKER" < "$prior_body_file")"
+  prior_archive="$(agy_body_archive < "$prior_body_file")"
+
+  archived_file="$(mktemp)"
+  {
+    printf '<details>\n<summary>Round reviewed at %s</summary>\n\n' \
+      "$(date -u +'%Y-%m-%d %H:%M UTC')"
+    printf '%s\n' "$prior_head"
+    printf '\n</details>\n'
+    printf '%s\n' "$prior_archive"
+  } > "$archived_file"
+
+  # Drop the oldest rounds until the whole comment fits, and SAY SO. A silent truncation
+  # here would look identical to "there were never any earlier rounds", which is the exact
+  # confusion this whole change exists to remove.
+  dropped=0
+  while :; do
+    combined_size=$(( $(wc -c < "$body_file") + $(wc -c < "$archived_file") + 200 ))
+    [ "$combined_size" -le "$MAX_BODY_BYTES" ] && break
+    # Remove the LAST `<details>` block (the oldest round) from the archive.
+    trimmed="$(mktemp)"
+    agy_drop_oldest_round < "$archived_file" > "$trimmed" || { rm -f "$trimmed"; break; }
+    mv "$trimmed" "$archived_file"
+    dropped=$(( dropped + 1 ))
+  done
+
+  {
+    printf '\n%s\n' "$AGY_ARCHIVE_START"
+    if [ "$dropped" -gt 0 ]; then
+      printf '<sub>%d earlier round(s) dropped to stay under GitHub'"'"'s comment size limit.</sub>\n\n' "$dropped"
+    fi
+    printf '<details>\n<summary><b>Earlier review rounds</b> (newest first)</summary>\n\n'
+    cat "$archived_file"
+    printf '\n</details>\n'
+    printf '%s\n' "$AGY_ARCHIVE_END"
+  } >> "$body_file"
+  rm -f "$archived_file"
+
+  # Re-run the OAuth guard on the ASSEMBLED body. The archive is text this script published
+  # earlier and so has already passed the guard once, but the body is what gets published now
+  # and the guard's contract is that it runs on exactly that.
+  if oauth_url_present "$body_file"; then
+    log "refusing to post: the assembled comment body contains a live OAuth authorization URL."
+    exit 1
+  fi
+
+  if gh api -X PATCH "repos/${REPO}/issues/comments/${prior_id}" \
+       -f body="$(cat "$body_file")" >/dev/null 2>&1; then
+    log "updated review comment ${prior_id} on ${REPO}#${PR} (earlier rounds archived in place)"
+    rm -f "$prior_body_file"
+    exit 0
+  fi
+  log "warning: could not edit comment ${prior_id}; posting a fresh review instead"
+fi
+rm -f "$prior_body_file"
+
+if ! post_output="$(gh pr comment "$PR" --repo "$REPO" --body-file "$body_file" 2>&1)"; then
+  log "failed to post review to ${REPO}#${PR}: ${post_output}"
+  exit 1
+fi
+log "posted review to ${REPO}#${PR}"
