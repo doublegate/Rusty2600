@@ -361,10 +361,14 @@ impl ApplicationHandler for App {
                                     .map_or(0.0, crate::audio::AudioProducer::fill_ratio)
                             };
 
+                            let has_audio = lock.audio_tx.is_some();
                             if !paused && fill < 0.6 {
                                 let ra = thread_runahead.load(Ordering::Relaxed);
                                 crate::runahead::step_frame(&mut lock, &frame_tx, Some(input), ra);
                                 drop(lock);
+                                if !has_audio {
+                                    std::thread::sleep(std::time::Duration::from_nanos(16_666_667));
+                                }
                             } else {
                                 drop(lock);
                                 std::thread::sleep(std::time::Duration::from_millis(1));
@@ -767,7 +771,7 @@ impl App {
         // it reflects what's really on screen (which under `emu-thread` tracks the
         // display's refresh rate, not necessarily the console's ~60 Hz).
         let now = web_time::Instant::now();
-        let dt = now.duration_since(active.last_render_at).as_secs_f32();
+        let dt = now.saturating_duration_since(active.last_render_at).as_secs_f32();
         active.last_render_at = now;
         if dt > 0.0 {
             let instantaneous = 1.0 / dt;
