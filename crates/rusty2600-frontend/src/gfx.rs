@@ -152,8 +152,7 @@ impl Gfx {
         let required_limits =
             wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
         #[cfg(not(target_arch = "wasm32"))]
-        let required_limits =
-            wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
+        let required_limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {

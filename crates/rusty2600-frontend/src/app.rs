@@ -771,7 +771,9 @@ impl App {
         // it reflects what's really on screen (which under `emu-thread` tracks the
         // display's refresh rate, not necessarily the console's ~60 Hz).
         let now = web_time::Instant::now();
-        let dt = now.saturating_duration_since(active.last_render_at).as_secs_f32();
+        let dt = now
+            .saturating_duration_since(active.last_render_at)
+            .as_secs_f32();
         active.last_render_at = now;
         if dt > 0.0 {
             let instantaneous = 1.0 / dt;
