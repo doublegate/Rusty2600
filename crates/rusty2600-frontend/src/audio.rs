@@ -58,39 +58,30 @@ impl AudioOutput {
         let err_fn = |e| eprintln!("rusty2600 audio stream error: {e}");
         let mut mono = Vec::new();
         let stream = match sample_format {
-            cpal::SampleFormat::F32 => {
-                let consumer = consumer.clone();
-                device.build_output_stream(
-                    config.clone(),
-                    move |data: &mut [f32], _| {
-                        write_samples(data, &consumer, channels, &mut mono);
-                    },
-                    err_fn,
-                    None,
-                )
-            }
-            cpal::SampleFormat::I16 => {
-                let consumer = consumer.clone();
-                device.build_output_stream(
-                    config.clone(),
-                    move |data: &mut [i16], _| {
-                        write_samples(data, &consumer, channels, &mut mono);
-                    },
-                    err_fn,
-                    None,
-                )
-            }
-            cpal::SampleFormat::U16 => {
-                let consumer = consumer.clone();
-                device.build_output_stream(
-                    config.clone(),
-                    move |data: &mut [u16], _| {
-                        write_samples(data, &consumer, channels, &mut mono);
-                    },
-                    err_fn,
-                    None,
-                )
-            }
+            cpal::SampleFormat::F32 => device.build_output_stream(
+                config,
+                move |data: &mut [f32], _| {
+                    write_samples(data, &consumer, channels, &mut mono);
+                },
+                err_fn,
+                None,
+            ),
+            cpal::SampleFormat::I16 => device.build_output_stream(
+                config,
+                move |data: &mut [i16], _| {
+                    write_samples(data, &consumer, channels, &mut mono);
+                },
+                err_fn,
+                None,
+            ),
+            cpal::SampleFormat::U16 => device.build_output_stream(
+                config,
+                move |data: &mut [u16], _| {
+                    write_samples(data, &consumer, channels, &mut mono);
+                },
+                err_fn,
+                None,
+            ),
             other => {
                 return Err(AudioError::Build(format!(
                     "unsupported audio sample format: {other:?}"
