@@ -52,30 +52,43 @@ impl AudioOutput {
         // cpal 0.18: `SampleRate` is a `u32` alias; `sample_rate()` returns it directly.
         let sample_rate = supported.sample_rate();
         let channels = supported.channels() as usize;
+        let sample_format = supported.sample_format();
         let config: cpal::StreamConfig = supported.into();
 
         let err_fn = |e| eprintln!("rusty2600 audio stream error: {e}");
         let mut mono = Vec::new();
-        let stream = device
-            .build_output_stream(
+        let stream = match sample_format {
+            cpal::SampleFormat::F32 => device.build_output_stream(
                 config,
                 move |data: &mut [f32], _| {
-                    let chans = channels.max(1);
-                    let frames = data.len() / chans;
-                    if mono.len() < frames {
-                        mono.resize(frames, 0.0);
-                    }
-                    consumer.pop_or_silence(&mut mono[..frames]);
-                    for (frame, &s) in data.chunks_mut(chans).zip(mono.iter()) {
-                        for ch in frame.iter_mut() {
-                            *ch = s;
-                        }
-                    }
+                    write_samples(data, &consumer, channels, &mut mono);
                 },
                 err_fn,
                 None,
-            )
-            .map_err(|e| AudioError::Build(e.to_string()))?;
+            ),
+            cpal::SampleFormat::I16 => device.build_output_stream(
+                config,
+                move |data: &mut [i16], _| {
+                    write_samples(data, &consumer, channels, &mut mono);
+                },
+                err_fn,
+                None,
+            ),
+            cpal::SampleFormat::U16 => device.build_output_stream(
+                config,
+                move |data: &mut [u16], _| {
+                    write_samples(data, &consumer, channels, &mut mono);
+                },
+                err_fn,
+                None,
+            ),
+            other => {
+                return Err(AudioError::Build(format!(
+                    "unsupported audio sample format: {other:?}"
+                )));
+            }
+        }
+        .map_err(|e| AudioError::Build(e.to_string()))?;
         stream
             .play()
             .map_err(|e| AudioError::Build(e.to_string()))?;
@@ -133,6 +146,26 @@ impl AudioProducer {
         self.resample_buf.clear();
         self.resampler.process(samples, &mut self.resample_buf);
         self.queue.push_slice(&self.resample_buf);
+    }
+}
+
+fn write_samples<S: cpal::FromSample<f32> + cpal::Sample>(
+    data: &mut [S],
+    consumer: &crate::audio_ring::Consumer,
+    channels: usize,
+    mono: &mut Vec<f32>,
+) {
+    let chans = channels.max(1);
+    let frames = data.len() / chans;
+    if mono.len() < frames {
+        mono.resize(frames, 0.0);
+    }
+    consumer.pop_or_silence(&mut mono[..frames]);
+    for (frame, &s) in data.chunks_mut(chans).zip(mono.iter()) {
+        let sample = S::from_sample(s);
+        for ch in frame.iter_mut() {
+            *ch = sample;
+        }
     }
 }
 

@@ -129,19 +129,36 @@ impl Gfx {
         let surface = instance
             .create_surface(window)
             .map_err(|e| GfxError::Surface(e.to_string()))?;
-        let adapter = instance
+        let adapter = match instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
+                power_preference: wgpu::PowerPreference::default(),
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
             })
             .await
-            .map_err(|e| GfxError::Adapter(e.to_string()))?;
+        {
+            Ok(adapter) => adapter,
+            Err(_) => instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::default(),
+                    force_fallback_adapter: true,
+                    compatible_surface: Some(&surface),
+                })
+                .await
+                .map_err(|e| GfxError::Adapter(e.to_string()))?,
+        };
+
+        #[cfg(target_arch = "wasm32")]
+        let required_limits =
+            wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
+        #[cfg(not(target_arch = "wasm32"))]
+        let required_limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
+
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("rusty2600-device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                required_limits,
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: wgpu::Trace::Off,
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
@@ -155,7 +172,13 @@ impl Gfx {
             .iter()
             .copied()
             .find(wgpu::TextureFormat::is_srgb)
-            .unwrap_or(caps.formats[0]);
+            .or_else(|| caps.formats.first().copied())
+            .unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
+        let alpha_mode = caps
+            .alpha_modes
+            .first()
+            .copied()
+            .unwrap_or(wgpu::CompositeAlphaMode::Auto);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -163,7 +186,7 @@ impl Gfx {
             height: size.height.max(1),
             present_mode: select_present_mode(present_pref, &caps.present_modes),
             desired_maximum_frame_latency: 2,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode,
             view_formats: vec![],
         };
         surface.configure(&device, &config);
