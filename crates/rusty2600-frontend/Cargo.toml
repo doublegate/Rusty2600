@@ -158,7 +158,7 @@ winit = "0.30"
 # and its honest, unresolved conclusion.
 wgpu = { version = "29", default-features = false, features = ["wgsl", "std"] }
 cpal = "0.18"
-egui = "0.35"
+egui = "0.36"
 egui-wgpu = "0.35"
 egui-winit = { version = "0.35", default-features = false, features = ["links", "wayland", "x11"] }
 thiserror = "2.0"
