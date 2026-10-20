@@ -31,7 +31,7 @@ use rusty2600_core::System;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 #[cfg(feature = "wasm-canvas")]
-#[allow(unused_imports)]
+#[allow(unused_imports, clippy::wildcard_imports)]
 use web_sys::*;
 
 /// The `#[wasm_bindgen(start)]` entry point.
@@ -50,6 +50,9 @@ pub fn start() -> Result<(), JsValue> {
 }
 
 /// See the `wasm-winit` `start()` above — this is the `wasm-canvas`-only variant.
+///
+/// # Errors
+/// Propagates [`run_canvas`]'s error if the DOM or canvas context cannot be initialized.
 #[cfg(all(feature = "wasm-canvas", not(feature = "wasm-winit")))]
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
@@ -423,9 +426,12 @@ fn start_raf_loop(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
                         let rgb = crate::palette::Region::Ntsc.table()[(color_idx >> 1) as usize];
                         let off = (y * ATARI_W as usize + x) * 4;
                         if off + 3 < framebuffer.len() {
-                            framebuffer[off] = (rgb >> 16) as u8;
-                            framebuffer[off + 1] = (rgb >> 8) as u8;
-                            framebuffer[off + 2] = rgb as u8;
+                            #[allow(clippy::cast_possible_truncation)]
+                            {
+                                framebuffer[off] = (rgb >> 16) as u8;
+                                framebuffer[off + 1] = (rgb >> 8) as u8;
+                                framebuffer[off + 2] = rgb as u8;
+                            }
                             framebuffer[off + 3] = 255;
                         }
                     }
@@ -440,6 +446,7 @@ fn start_raf_loop(canvas: &HtmlCanvasElement) -> Result<(), JsValue> {
                 for s in samples {
                     let normalized = (f32::from(s) / 15.0) - 1.0;
                     let r = 0.995;
+                    #[allow(clippy::suboptimal_flops)]
                     let y = normalized - dc_x + r * dc_y;
                     dc_x = normalized;
                     dc_y = y;

@@ -6,7 +6,7 @@ Thanks for your interest in contributing to Rusty2600, a cycle-accurate Atari
 ## Development setup
 
 - Install [rustup](https://rustup.rs).
-- The toolchain is pinned in `rust-toolchain.toml` (Rust 1.96); `rustup`
+- The toolchain is pinned in `rust-toolchain.toml` (Rust 1.99); `rustup`
   auto-installs it, including the `wasm32-unknown-unknown` and
   `thumbv7em-none-eabihf` targets.
 - The `winit` + `wgpu` + `cpal` frontend needs the platform graphics/audio

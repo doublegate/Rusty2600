@@ -15,7 +15,6 @@ updates:
       - "rust"
     commit-message:
       prefix: "chore(deps)"
-      include: "scope"
     reviewers:
       - "doublegate"
     assignees:
@@ -35,8 +34,18 @@ updates:
       # successor (e.g. bincode-next) is deliberately adopted with its own
       # migration.
       - dependency-name: "bincode"
-    # Group minor and patch updates together
+    # Group tightly coupled graphics/UI crates and minor/patch updates together
     groups:
+      egui-wgpu:
+        patterns:
+          - "egui"
+          - "egui-*"
+          - "wgpu"
+          - "naga"
+        update-types:
+          - "major"
+          - "minor"
+          - "patch"
       development-dependencies:
         dependency-type: "development"
         update-types:

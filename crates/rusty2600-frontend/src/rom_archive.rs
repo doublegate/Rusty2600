@@ -102,10 +102,13 @@ pub fn extract_first_rom(bytes: &[u8]) -> Result<(Vec<u8>, String), RomArchiveEr
         if entry.is_dir() {
             continue;
         }
-        let name = entry.name().to_string();
-        if !ROM_EXTENSIONS.contains(&extension_of(&name).as_str()) {
+        let Ok(name) = entry.name() else {
+            continue;
+        };
+        if !ROM_EXTENSIONS.contains(&extension_of(name.as_ref()).as_str()) {
             continue;
         }
+        let name = name.into_owned();
 
         // The entry's own declared size, used only as a pre-allocation hint
         // below — captured BEFORE the mutable `by_ref()` borrow, and capped

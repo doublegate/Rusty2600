@@ -453,7 +453,7 @@ impl ShellState {
     /// and collect any requested [`MenuAction`]s. Returns the actions for the app to dispatch AFTER
     /// this pass — this function NEVER touches the emulator.
     ///
-    /// Uses the egui 0.35 panel API: the caller passes the root `Ui` from `Context::run_ui`, into
+    /// Uses the egui 0.35+ panel API: the caller passes the root `Ui` from `Context::run_ui`, into
     /// which the top/bottom panels are nested with `Panel::show` (egui 0.34's `show_inside` was
     /// renamed `show` in 0.35; this crate's own `.show_inside()` call sites were updated to match).
     // One straight-line immediate-mode egui pass (menu bar + status bar + windows); the line count
@@ -921,7 +921,7 @@ impl ShellState {
 
         let mut held: Vec<TouchButton> = Vec::new();
         let dpad_btn = egui::vec2(48.0, 40.0);
-        egui::Area::new(egui::Id::new("rusty2600_touch_dpad"))
+        egui::Area::new(egui::Id::unique("rusty2600_touch_dpad"))
             .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(16.0, -16.0))
             .movable(false)
             .show(ctx, |ui| {
@@ -942,7 +942,7 @@ impl ShellState {
                 });
             });
 
-        egui::Area::new(egui::Id::new("rusty2600_touch_fire"))
+        egui::Area::new(egui::Id::unique("rusty2600_touch_fire"))
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0))
             .movable(false)
             .show(ctx, |ui| {
@@ -955,7 +955,7 @@ impl ShellState {
                 );
             });
 
-        egui::Area::new(egui::Id::new("rusty2600_touch_switches"))
+        egui::Area::new(egui::Id::unique("rusty2600_touch_switches"))
             .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 28.0))
             .movable(false)
             .show(ctx, |ui| {

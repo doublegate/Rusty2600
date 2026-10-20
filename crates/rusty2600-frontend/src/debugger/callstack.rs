@@ -58,14 +58,14 @@ mod tests {
     fn rts_pops_the_stack() {
         let mut stack = vec![0xF003];
         track_instruction(&mut stack, RTS, 0xF010);
-        assert!(stack.is_empty());
+        assert_eq!(stack, [0u16; 0]);
     }
 
     #[test]
     fn rts_with_empty_stack_does_not_panic() {
         let mut stack = Vec::new();
         track_instruction(&mut stack, RTS, 0xF010);
-        assert!(stack.is_empty());
+        assert_eq!(stack, [0u16; 0]);
     }
 
     #[test]

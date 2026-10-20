@@ -179,6 +179,7 @@ struct DcBlocker {
 }
 
 impl DcBlocker {
+    #[allow(clippy::suboptimal_flops)]
     fn process(&mut self, raw_samples: Vec<u8>) -> Vec<f32> {
         let mut out = Vec::with_capacity(raw_samples.len());
         for s in raw_samples {
