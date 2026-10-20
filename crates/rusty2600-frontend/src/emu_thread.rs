@@ -383,6 +383,7 @@ impl EmuCore {
                 // 1-pole high-pass DC blocker: removes the massive -1.0 offset
                 // during TIA silence (s = 0).
                 let r = 0.995;
+                #[allow(clippy::suboptimal_flops)]
                 let y = normalized - self.dc_blocker_x + r * self.dc_blocker_y;
                 self.dc_blocker_x = normalized;
                 self.dc_blocker_y = y;
@@ -489,6 +490,7 @@ impl EmuCore {
             for s in samples {
                 let normalized = (s as f32 / 15.0) - 1.0;
                 let r = 0.995;
+                #[allow(clippy::suboptimal_flops)]
                 let y = normalized - self.dc_blocker_x + r * self.dc_blocker_y;
                 self.dc_blocker_x = normalized;
                 self.dc_blocker_y = y;
@@ -634,6 +636,7 @@ impl EmuCore {
                 // DC blocker (1-pole high-pass filter) to remove the massive -1.0 DC offset
                 // when TIA outputs silence (s = 0), preventing audio hums or clicks.
                 let r = 0.995;
+                #[allow(clippy::suboptimal_flops)]
                 let y = normalized - self.dc_blocker_x + r * self.dc_blocker_y;
                 self.dc_blocker_x = normalized;
                 self.dc_blocker_y = y;

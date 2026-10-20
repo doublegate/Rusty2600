@@ -1043,10 +1043,16 @@ impl App {
             size_in_pixels: [active.gfx.config.width, active.gfx.config.height],
             pixels_per_point: full_output.pixels_per_point,
         };
-        for (id, delta) in &full_output.textures_delta.set {
-            active
-                .egui_renderer
-                .update_texture(&active.gfx.device, &active.gfx.queue, *id, delta);
+        let mut textures_delta = full_output.textures_delta;
+        for (id, deltas) in std::mem::take(&mut textures_delta.set) {
+            for delta in &deltas {
+                active.egui_renderer.update_texture(
+                    &active.gfx.device,
+                    &active.gfx.queue,
+                    id,
+                    delta,
+                );
+            }
         }
         active.egui_renderer.update_buffers(
             &active.gfx.device,
@@ -1076,13 +1082,13 @@ impl App {
                 .forget_lifetime();
             active.egui_renderer.render(&mut pass, &tris, &screen);
         }
-        for id in &full_output.textures_delta.free {
-            active.egui_renderer.free_texture(id);
+        for id in std::mem::take(&mut textures_delta.free) {
+            active.egui_renderer.free_texture(&id);
         }
 
         // --- (5) Submit + present. ---
         active.gfx.queue.submit(Some(encoder.finish()));
-        frame.present();
+        active.gfx.queue.present(frame);
         actions
     }
 
@@ -1710,7 +1716,7 @@ fn draw_script_overlay(
 
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
-        egui::Id::new("rusty2600_script_overlay"),
+        egui::Id::unique("rusty2600_script_overlay"),
     ));
 
     for r in &overlay.rects {

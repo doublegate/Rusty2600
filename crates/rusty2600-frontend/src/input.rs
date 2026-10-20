@@ -477,7 +477,10 @@ mod tests {
             vec![(InputAction::JoyUp(0), true)]
         );
         // Held another frame: no new edge (still down, nothing changed).
-        assert!(overlay.update(&[TouchButton::JoyUp]).is_empty());
+        assert_eq!(
+            overlay.update(&[TouchButton::JoyUp]),
+            [] as [(InputAction, bool); 0]
+        );
         assert_eq!(overlay.update(&[]), vec![(InputAction::JoyUp(0), false)]);
     }
 
@@ -489,10 +492,16 @@ mod tests {
             vec![(InputAction::SwitchColor, true)]
         );
         // Held across several more frames: must not re-toggle.
-        assert!(overlay.update(&[TouchButton::Color]).is_empty());
-        assert!(overlay.update(&[TouchButton::Color]).is_empty());
+        assert_eq!(
+            overlay.update(&[TouchButton::Color]),
+            [] as [(InputAction, bool); 0]
+        );
+        assert_eq!(
+            overlay.update(&[TouchButton::Color]),
+            [] as [(InputAction, bool); 0]
+        );
         // Release produces no momentary-release edge for a latch.
-        assert!(overlay.update(&[]).is_empty());
+        assert_eq!(overlay.update(&[]), [] as [(InputAction, bool); 0]);
         // A fresh press fires exactly one more toggle.
         assert_eq!(
             overlay.update(&[TouchButton::Color]),
@@ -516,7 +525,7 @@ mod tests {
     #[test]
     fn touch_default_overlay_state_starts_with_nothing_held() {
         let mut overlay = TouchOverlayState::default();
-        assert!(overlay.update(&[]).is_empty());
+        assert_eq!(overlay.update(&[]), [] as [(InputAction, bool); 0]);
     }
 
     #[test]

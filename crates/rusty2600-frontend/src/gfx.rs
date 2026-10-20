@@ -134,6 +134,7 @@ impl Gfx {
                 power_preference: wgpu::PowerPreference::default(),
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
+                apply_limit_buckets: false,
             })
             .await
         {
@@ -143,6 +144,7 @@ impl Gfx {
                     power_preference: wgpu::PowerPreference::default(),
                     force_fallback_adapter: true,
                     compatible_surface: Some(&surface),
+                    apply_limit_buckets: false,
                 })
                 .await
                 .map_err(|e| GfxError::Adapter(e.to_string()))?,
@@ -188,6 +190,7 @@ impl Gfx {
             desired_maximum_frame_latency: 2,
             alpha_mode,
             view_formats: vec![],
+            color_space: wgpu::SurfaceColorSpace::Auto,
         };
         surface.configure(&device, &config);
 
@@ -420,7 +423,7 @@ impl Gfx {
     /// Acquire the next surface texture for the frame, or `None` if the surface is lost (the
     /// caller reconfigures and retries next frame).
     ///
-    /// wgpu 29 returns the [`wgpu::CurrentSurfaceTexture`] enum (not a `Result`): use the texture
+    /// wgpu 29+ returns the [`wgpu::CurrentSurfaceTexture`] enum (not a `Result`): use the texture
     /// on `Success`/`Suboptimal`, reconfigure on `Lost`/`Outdated`, skip otherwise.
     pub fn acquire(&mut self) -> Option<wgpu::SurfaceTexture> {
         match self.surface.get_current_texture() {

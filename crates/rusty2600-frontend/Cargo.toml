@@ -156,11 +156,11 @@ winit = "0.30"
 # per-crate feature unification across the whole dependency graph, regardless of what this
 # `Cargo.toml` requests. See the wasm32 `[target...]` block's comment for the full investigation
 # and its honest, unresolved conclusion.
-wgpu = { version = "29", default-features = false, features = ["wgsl", "std"] }
+wgpu = { version = "30", default-features = false, features = ["wgsl", "std"] }
 cpal = "0.18"
-egui = "0.35"
-egui-wgpu = "0.35"
-egui-winit = { version = "0.35", default-features = false, features = ["links", "wayland", "x11"] }
+egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
+egui-wgpu = "0.37"
+egui-winit = { version = "0.37", default-features = false, features = ["links", "wayland", "x11"] }
 thiserror = "2.0"
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
@@ -175,7 +175,7 @@ toml = "1.1"
 # bzip2/lzma/zstd/xz/aes-crypto (unneeded codecs/encryption that would only
 # bloat the native binary and the wasm bundle for no benefit — ROM zips are
 # plain Deflate or Store).
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 # Already transitive deps of wgpu; direct here is free.
 pollster = "1.0"
@@ -191,7 +191,7 @@ rfd = "0.17"
 directories = "6"
 # Real native GPU backends (unrelated to wasm32's `webgl`-only block below) — `parking_lot` is
 # wgpu's own default runtime-locking impl, not on by the bare `["wgsl", "std"]` base above.
-wgpu = { version = "29", features = ["dx12", "metal", "vulkan", "gles", "parking_lot"] }
+wgpu = { version = "30", features = ["dx12", "metal", "vulkan", "gles", "parking_lot"] }
 # clap 4 styled `--help` + `help <topic>` + shell completions (unconditional);
 # the interactive ratatui TUI browser is behind the default-on `help-tui` feature.
 clap = { version = "4", features = ["derive", "color", "cargo"] }
@@ -226,12 +226,12 @@ mlua = { version = "0.12", features = ["lua54", "vendored"], optional = true }
 # sandbox has none) — real end users likely fare better (real WebGPU support, or a real
 # hardware-accelerated GL backend, neither available here), but this is honestly NOT confirmed
 # working end-to-end. See `docs/frontend.md`'s wasm-winit status section.
-wgpu = { version = "29", features = ["webgl"] }
-wasm-bindgen = "0.2.126"
-wasm-bindgen-futures = "0.4.50"
+wgpu = { version = "30", features = ["webgl"] }
+wasm-bindgen = "0.2.129"
+wasm-bindgen-futures = "0.4.79"
 console_error_panic_hook = "0.1.7"
-js-sys = "0.3.77"
-web-sys = { version = "0.3.77", features = [
+js-sys = "0.3.106"
+web-sys = { version = "0.3.106", features = [
     "Document", "Window", "Element", "HtmlElement", "HtmlCanvasElement",
     "Event", "EventTarget", "KeyboardEvent", "HtmlInputElement", "FileReader",
     "FileList", "File",
@@ -246,7 +246,7 @@ web-sys = { version = "0.3.77", features = [
 [dev-dependencies]
 # Validate the embedded WGSL at test time with the same naga wgpu uses at run
 # time, so a shader error fails CI instead of aborting the app.
-naga = { version = "29", features = ["wgsl-in"] }
+naga = { version = "30", features = ["wgsl-in"] }
 
 [lints]
 workspace = true

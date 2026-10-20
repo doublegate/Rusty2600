@@ -94,7 +94,12 @@ fn hd_pack_splice_replaces_player0_footprint_with_replacement_bitmap() {
     emu.step_frame(&tx, None);
     let spliced = rx.take().expect("frame published");
 
-    let spliced_has_magenta = spliced.pixels.chunks_exact(4).any(|p| p == MAGENTA);
+    let spliced_has_magenta = spliced
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|p| p == &MAGENTA);
     assert!(
         spliced_has_magenta,
         "expected the HD-pack replacement magenta pixel to appear in player 0's footprint"
@@ -111,7 +116,12 @@ fn hd_pack_splice_replaces_player0_footprint_with_replacement_bitmap() {
     control.step_frame(&ctrl_tx, None);
     let unspliced = ctrl_rx.take().expect("control frame published");
 
-    let control_has_magenta = unspliced.pixels.chunks_exact(4).any(|p| p == MAGENTA);
+    let control_has_magenta = unspliced
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|p| p == &MAGENTA);
     assert!(
         !control_has_magenta,
         "the placeholder magenta must never appear without the HD-pack splice active"

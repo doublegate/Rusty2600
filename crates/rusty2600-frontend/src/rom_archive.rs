@@ -102,7 +102,10 @@ pub fn extract_first_rom(bytes: &[u8]) -> Result<(Vec<u8>, String), RomArchiveEr
         if entry.is_dir() {
             continue;
         }
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .map_err(|e| RomArchiveError::Malformed(e.to_string()))?
+            .into_owned();
         if !ROM_EXTENSIONS.contains(&extension_of(&name).as_str()) {
             continue;
         }
