@@ -94,7 +94,7 @@ mod tests {
     #[test]
     fn identical_slices_diff_to_nothing() {
         let a = [1, 2, 3];
-        assert_eq!(diff(&a, &a), [] as [(usize, u8, u8); 0]);
+        assert_eq!(diff(&a, &a).as_slice(), &[]);
     }
 
     #[test]

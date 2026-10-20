@@ -440,7 +440,7 @@ see its module doc and `Cargo.toml`'s `[features]` doc comment):
   executes and logs correctly — but the `Gfx::new_async` adapter-request step
   could NOT be verified rendering an actual frame in this sandbox: the
   available headless-Chromium-with-SwiftShader environment has no
-  `navigator.gpu` (no real WebGPU) and, in this specific setup, wgpu 29's
+  `navigator.gpu` (no real WebGPU) and, in this specific setup, wgpu 29/30's
   adapter request also failed to fall back to the compiled-in GL/WebGL2
   backend (`wgpu-hal`'s `gles` feature, confirmed present via `cargo tree -e
   features`) — see `Cargo.toml`'s wasm32 `wgpu` dependency comment for the

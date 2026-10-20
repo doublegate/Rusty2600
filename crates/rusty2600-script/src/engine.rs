@@ -520,10 +520,7 @@ mod tests {
             .load(r#"emu.setJoystick(0, "up", true)"#)
             .unwrap_err();
         assert!(err.to_string().contains("locked"));
-        assert_eq!(
-            engine.bus().borrow().joystick_log,
-            [] as [(u8, JoyDirection, bool); 0]
-        );
+        assert_eq!(engine.bus().borrow().joystick_log.as_slice(), &[]);
     }
 
     #[test]

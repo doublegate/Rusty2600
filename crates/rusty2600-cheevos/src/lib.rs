@@ -90,8 +90,8 @@ mod smoke {
         );
 
         // With no game loaded these are empty/zero but must not crash.
-        assert_eq!(client.achievement_list(), [] as [client::RaAchievement; 0]);
-        assert_eq!(client.leaderboard_list(), [] as [client::RaLeaderboard; 0]);
+        assert_eq!(client.achievement_list().as_slice(), &[]);
+        assert_eq!(client.leaderboard_list().as_slice(), &[]);
         assert_eq!(client.user_game_summary(), RaGameSummary::default());
         assert!(client.user_info().is_none());
         let _ = client.rich_presence();

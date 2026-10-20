@@ -1887,6 +1887,7 @@ mod tests {
                 has_text,
                 "expected the drawText primitive to produce a text shape"
             );
+            full_output.drop_without_applying_deltas();
         }
 
         #[test]
@@ -1900,6 +1901,7 @@ mod tests {
                 full_output.shapes.is_empty(),
                 "an empty Overlay must not add any shapes to the paint list"
             );
+            full_output.drop_without_applying_deltas();
         }
     }
 }
