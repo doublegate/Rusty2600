@@ -1,20 +1,21 @@
 <!-- Managed by Master-Claude. Universal rules come from the imported/inlined core.
      Edit only inside the MC-PROJECT block; mc-sync overwrites everything else. -->
-<!-- mc-core: 0.1.0 | mode=import | lang=rust -->
+<!-- mc-core: 0.2.0 | mode=import | lang=rust -->
 # AGENTS.md — Rusty2600
 
-@/home/parobek/.claude/master-core/AGENTS.base.md
-@/home/parobek/.claude/master-core/lang/rust.md
-@/home/parobek/.claude/master-core/modules/10-commits-and-versioning.md
-@/home/parobek/.claude/master-core/modules/20-testing-and-accuracy.md
-@/home/parobek/.claude/master-core/modules/30-quality-gates.md
-@/home/parobek/.claude/master-core/modules/40-docs-and-adrs.md
-@/home/parobek/.claude/master-core/modules/50-architecture-patterns.md
-@/home/parobek/.claude/master-core/modules/60-security.md
-@/home/parobek/.claude/master-core/modules/70-release-ceremony.md
-@/home/parobek/.claude/master-core/modules/80-phase-sprint-workflow.md
-@/home/parobek/.claude/master-core/modules/90-multi-language-integration.md
-@/home/parobek/.claude/master-core/modules/95-named-pattern-library.md
+@~/.claude/master-core/AGENTS.base.md
+@~/.claude/master-core/lang/rust.md
+@~/.claude/master-core/modules/10-commits-and-versioning.md
+@~/.claude/master-core/modules/20-testing-and-accuracy.md
+@~/.claude/master-core/modules/30-quality-gates.md
+@~/.claude/master-core/modules/40-docs-and-adrs.md
+@~/.claude/master-core/modules/50-architecture-patterns.md
+@~/.claude/master-core/modules/60-security.md
+@~/.claude/master-core/modules/70-release-ceremony.md
+@~/.claude/master-core/modules/80-phase-sprint-workflow.md
+@~/.claude/master-core/modules/90-multi-language-integration.md
+@~/.claude/master-core/modules/91-agent-system-architecture.md
+@~/.claude/master-core/modules/95-named-pattern-library.md
 
 <<< MC-PROJECT-START >>>
 ## Project: Rusty2600
